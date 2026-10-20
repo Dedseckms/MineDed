@@ -37,6 +37,9 @@ pub struct HttpDownloader {
     prefer_mirrors: AtomicBool,
     global: Arc<Semaphore>,
     per_host: Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// One writer per destination across concurrent `fetch_many` calls.
+    path_locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    route_warned: AtomicBool,
 }
 
 impl std::fmt::Debug for HttpDownloader {
@@ -60,6 +63,8 @@ impl HttpDownloader {
             prefer_mirrors: AtomicBool::new(cfg.prefer_mirrors),
             global: Arc::new(Semaphore::new(cfg.max_parallel)),
             per_host: Mutex::new(HashMap::new()),
+            path_locks: Mutex::new(HashMap::new()),
+            route_warned: AtomicBool::new(false),
             direct: RwLock::new(client),
             cfg,
         })
@@ -89,12 +94,47 @@ impl HttpDownloader {
             .clone()
     }
 
-    fn candidates(&self, urls: &[Url]) -> Vec<Url> {
-        mirrors::expand_all(
-            urls,
-            self.cfg.use_bmclapi,
-            self.prefer_mirrors.load(Ordering::Relaxed),
-        )
+    /// Candidate order per the mirror trust policy (CONTRACTS §2): third-party
+    /// mirrors may go first (`prefer_mirrors`) only when the result is
+    /// verified by SHA-1; unverified requests always try the original first.
+    fn candidates(&self, urls: &[Url], verified: bool) -> Vec<Url> {
+        let prefer = verified && self.prefer_mirrors.load(Ordering::Relaxed);
+        mirrors::expand_all(urls, self.cfg.use_bmclapi, prefer)
+    }
+
+    /// Serialises work on one destination path; entries are dropped when idle.
+    async fn with_path_lock<T>(
+        &self,
+        dest: &Path,
+        cancel: &CancelToken,
+        work: impl std::future::Future<Output = AppResult<T>>,
+    ) -> AppResult<T> {
+        let lock = {
+            let mut map = self
+                .path_locks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            map.entry(dest.to_path_buf()).or_default().clone()
+        };
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(errors::cancelled()),
+            guard = lock.lock() => {
+                let res = work.await;
+                drop(guard);
+                res
+            }
+        };
+        let mut map = self
+            .path_locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Clones are only made under the map lock, so this count is stable here:
+        // 2 = the map's entry + ours, i.e. nobody else is waiting.
+        if Arc::strong_count(&lock) == 2 {
+            map.remove(dest);
+        }
+        result
     }
 
     fn backoff(&self, attempt: u32, hint: Option<Duration>) -> Duration {
@@ -116,8 +156,25 @@ impl HttpDownloader {
         exp + Duration::from_millis(jitter)
     }
 
-    /// Downloads one request trying every candidate with retries.
+    /// Downloads one request under the per-destination lock.
     async fn fetch_one(
+        &self,
+        req: DownloadReq,
+        prog: &Progress<'_>,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<()> {
+        sink.check_cancelled()?;
+        let dest = req.dest.clone();
+        self.with_path_lock(
+            &dest,
+            sink.cancel_token(),
+            self.fetch_locked(req, prog, sink),
+        )
+        .await
+    }
+
+    /// Downloads one request trying every candidate with retries.
+    async fn fetch_locked(
         &self,
         req: DownloadReq,
         prog: &Progress<'_>,
@@ -137,7 +194,7 @@ impl HttpDownloader {
             return Ok(());
         }
 
-        let candidates = self.candidates(&req.urls);
+        let candidates = self.candidates(&req.urls, req.sha1.is_some());
         if candidates.is_empty() {
             return Err(
                 AppError::new(ErrorCode::InvalidInput, "download without URLs")
@@ -209,6 +266,11 @@ impl HttpDownloader {
             Ok(m) if m.is_file() => m.len(),
             _ => 0,
         };
+        if part_len > 0 && req.sha1.is_none() {
+            // Without a hash the old bytes cannot be verified: never resume blindly.
+            remove_quiet(part).await;
+            part_len = 0;
+        }
         if let Some(size) = req.size {
             if part_len > size {
                 remove_quiet(part).await;
@@ -331,7 +393,8 @@ impl HttpDownloader {
             if let Some(h) = &req.sha1 {
                 err = err.detail("expectedSha1", h.clone());
             }
-            return Err(AttemptError::retryable(err));
+            // A bad body from this URL is unlikely to change: try the next candidate.
+            return Err(AttemptError::fatal(err));
         }
         finish(part, &req.dest).await
     }
@@ -349,11 +412,28 @@ impl HttpDownloader {
             let hint = errors::retry_after(resp.headers());
             return Err(errors::from_status(status, url, hint));
         }
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| AttemptError::retryable(errors::from_reqwest(&e, url)))?;
-        Ok(body.to_vec())
+        let limit = self.cfg.max_body_bytes;
+        let too_big = || {
+            AttemptError::fatal(
+                AppError::new(ErrorCode::Network, "response body exceeds limit")
+                    .detail("url", url.as_str())
+                    .detail("limit", limit.to_string()),
+            )
+        };
+        if resp.content_length().is_some_and(|len| len > limit) {
+            return Err(too_big());
+        }
+        let mut body = Vec::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|e| AttemptError::retryable(errors::from_reqwest(&e, url)))?;
+            if body.len() as u64 + chunk.len() as u64 > limit {
+                return Err(too_big());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
     }
 }
 
@@ -361,6 +441,7 @@ impl HttpDownloader {
 impl Downloader for HttpDownloader {
     async fn fetch_many(&self, reqs: Vec<DownloadReq>, sink: &dyn ProgressSink) -> AppResult<()> {
         sink.check_cancelled()?;
+        let reqs = dedup_by_dest(reqs);
         let total = reqs
             .iter()
             .map(|r| r.size)
@@ -377,7 +458,8 @@ impl Downloader for HttpDownloader {
 
     async fn get_bytes(&self, url: &Url, _kind: ResourceKind) -> AppResult<Vec<u8>> {
         let mut last_err = None;
-        for candidate in self.candidates(std::slice::from_ref(url)) {
+        // No hash to verify against: mirrors only after the original.
+        for candidate in self.candidates(std::slice::from_ref(url), false) {
             for attempt in 0..self.cfg.attempts_per_url {
                 match self.get_once(&candidate).await {
                     Ok(body) => return Ok(body),
@@ -403,10 +485,21 @@ impl Downloader for HttpDownloader {
             Route::Direct => self.current_client(),
             // TODO(net): Proxied → mihomo mixed-port client from lc-vpn;
             // Auto → direct with per-host switch to proxy after `Blocked`.
-            Route::Proxied | Route::Auto => self.current_client(),
+            Route::Proxied | Route::Auto => {
+                if !self.route_warned.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        ?route,
+                        "VPN route is not wired yet; falling back to the direct client"
+                    );
+                }
+                self.current_client()
+            }
         }
     }
 
+    /// Ordering for SHA-1-verified downloads (honours `prefer_mirrors`).
+    /// Callers without a hash must keep the original first (CONTRACTS §2);
+    /// `fetch_many`/`get_bytes` apply that policy themselves.
     fn mirrors_for(&self, original: &Url, _kind: ResourceKind) -> Vec<Url> {
         mirrors::candidates(
             original,
@@ -436,9 +529,11 @@ fn build_client(cfg: &DownloaderConfig, proxy: Option<&ProxyCfg>) -> AppResult<r
         .user_agent(cfg.user_agent.clone())
         .connect_timeout(cfg.connect_timeout)
         .read_timeout(cfg.read_timeout);
-    if let Some(p) = proxy {
-        b = b.proxy(build_proxy(p)?);
-    }
+    b = match proxy {
+        Some(p) => b.proxy(build_proxy(p)?),
+        // `None` means direct: ignore HTTP(S)_PROXY / system proxy settings.
+        None => b.no_proxy(),
+    };
     b.build()
         .map_err(|e| AppError::internal(format!("cannot build HTTP client: {e}")))
 }
@@ -479,6 +574,27 @@ pub(crate) fn build_proxy(p: &ProxyCfg) -> AppResult<reqwest::Proxy> {
         }
     }
     Ok(proxy)
+}
+
+/// Keeps the first request per destination so one batch never races on a file.
+fn dedup_by_dest(reqs: Vec<DownloadReq>) -> Vec<DownloadReq> {
+    let mut seen: HashMap<PathBuf, usize> = HashMap::new();
+    let mut out: Vec<DownloadReq> = Vec::with_capacity(reqs.len());
+    for req in reqs {
+        if let Some(&i) = seen.get(&req.dest) {
+            let kept = &out[i];
+            if kept.sha1 != req.sha1 || kept.size != req.size {
+                tracing::warn!(
+                    dest = %req.dest.display(),
+                    "conflicting duplicate download request ignored"
+                );
+            }
+            continue;
+        }
+        seen.insert(req.dest.clone(), out.len());
+        out.push(req);
+    }
+    out
 }
 
 fn part_path(dest: &Path) -> PathBuf {
@@ -579,6 +695,47 @@ mod tests {
         let err = build_proxy(&proxy(ProxyKind::Http, "bad host/")).unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidInput);
         assert!(!format!("{err:?}").contains("p@ss"));
+    }
+
+    #[test]
+    fn unverified_requests_never_prefer_mirrors() {
+        let d = HttpDownloader::new(DownloaderConfig {
+            prefer_mirrors: true,
+            ..DownloaderConfig::default()
+        })
+        .unwrap();
+        let orig = Url::parse("https://piston-meta.mojang.com/a.json").unwrap();
+        let mirror = Url::parse("https://bmclapi2.bangbang93.com/a.json").unwrap();
+        let both = [orig.clone()];
+        assert_eq!(
+            d.candidates(&both, true),
+            vec![mirror.clone(), orig.clone()]
+        );
+        assert_eq!(
+            d.candidates(&both, false),
+            vec![orig.clone(), mirror.clone()]
+        );
+        d.set_prefer_mirrors(false);
+        assert_eq!(d.candidates(&both, true), vec![orig, mirror]);
+    }
+
+    #[test]
+    fn dedup_keeps_first_per_dest() {
+        let r = |u: &str, dest: &str| DownloadReq {
+            urls: vec![Url::parse(u).unwrap()],
+            sha1: None,
+            size: Some(1),
+            dest: PathBuf::from(dest),
+            kind: ResourceKind::Other,
+        };
+        let out = dedup_by_dest(vec![
+            r("http://a/1", "x"),
+            r("http://a/2", "y"),
+            r("http://a/3", "x"),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].urls[0].as_str(), "http://a/1");
+        assert_eq!(out[1].dest, PathBuf::from("y"));
     }
 
     #[test]

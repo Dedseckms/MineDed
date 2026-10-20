@@ -34,8 +34,10 @@ pub struct DownloaderConfig {
     pub prefer_mirrors: bool,
     /// Use BMCLAPI as a mirror for Mojang hosts.
     pub use_bmclapi: bool,
-    /// Initial manual proxy (`None` = direct).
+    /// Initial manual proxy (`None` = direct, system/env proxies ignored).
     pub proxy: Option<ProxyCfg>,
+    /// Maximum body size accepted by `get_bytes` (default 32 MiB).
+    pub max_body_bytes: u64,
 }
 
 impl Default for DownloaderConfig {
@@ -52,6 +54,7 @@ impl Default for DownloaderConfig {
             prefer_mirrors: false,
             use_bmclapi: true,
             proxy: None,
+            max_body_bytes: 32 * 1024 * 1024,
         }
     }
 }
@@ -87,6 +90,7 @@ impl fmt::Debug for DownloaderConfig {
             .field("prefer_mirrors", &self.prefer_mirrors)
             .field("use_bmclapi", &self.use_bmclapi)
             .field("proxy", &self.proxy.as_ref().map(redacted_proxy))
+            .field("max_body_bytes", &self.max_body_bytes)
             .finish()
     }
 }

@@ -12,7 +12,8 @@ use url::Url;
 #[derive(Debug)]
 pub(crate) struct AttemptError {
     pub err: AppError,
-    /// Worth retrying the same URL (network glitch, 5xx, 429, bad hash).
+    /// Worth retrying the same URL (network glitch, 5xx, 429). `false` moves
+    /// on to the next candidate (404, other 4xx, hash mismatch).
     pub retry: bool,
     /// Server-provided delay (`Retry-After`).
     pub retry_after: Option<Duration>,

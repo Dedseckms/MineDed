@@ -104,6 +104,17 @@ async fn status404(State(s): State<Srv>, uri: OriginalUri) -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
+/// Full payload without `Content-Length` (chunked transfer).
+async fn chunked(State(s): State<Srv>, uri: OriginalUri) -> Response {
+    s.hit(&uri);
+    let chunks: Vec<Result<Bytes, std::io::Error>> = s
+        .data
+        .chunks(4096)
+        .map(|c| Ok(Bytes::copy_from_slice(c)))
+        .collect();
+    Body::from_stream(futures_util::stream::iter(chunks)).into_response()
+}
+
 async fn slow(State(s): State<Srv>, uri: OriginalUri) -> Response {
     s.hit(&uri);
     let stream = futures_util::stream::unfold(0u32, |i| async move {
@@ -151,6 +162,7 @@ async fn start(data_len: usize) -> (Srv, SocketAddr) {
         .route("/slow/{name}", get(slow))
         .route("/conc/{name}", get(conc))
         .route("/proxied/{name}", get(via_proxy))
+        .route("/stream/{name}", get(chunked))
         .with_state(srv.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -382,7 +394,11 @@ async fn hash_mismatch_is_reported_and_part_removed() {
     let details = err.details.unwrap();
     assert!(details["url"].ends_with("/bad/e"));
     assert_eq!(details["expectedSha1"], sha1_hex(&srv.data));
-    assert_eq!(srv.hits("/bad/e"), 2, "retried once");
+    assert_eq!(
+        srv.hits("/bad/e"),
+        1,
+        "bad body is not retried on the same URL"
+    );
     assert!(!dest.exists());
     assert!(!part_of(&dest).exists());
 }
@@ -626,4 +642,122 @@ async fn manual_http_proxy_is_used_with_auth() {
         .await
         .unwrap();
     assert_eq!(body.len(), 10);
+}
+
+#[tokio::test]
+async fn duplicate_dest_in_one_batch() {
+    let (srv, addr) = start(LEN).await;
+    let tmp = TempDir::new("dup");
+    let dest = tmp.path().join("dup.jar");
+    let sink = RecSink::new();
+    downloader()
+        .fetch_many(
+            vec![
+                req(vec![url(addr, "/conc/dup")], &srv.data, dest.clone()),
+                req(vec![url(addr, "/conc/dup")], &srv.data, dest.clone()),
+            ],
+            &*sink,
+        )
+        .await
+        .unwrap();
+    assert_eq!(srv.hits("/conc/dup"), 1);
+    assert_eq!(std::fs::read(&dest).unwrap(), *srv.data);
+    assert_eq!(sink.last_progress(), (LEN as u64, Some(LEN as u64)));
+}
+
+#[tokio::test]
+async fn concurrent_fetch_many_same_dest() {
+    let (srv, addr) = start(LEN).await;
+    let tmp = TempDir::new("cdup");
+    let dest = tmp.path().join("same.jar");
+    let d = downloader();
+    let (s1, s2) = (RecSink::new(), RecSink::new());
+    let mk = || vec![req(vec![url(addr, "/conc/same")], &srv.data, dest.clone())];
+    let (a, b) = tokio::join!(d.fetch_many(mk(), &*s1), d.fetch_many(mk(), &*s2));
+    a.unwrap();
+    b.unwrap();
+    // The second call waits for the first and then skips the verified file.
+    assert_eq!(srv.hits("/conc/same"), 1);
+    assert_eq!(std::fs::read(&dest).unwrap(), *srv.data);
+    assert!(!part_of(&dest).exists());
+    assert_eq!(s1.last_progress().0, LEN as u64);
+    assert_eq!(s2.last_progress().0, LEN as u64);
+}
+
+#[tokio::test]
+async fn unhashed_part_not_resumed_blindly() {
+    let (srv, addr) = start(LEN).await;
+    let tmp = TempDir::new("unhashed");
+    let dest = tmp.path().join("u.json");
+    std::fs::write(part_of(&dest), vec![9u8; 50_000]).unwrap();
+    downloader()
+        .fetch_many(
+            vec![DownloadReq {
+                urls: vec![url(addr, "/ok/u")],
+                sha1: None,
+                size: None,
+                dest: dest.clone(),
+                kind: ResourceKind::VersionMeta,
+            }],
+            &*RecSink::new(),
+        )
+        .await
+        .unwrap();
+    assert!(srv.ranges.lock().unwrap().is_empty(), "no Range request");
+    assert_eq!(std::fs::read(&dest).unwrap(), *srv.data);
+}
+
+#[tokio::test]
+async fn hash_mismatch_moves_to_next_candidate() {
+    let (srv, addr) = start(LEN).await;
+    let tmp = TempDir::new("mm-next");
+    let dest = tmp.path().join("k.jar");
+    downloader()
+        .fetch_many(
+            vec![req(
+                vec![url(addr, "/bad/k"), url(addr, "/ok/k")],
+                &srv.data,
+                dest.clone(),
+            )],
+            &*RecSink::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(srv.hits("/bad/k"), 1);
+    assert_eq!(srv.hits("/ok/k"), 1);
+    assert_eq!(std::fs::read(&dest).unwrap(), *srv.data);
+}
+
+#[tokio::test]
+async fn get_bytes_rejects_oversized_body() {
+    let (srv, addr) = start(LEN).await;
+    let d = HttpDownloader::new(DownloaderConfig {
+        max_body_bytes: 1000,
+        attempts_per_url: 2,
+        backoff_base: Duration::from_millis(5),
+        ..DownloaderConfig::default()
+    })
+    .unwrap();
+    // With Content-Length.
+    let err = d
+        .get_bytes(&url(addr, "/ok/big"), ResourceKind::Other)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Network);
+    assert!(err.details.unwrap()["url"].ends_with("/ok/big"));
+    // Chunked, counted while streaming.
+    let err = d
+        .get_bytes(&url(addr, "/stream/big"), ResourceKind::Other)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Network);
+    assert!(err.details.unwrap()["url"].ends_with("/stream/big"));
+    assert_eq!(srv.hits("/stream/big"), 1, "oversize is not retried");
+
+    // Default limit (32 MiB) accepts the same bodies.
+    let body = downloader()
+        .get_bytes(&url(addr, "/stream/ok"), ResourceKind::Other)
+        .await
+        .unwrap();
+    assert_eq!(body, *srv.data);
 }
