@@ -1,0 +1,18 @@
+[package]
+name = "lc-loaders"
+description = "Fabric, Quilt, Forge, NeoForge installers. Owner: mods."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lc-types.workspace = true
+lc-runtime.workspace = true
+lc-http.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

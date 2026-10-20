@@ -1,0 +1,295 @@
+openapi: 3.1.0
+info:
+  title: Launcher Hub API
+  version: 1.0.0
+  description: |
+    CONTRACT (lead). Rooms/signaling, mirror list and skin library for the launcher.
+    Implemented by `server/hub` (owner: server-ops), consumed by `lc-p2p`, `lc-http`,
+    `lc-accounts`. Yggdrasil auth itself is served by Drasl (see `yggdrasil.md`).
+
+    Auth: `Authorization: Bearer <Yggdrasil accessToken>` — hub validates it against
+    Drasl (`/authserver/validate`). Endpoints marked `security: []` are public.
+
+    Errors use the same shape as the launcher `AppError`: `{code, message, details}`.
+  license:
+    name: GPL-3.0-or-later
+    identifier: GPL-3.0-or-later
+servers:
+  - url: https://{domain}/api/v1
+    variables:
+      domain:
+        default: mc.example.ru
+security:
+  - bearer: []
+tags:
+  - name: system
+    description: Health and dynamic configuration (mirrors).
+  - name: skins
+    description: Skin library on top of Drasl textures.
+  - name: rooms
+    description: P2P room registry, tokens and fallback signaling.
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: health
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  version: { type: string }
+
+  /mirrors:
+    get:
+      tags: [system]
+      operationId: getMirrors
+      summary: Current mirror list per upstream (launcher refreshes it on start)
+      security: []
+      responses:
+        "200":
+          description: Map of upstream key → ordered mirror base URLs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mirrors" }
+
+  /skins:
+    get:
+      tags: [skins]
+      operationId: listSkins
+      summary: Skin library of the caller (or public library)
+      parameters:
+        - name: owner
+          in: query
+          schema: { type: string, enum: [me, public], default: me }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Page of skins
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Skin" }
+                  total: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [skins]
+      operationId: uploadSkin
+      summary: Upload a PNG (64x64 or 64x32) to the library
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, model, name]
+              properties:
+                file: { type: string, format: binary }
+                model: { $ref: "#/components/schemas/SkinModel" }
+                name: { type: string, maxLength: 64 }
+                public: { type: boolean, default: false }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Skin" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+
+  /skins/{id}:
+    delete:
+      tags: [skins]
+      operationId: deleteSkin
+      summary: Delete a skin from the caller's library
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /me/skin:
+    post:
+      tags: [skins]
+      operationId: setActiveSkin
+      summary: Make a library skin the active texture of the caller's Yggdrasil profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [skinId]
+              properties:
+                skinId: { type: string, format: uuid }
+      responses:
+        "204": { description: Applied (visible via Drasl texture server) }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /rooms:
+    post:
+      tags: [rooms]
+      operationId: createRoom
+      summary: Host registers a room; returns a human code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpointId, sig, authMode]
+              properties:
+                endpointId: { type: string, description: iroh endpoint id of the host }
+                sig: { $ref: "#/components/schemas/InstanceSig" }
+                authMode: { type: string, enum: [yggdrasil, open] }
+                maxPeers: { type: integer, minimum: 2, maximum: 16, default: 8 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roomId, code, hostToken, expiresAt, relayUrls]
+                properties:
+                  roomId: { type: string, format: uuid }
+                  code: { type: string, pattern: "^[A-Z0-9]{4}-[A-Z0-9]{4}$" }
+                  hostToken: { type: string }
+                  expiresAt: { type: string, format: date-time }
+                  relayUrls: { type: array, items: { type: string, format: uri } }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /rooms/{code}/join:
+    post:
+      tags: [rooms]
+      operationId: joinRoom
+      summary: Guest joins by code and gets a peer token
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpointId]
+              properties:
+                endpointId: { type: string }
+      responses:
+        "200":
+          description: Joined; connect to the host via iroh with `peerToken` in `Hello`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roomId, peerToken, hostEndpointId, sig, authMode, relayUrls]
+                properties:
+                  roomId: { type: string, format: uuid }
+                  peerToken: { type: string }
+                  hostEndpointId: { type: string }
+                  sig: { $ref: "#/components/schemas/InstanceSig" }
+                  authMode: { type: string, enum: [yggdrasil, open] }
+                  relayUrls: { type: array, items: { type: string, format: uri } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /rooms/{roomId}:
+    delete:
+      tags: [rooms]
+      operationId: closeRoom
+      summary: Host closes the room
+      parameters:
+        - { name: roomId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Closed }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /rooms/{roomId}/ws:
+    get:
+      tags: [rooms]
+      operationId: roomSocket
+      summary: WebSocket for presence and fallback chat
+      description: |
+        Upgrade to WebSocket. Auth via `?token=<hostToken|peerToken>` (browsers can't set headers).
+        Messages are JSON objects with a `t` field:
+        - server → client: `peer_joined {peerId,name}`, `peer_left {peerId}`, `kick {peerId,reason}`,
+          `chat {id,fromPeer,fromName,text,sentAt}`, `host_endpoint {endpointId}`, `closed {}`
+        - client → server: `chat {id,text}`, `ping {nonce}`
+      security: []
+      parameters:
+        - { name: roomId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: token, in: query, required: true, schema: { type: string } }
+      responses:
+        "101": { description: Switching protocols }
+        "401": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, examples: [notFound, authRequired, invalidInput, notImplemented] }
+        message: { type: string }
+        details:
+          type: [object, "null"]
+          additionalProperties: { type: string }
+    SkinModel:
+      type: string
+      enum: [classic, slim]
+    Skin:
+      type: object
+      required: [id, name, model, hash, url]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        model: { $ref: "#/components/schemas/SkinModel" }
+        hash: { type: string, description: SHA-256 of the PNG }
+        url: { type: string, format: uri }
+        previewUrl: { type: string, format: uri }
+        public: { type: boolean }
+    InstanceSig:
+      type: object
+      required: [mc, loader, modsHash]
+      properties:
+        mc: { type: string }
+        loader: { type: string, enum: [vanilla, fabric, quilt, forge, neoForge] }
+        loaderVersion: { type: [string, "null"] }
+        modsHash: { type: string }
+    Mirrors:
+      type: object
+      description: Keys - pistonMeta, pistonData, libraries, resources, modrinthApi, modrinthCdn, updates, vpnSubscription
+      additionalProperties:
+        type: array
+        items: { type: string, format: uri }

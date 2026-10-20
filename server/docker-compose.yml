@@ -1,0 +1,54 @@
+# TEMPLATE (owner: server-ops). No secrets here: real values live in `.env` on the
+# server only (see deploy/README.md). Image tags must be pinned before deploy.
+name: launcher
+
+services:
+  caddy:
+    image: caddy:2 # TODO(server-ops): pin exact tag
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "443:443/udp"
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [drasl, hub]
+
+  drasl:
+    image: unmojang/drasl:latest # TODO(server-ops): pin exact tag
+    restart: unless-stopped
+    volumes:
+      - ./deploy/drasl:/etc/drasl:ro
+      - drasl_state:/var/lib/drasl
+
+  hub:
+    build:
+      context: ..
+      dockerfile: server/hub/Dockerfile # TODO(server-ops): add Dockerfile
+    restart: unless-stopped
+    environment:
+      HUB_ADDR: 0.0.0.0:8080
+      DRASL_URL: http://drasl:25585
+      DRASL_ADMIN_TOKEN: ${DRASL_ADMIN_TOKEN:?set in .env}
+
+  iroh-relay:
+    image: n0computer/iroh-relay:latest # TODO(server-ops): pin exact tag, confirm image name
+    restart: unless-stopped
+    ports:
+      - "3478:3478/udp" # QAD / STUN
+    # TLS terminates in caddy (relay.<domain>) or in the relay itself; decide in wave 0.
+
+  mirror-cache:
+    image: nginx:stable # TODO(server-ops): pin exact tag
+    restart: unless-stopped
+    volumes:
+      - ./deploy/mirror.conf:/etc/nginx/conf.d/default.conf:ro
+      - mirror_cache:/var/cache/nginx
+
+  # mihomo already runs on the host; not managed by this compose file.
+
+volumes:
+  caddy_data:
+  drasl_state:
+  mirror_cache:

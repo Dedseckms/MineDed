@@ -1,0 +1,12 @@
+{
+  "name": "launcher-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter desktop tauri dev",
+    "build": "pnpm --filter desktop build",
+    "typecheck": "pnpm --filter desktop typecheck",
+    "test": "pnpm --filter desktop test",
+    "lint:openapi": "pnpm dlx --package=@redocly/cli@2.64.1 redocly lint server/openapi/hub.yaml"
+  }
+}

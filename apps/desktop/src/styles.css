@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Design tokens. Owned by ui; themes override these on [data-theme]. */
+@theme {
+  --color-bg: #0f1115;
+  --color-surface: #171a21;
+  --color-text: #e6e8ee;
+  --color-muted: #8a90a0;
+  --color-accent: #4ade80;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, sans-serif;
+}
+
+/* Light mode: no blur/backdrop effects (expensive on WebKitGTK). */
+[data-light-mode="true"] * {
+  backdrop-filter: none !important;
+}

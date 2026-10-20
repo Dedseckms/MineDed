@@ -1,0 +1,20 @@
+[package]
+name = "lc-core"
+description = "Versions, Java manager, instances, game launch. Owner: core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lc-types.workspace = true
+lc-runtime.workspace = true
+lc-http.workspace = true
+lc-accounts.workspace = true
+lc-loaders.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

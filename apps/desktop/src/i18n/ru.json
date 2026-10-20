@@ -1,0 +1,16 @@
+{
+  "app": {
+    "title": "Лаунчер",
+    "version": "Версия {{version}}",
+    "mock": "моковый бэкенд"
+  },
+  "instances": {
+    "count_one": "{{count}} сборка",
+    "count_few": "{{count}} сборки",
+    "count_many": "{{count}} сборок",
+    "count_other": "{{count}} сборки"
+  },
+  "errors": {
+    "notImplemented": "Ещё не реализовано"
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "lc-accounts"
+description = "Microsoft device flow, offline, Yggdrasil/authlib-injector, keyring, skins. Owner: accounts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lc-types.workspace = true
+lc-runtime.workspace = true
+lc-http.workspace = true
+async-trait.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

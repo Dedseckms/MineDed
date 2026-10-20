@@ -1,0 +1,19 @@
+[package]
+name = "lc-types"
+description = "Shared DTOs, ids and errors. CONTRACT: changed only by lead."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+specta.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

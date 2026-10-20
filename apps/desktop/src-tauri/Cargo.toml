@@ -1,0 +1,38 @@
+[package]
+name = "desktop"
+description = "Tauri shell: command registration and wiring of services. Owner: lead (+ per-role commands/*.rs)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+lc-types.workspace = true
+lc-runtime.workspace = true
+lc-http.workspace = true
+lc-core.workspace = true
+lc-loaders.workspace = true
+lc-content.workspace = true
+lc-accounts.workspace = true
+lc-vpn.workspace = true
+lc-p2p.workspace = true
+lc-voice.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+specta-typescript.workspace = true
+tauri.workspace = true
+tauri-specta.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

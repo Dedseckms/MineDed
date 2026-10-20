@@ -1,0 +1,30 @@
+# Rust
+/target/
+
+# Node / frontend
+node_modules/
+/apps/desktop/dist/
+
+# Tauri generated
+/apps/desktop/src-tauri/gen/
+
+# Agent worktrees
+/.worktrees/
+
+# Secrets and local env (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+server/deploy/drasl/*.toml.local
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local Claude settings
+.claude/settings.local.json

@@ -1,0 +1,20 @@
+[package]
+name = "lc-p2p"
+description = "Rooms over iroh (QUIC): TCP tunnel for the game, control stream, voice datagrams. Owner: net."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lc-types.workspace = true
+lc-runtime.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

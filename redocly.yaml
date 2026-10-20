@@ -1,0 +1,6 @@
+extends:
+  - recommended
+rules:
+  # /health and /mirrors are public and cannot fail with 4xx; /rooms/{id}/ws answers 101.
+  operation-4xx-response: off
+  operation-2xx-response: off

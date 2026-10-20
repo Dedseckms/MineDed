@@ -1,0 +1,14 @@
+{
+  "app": {
+    "title": "Launcher",
+    "version": "Version {{version}}",
+    "mock": "mock backend"
+  },
+  "instances": {
+    "count_one": "{{count}} instance",
+    "count_other": "{{count}} instances"
+  },
+  "errors": {
+    "notImplemented": "Not implemented yet"
+  }
+}
