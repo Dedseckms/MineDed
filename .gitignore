@@ -1,5 +1,6 @@
-# Rust
+﻿# Rust
 /target/
+/target-*/
 
 # Node / frontend
 node_modules/
