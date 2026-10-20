@@ -2044,10 +2044,15 @@ name = "lc-http"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
+ "futures-util",
+ "hex",
  "lc-runtime",
  "lc-types",
  "reqwest",
+ "sha1",
  "tokio",
+ "tracing",
  "url",
 ]
 
