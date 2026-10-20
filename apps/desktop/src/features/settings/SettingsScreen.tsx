@@ -121,7 +121,7 @@ function ProxyEditor({
                 aria-describedby={d}
                 invalid={inv}
                 value={value.host}
-                placeholder="127.0.0.1"
+                placeholder={t("settings.proxy.hostPlaceholder")}
                 onChange={(e) => onChange({ ...value, host: e.target.value })}
               />
             )}
@@ -134,7 +134,7 @@ function ProxyEditor({
                 invalid={inv}
                 inputMode="numeric"
                 value={value.port}
-                placeholder={value.mode === "socks5" ? "1080" : "8080"}
+                placeholder={t(`settings.proxy.portPlaceholder.${value.mode === "socks5" ? "socks5" : "http"}`)}
                 onChange={(e) => onChange({ ...value, port: e.target.value })}
               />
             )}

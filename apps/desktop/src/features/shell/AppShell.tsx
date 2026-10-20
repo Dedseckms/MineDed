@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 
 import { isMock } from "../../api/client";
+import { BRAND_MARK } from "../../brand";
 import { useAccounts, useAppVersion } from "../../api/queries";
 import { Icon, type IconName } from "../../components/ui/Icon";
 import { Badge } from "../../components/ui/feedback";
@@ -37,7 +38,9 @@ function Sidebar() {
   return (
     <nav aria-label={t("nav.label")} className="flex w-56 shrink-0 flex-col border-r border-border bg-surface px-3 py-4">
       <div className="mb-6 flex items-center gap-2 px-3">
-        <span className="grid size-8 place-items-center rounded-lg bg-accent text-sm font-bold text-accent-fg">M</span>
+        <span className="grid size-8 place-items-center rounded-lg bg-accent text-sm font-bold text-accent-fg" aria-hidden>
+          {BRAND_MARK}
+        </span>
         <span className="text-lg font-semibold">{t("app.title")}</span>
       </div>
       <ul className="flex flex-col gap-1">

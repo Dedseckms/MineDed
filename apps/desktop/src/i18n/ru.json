@@ -65,6 +65,7 @@
     "javaPathPlaceholder": "Автоматически",
     "jvmArgs": "Аргументы JVM",
     "jvmArgsHint": "Через пробел; значения с пробелами — в кавычках",
+    "jvmArgsPlaceholder": "Например, -XX:+UseG1GC",
     "cloneDefaultName": "{{name}} (копия)",
     "cloneTitle": "Клонировать «{{name}}»",
     "clone": "Клонировать",
@@ -99,11 +100,12 @@
     "recommended": "Рекомендуется {{min}}–{{max}}: {{reason}}",
     "reasonGeneric": "по характеристикам системы",
     "systemTotal": "Всего ОЗУ: {{total}}",
-    "systemHint": "Всего ОЗУ: {{total}}, свободно {{free}}. Рекомендуемый максимум — около {{suggested}}."
-  },
-  "ram": {
+    "systemHint": "Всего ОЗУ: {{total}}, свободно {{free}}. Рекомендуемый максимум — около {{suggested}}.",
     "reason": {
-      "vanilla": "для ванильной игры этого достаточно"
+      "default": "стандартное значение для этой сборки",
+      "largeModpack": "в сборке много модов",
+      "lowTotalRam": "в системе мало оперативной памяти",
+      "lowFreeRam": "сейчас мало свободной памяти"
     }
   },
   "accounts": {
@@ -119,6 +121,7 @@
     "offlineTitle": "Оффлайн-аккаунт",
     "nick": "Ник",
     "nickHint": "3–16 символов: латиница, цифры и _",
+    "nickPlaceholder": "Например, Steve",
     "add": "Добавить",
     "removeTitle": "Удалить аккаунт?",
     "removeMessage": "Аккаунт «{{name}}» будет удалён из лаунчера.",
@@ -161,7 +164,12 @@
       "http": "HTTP",
       "socks5": "SOCKS5",
       "host": "Хост",
+      "hostPlaceholder": "127.0.0.1",
       "port": "Порт",
+      "portPlaceholder": {
+        "http": "8080",
+        "socks5": "1080"
+      },
       "username": "Логин",
       "password": "Пароль"
     }
@@ -195,15 +203,13 @@
   },
   "stages": {
     "working": "Выполняется…",
-    "manifest": "Получение списка версий",
+    "versionMeta": "Получение данных версии",
     "client": "Загрузка клиента",
     "libraries": "Загрузка библиотек",
     "assets": "Загрузка ресурсов",
-    "natives": "Распаковка нативных библиотек",
     "java": "Подготовка Java",
-    "copying": "Копирование файлов",
-    "verifying": "Проверка файлов",
-    "launching": "Запуск JVM"
+    "copy": "Копирование файлов",
+    "download": "Загрузка файлов"
   },
   "units": {
     "bps": "Б/с",

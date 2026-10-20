@@ -63,6 +63,7 @@
     "javaPathPlaceholder": "Automatic",
     "jvmArgs": "JVM arguments",
     "jvmArgsHint": "Space-separated; quote values with spaces",
+    "jvmArgsPlaceholder": "e.g. -XX:+UseG1GC",
     "cloneDefaultName": "{{name}} (copy)",
     "cloneTitle": "Clone “{{name}}”",
     "clone": "Clone",
@@ -95,11 +96,12 @@
     "recommended": "Recommended {{min}}–{{max}}: {{reason}}",
     "reasonGeneric": "based on your system",
     "systemTotal": "Total RAM: {{total}}",
-    "systemHint": "Total RAM: {{total}}, {{free}} free. Suggested maximum is about {{suggested}}."
-  },
-  "ram": {
+    "systemHint": "Total RAM: {{total}}, {{free}} free. Suggested maximum is about {{suggested}}.",
     "reason": {
-      "vanilla": "enough for vanilla gameplay"
+      "default": "the default for this instance",
+      "largeModpack": "the instance has many mods",
+      "lowTotalRam": "the system has little RAM",
+      "lowFreeRam": "little free memory right now"
     }
   },
   "accounts": {
@@ -115,6 +117,7 @@
     "offlineTitle": "Offline account",
     "nick": "Nickname",
     "nickHint": "3–16 characters: Latin letters, digits and _",
+    "nickPlaceholder": "e.g. Steve",
     "add": "Add",
     "removeTitle": "Remove account?",
     "removeMessage": "Account “{{name}}” will be removed from the launcher.",
@@ -157,7 +160,12 @@
       "http": "HTTP",
       "socks5": "SOCKS5",
       "host": "Host",
+      "hostPlaceholder": "127.0.0.1",
       "port": "Port",
+      "portPlaceholder": {
+        "http": "8080",
+        "socks5": "1080"
+      },
       "username": "Username",
       "password": "Password"
     }
@@ -191,15 +199,13 @@
   },
   "stages": {
     "working": "Working…",
-    "manifest": "Fetching version list",
+    "versionMeta": "Fetching version metadata",
     "client": "Downloading client",
     "libraries": "Downloading libraries",
     "assets": "Downloading assets",
-    "natives": "Extracting natives",
     "java": "Preparing Java",
-    "copying": "Copying files",
-    "verifying": "Verifying files",
-    "launching": "Starting JVM"
+    "copy": "Copying files",
+    "download": "Downloading files"
   },
   "units": {
     "bps": "B/s",

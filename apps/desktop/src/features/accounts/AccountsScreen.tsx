@@ -50,7 +50,7 @@ function OfflineAddForm() {
               invalid={inv}
               value={name}
               maxLength={NICK_MAX + 8}
-              placeholder="Steve"
+              placeholder={t("accounts.nickPlaceholder")}
               onChange={(e) => {
                 setName(e.target.value);
                 setTouched(true);

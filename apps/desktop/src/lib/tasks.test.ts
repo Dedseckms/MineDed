@@ -45,7 +45,7 @@ describe("TaskEvent → progress", () => {
 
   it("works when progress arrives before started", () => {
     const t = run([
-      { type: "progress", id: "a", done: 5, total: null, stage: "stages.manifest", speedBps: null },
+      { type: "progress", id: "a", done: 5, total: null, stage: "stages.versionMeta", speedBps: null },
       { type: "started", id: "a", kind: "launch", titleKey: "tasks.launch" },
     ]);
     expect(t).toMatchObject({ kind: "launch", done: 5, total: null });

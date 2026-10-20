@@ -18,6 +18,35 @@ describe("taskStore", () => {
     expect(selectRunningCount(st)).toBe(2);
   });
 
+  it("orders by first appearance, not by (random UUIDv4) id", () => {
+    // Lexicographically the newer task has the *smaller* id.
+    const older = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
+    const newer = "0b1e7c9a-3d2f-4e8a-9c51-7a2d4f6b8e10";
+    const newest = "8c3f2a71-9b4e-4d06-b1f5-2e9a7c4d1b03";
+    const s = useTaskStore.getState();
+    s.applyEvent({ type: "started", id: older, kind: "launch", titleKey: "tasks.launch" });
+    s.applyEvent({ type: "started", id: newer, kind: "javaInstall", titleKey: "tasks.javaInstall" });
+    const ids = () => selectVisibleTasks(useTaskStore.getState()).map((t) => t.id);
+    expect(ids()).toEqual([newer, older]);
+
+    // tasks_list comes sorted by UUID; known tasks must keep their positions,
+    // the unknown one is appended as the newest.
+    const row = (id: string) => ({
+      id,
+      kind: "launch" as const,
+      titleKey: "tasks.launch",
+      status: "running" as const,
+      done: 0,
+      total: null,
+      stage: "",
+    });
+    useTaskStore.getState().syncSummaries([row(newer), row(newest), row(older)].sort((a, b) => a.id.localeCompare(b.id)));
+    expect(ids()).toEqual([newest, newer, older]);
+    const { firstSeen } = useTaskStore.getState();
+    expect(firstSeen[older]).toBeLessThan(firstSeen[newer] ?? -1);
+    expect(firstSeen[newer]).toBeLessThan(firstSeen[newest] ?? -1);
+  });
+
   it("syncs summaries and dismisses finished tasks", () => {
     const s = useTaskStore.getState();
     s.syncSummaries([

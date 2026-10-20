@@ -153,7 +153,7 @@ export function InstanceSettingsDialog({ instance, onClose }: { instance: Instan
                 invalid={inv}
                 className="font-mono"
                 value={draft.jvmArgs}
-                placeholder="-XX:+UseG1GC"
+                placeholder={t("instances.jvmArgsPlaceholder")}
                 onChange={(e) => setDraft({ ...draft, jvmArgs: e.target.value })}
               />
             )}

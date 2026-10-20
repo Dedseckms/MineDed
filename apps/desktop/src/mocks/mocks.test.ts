@@ -27,6 +27,11 @@ describe("mock commands", () => {
     expect(() => unwrap(res)).toThrow(ApiError);
   });
 
+  it("is not a thenable (can be resolved from a Promise)", async () => {
+    const api = await Promise.resolve(createMockCommands());
+    expect(await api.appVersion()).toBe("0.0.0-mock");
+  });
+
   it("accepts per-test overrides", async () => {
     const api = createMockCommands({ settingsSet: async () => ({ status: "ok", data: null }) });
     expect((await api.settingsSet({} as never)).status).toBe("ok");

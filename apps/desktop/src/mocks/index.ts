@@ -17,6 +17,8 @@ import type {
 } from "../bindings";
 import { validateNick } from "../lib/validation";
 import { type MockBus, mockBus } from "./bus";
+
+export { mockBus };
 import {
   GAME_LOG_SAMPLE,
   SYSTEM_INFO,
@@ -198,7 +200,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
     ramRecommend: async (id) => {
       await wait();
       if (!findInstance(id)) return notFound(`instance ${id}`);
-      return ok({ minMb: 1024, maxMb: 4096, reasonKey: "ram.reason.vanilla" });
+      return ok({ minMb: 1024, maxMb: 4096, reasonKey: "memory.reason.default" });
     },
 
     // ---- instances ----
@@ -224,7 +226,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
         "tasks.instanceCreate",
         ch,
         [
-          { stage: "stages.manifest", total: null },
+          { stage: "stages.versionMeta", total: null },
           { stage: "stages.client", total: 24_000_000 },
           { stage: "stages.libraries", total: 48_000_000 },
           { stage: "stages.assets", total: 96_000_000 },
@@ -261,7 +263,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
         "instanceCreate",
         "tasks.instanceClone",
         ch,
-        [{ stage: "stages.copying", total: 120_000_000 }],
+        [{ stage: "stages.copy", total: 120_000_000 }],
         () => {
           instances = [
             ...instances,
@@ -338,10 +340,9 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
         "tasks.launch",
         ch,
         [
-          { stage: "stages.verifying", total: 2_400 },
-          { stage: "stages.libraries", total: 12_000_000 },
+          { stage: "stages.java", total: null },
+          { stage: "stages.download", total: 12_000_000 },
           { stage: "stages.assets", total: 30_000_000 },
-          { stage: "stages.launching", total: null },
         ],
         () => {
           setRunState(id, "running");
@@ -464,7 +465,9 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
 export function createMockCommands(extra: Partial<Commands> = {}, opts: MockOptions = {}): Commands {
   const impl: Partial<Commands> = { ...createMockBackend(opts), ...extra };
   return new Proxy(impl, {
-    get(target, prop: string) {
+    get(target, prop: string | symbol) {
+      // Not a thenable: the object is resolved from a Promise (lazy loading in client.ts).
+      if (typeof prop === "symbol" || prop === "then") return undefined;
       return target[prop as keyof Commands] ?? notImplemented(prop);
     },
   }) as Commands;
