@@ -10,4 +10,4 @@ pub mod settings;
 pub use launch::{LaunchContributor, LaunchPlan, QuickPlay};
 pub use paths::Paths;
 pub use progress::{CancelToken, NullSink, ProgressSink};
-pub use settings::{MemorySettingsStore, SettingsStore};
+pub use settings::{JsonSettingsStore, MemorySettingsStore, SettingsStore};

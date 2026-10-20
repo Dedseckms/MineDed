@@ -9,7 +9,8 @@ license.workspace = true
 lc-types.workspace = true
 async-trait.workspace = true
 serde.workspace = true
-tokio.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tokio-util.workspace = true
 
 [lints]
