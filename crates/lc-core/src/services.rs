@@ -18,7 +18,7 @@ use lc_types::java::JavaRuntime;
 use lc_types::system::{MemoryRecommendation, SystemInfo};
 use lc_types::version::{LoaderKind, VersionEntry, VersionFilter};
 use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc;
 
 use crate::contract::{
@@ -37,6 +37,8 @@ use crate::versions::{Versions, DEFAULT_JAVA_MAJOR};
 
 const LOG_BATCH: Duration = Duration::from_millis(100);
 const LOG_BATCH_MAX: usize = 500;
+/// Longer game log lines are truncated.
+const MAX_LOG_LINE: usize = 64 * 1024;
 
 struct Run {
     state: RunState,
@@ -114,6 +116,42 @@ impl Inner {
             exit_code,
             crash_report,
         });
+    }
+
+    /// Reserves `id` in the run table as `Preparing`; `Conflict` when it is
+    /// already launching, running or being repaired.
+    fn reserve(&self, id: InstanceId, notify: bool) -> AppResult<RunGuard<'_>> {
+        {
+            let mut runs = self
+                .runs
+                .lock()
+                .map_err(|_| AppError::internal("run table poisoned"))?;
+            if runs.contains_key(&id) {
+                return Err(AppError::new(ErrorCode::Conflict, "instance is busy")
+                    .detail("id", id.to_string()));
+            }
+            runs.insert(
+                id,
+                Run {
+                    state: RunState::Preparing,
+                    kill: None,
+                },
+            );
+        }
+        if notify {
+            self.observer.on_state(InstanceStatePayload {
+                id,
+                state: RunState::Preparing,
+                exit_code: None,
+                crash_report: None,
+            });
+        }
+        Ok(RunGuard {
+            inner: self,
+            id,
+            armed: true,
+            notify,
+        })
     }
 
     fn run_state(&self, id: InstanceId) -> RunState {
@@ -277,7 +315,7 @@ impl Inner {
     }
 
     async fn repair(&self, id: InstanceId, sink: &dyn ProgressSink) -> AppResult<()> {
-        self.ensure_not_running(id)?;
+        let _guard = self.reserve(id, false)?;
         let mut file = self.store.load(id).await?;
         if let Some(profile) = self.install_loader(&file.instance, sink).await? {
             file.version_profile = Some(profile);
@@ -339,16 +377,12 @@ impl Inner {
         tokio::fs::create_dir_all(&game_dir)
             .await
             .map_err(|e| crate::util::io_err(&game_dir, e))?;
-        let jars: Vec<(PathBuf, Vec<String>)> = prepared
-            .libs
-            .iter()
-            .filter_map(|l| match &l.usage {
-                LibUse::Native { exclude } => {
-                    Some((l.local(&self.paths.libraries()), exclude.clone()))
-                }
-                LibUse::Classpath => None,
-            })
-            .collect();
+        let mut jars: Vec<(PathBuf, Vec<String>)> = Vec::new();
+        for l in &prepared.libs {
+            if let LibUse::Native { exclude } = &l.usage {
+                jars.push((l.local(&self.paths.libraries())?, exclude.clone()));
+            }
+        }
         {
             let dir = natives_dir.clone();
             join(tokio::task::spawn_blocking(move || extract_natives(&jars, &dir)).await)?;
@@ -399,14 +433,9 @@ impl Inner {
         self.set_state(id, RunState::Running, Some(kill.clone()), None, None);
         let started_at = SystemTime::now();
         let started = Instant::now();
-        let _ = self
-            .store
-            .modify(id, |f| {
-                f.instance.last_played = Some(now_rfc3339());
-                Ok(())
-            })
-            .await;
 
+        // No `.await` between spawn and handing the child to its monitor task:
+        // a dropped launch future must never orphan a running process.
         let (tx, rx) = mpsc::channel::<String>(4096);
         if let Some(out) = child.stdout.take() {
             tokio::spawn(pump(out, tx.clone()));
@@ -419,6 +448,13 @@ impl Inner {
 
         let me = self.clone();
         tokio::spawn(async move {
+            let _ = me
+                .store
+                .modify(id, |f| {
+                    f.instance.last_played = Some(now_rfc3339());
+                    Ok(())
+                })
+                .await;
             let mut killed = false;
             let status = tokio::select! {
                 s = child.wait() => s,
@@ -451,6 +487,48 @@ impl Inner {
     }
 }
 
+/// A `Preparing` reservation in the run table. Dropping it (error, or the
+/// future being cancelled/dropped) removes the entry unless it was disarmed.
+struct RunGuard<'a> {
+    inner: &'a Inner,
+    id: InstanceId,
+    armed: bool,
+    /// Emit `Stopped` to the observer on release (launch, not repair).
+    notify: bool,
+}
+
+impl RunGuard<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let removed = match self.inner.runs.lock() {
+            Ok(mut runs) => {
+                let preparing = runs
+                    .get(&self.id)
+                    .map(|r| r.state == RunState::Preparing)
+                    .unwrap_or(false);
+                preparing && runs.remove(&self.id).is_some()
+            }
+            Err(_) => false,
+        };
+        if removed && self.notify {
+            self.inner.observer.on_state(InstanceStatePayload {
+                id: self.id,
+                state: RunState::Stopped,
+                exit_code: None,
+                crash_report: None,
+            });
+        }
+    }
+}
+
 /// `fabric-loader-0.16.9-1.21.1` → `0.16.9` (best effort, for display only).
 fn loader_version_from_profile(profile: &str, mc: &str) -> Option<String> {
     let trimmed = profile.strip_suffix(&format!("-{mc}"))?;
@@ -460,18 +538,41 @@ fn loader_version_from_profile(profile: &str, mc: &str) -> Option<String> {
 async fn pump(stream: impl AsyncRead + Unpin, tx: mpsc::Sender<String>) {
     let mut reader = BufReader::new(stream);
     let mut buf = Vec::new();
+    while let Ok(true) = read_line_capped(&mut reader, &mut buf, MAX_LOG_LINE).await {
+        let line = String::from_utf8_lossy(&buf)
+            .trim_end_matches(['\r', '\n'])
+            .to_owned();
+        if tx.send(line).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Reads one line into `buf` (cleared first), keeping at most `max` bytes and
+/// discarding the rest of an over-long line without buffering it.
+/// Returns `false` at EOF with nothing read.
+pub(crate) async fn read_line_capped<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max: usize,
+) -> std::io::Result<bool> {
+    buf.clear();
+    let mut any = false;
     loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                let line = String::from_utf8_lossy(&buf)
-                    .trim_end_matches(['\r', '\n'])
-                    .to_owned();
-                if tx.send(line).await.is_err() {
-                    break;
-                }
-            }
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok(any);
+        }
+        any = true;
+        let (take, done) = match chunk.iter().position(|&b| b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (chunk.len(), false),
+        };
+        let room = max.saturating_sub(buf.len());
+        buf.extend_from_slice(&chunk[..take.min(room)]);
+        reader.consume(take);
+        if done {
+            return Ok(true);
         }
     }
 }
@@ -641,34 +742,11 @@ impl GameLauncher for CoreServices {
         sink: &dyn ProgressSink,
     ) -> AppResult<()> {
         let inner = &self.inner;
-        {
-            let mut runs = inner
-                .runs
-                .lock()
-                .map_err(|_| AppError::internal("run table poisoned"))?;
-            if runs.contains_key(&id) {
-                return Err(
-                    AppError::new(ErrorCode::Conflict, "instance is already running")
-                        .detail("id", id.to_string()),
-                );
-            }
-            runs.insert(
-                id,
-                Run {
-                    state: RunState::Preparing,
-                    kill: None,
-                },
-            );
-        }
-        inner.observer.on_state(InstanceStatePayload {
-            id,
-            state: RunState::Preparing,
-            exit_code: None,
-            crash_report: None,
-        });
+        let mut guard = inner.reserve(id, true)?;
         let res = inner.launch_inner(id, opts, sink).await;
-        if res.is_err() {
-            inner.set_state(id, RunState::Stopped, None, None, None);
+        if res.is_ok() {
+            // The process is running and owned by its monitor task.
+            guard.disarm();
         }
         res
     }
@@ -730,6 +808,29 @@ mod tests {
         fn on_log(&self, p: InstanceLogPayload) {
             self.0.lock().unwrap().push(p.lines);
         }
+    }
+
+    #[tokio::test]
+    async fn long_log_lines_are_truncated() {
+        let mut data = vec![b'a'; 200 * 1024];
+        data.extend_from_slice(b"\nshort\r\nlast");
+        let mut reader = BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        assert!(read_line_capped(&mut reader, &mut buf, MAX_LOG_LINE)
+            .await
+            .unwrap());
+        assert_eq!(buf.len(), MAX_LOG_LINE);
+        assert!(read_line_capped(&mut reader, &mut buf, MAX_LOG_LINE)
+            .await
+            .unwrap());
+        assert_eq!(buf, b"short\r\n");
+        assert!(read_line_capped(&mut reader, &mut buf, MAX_LOG_LINE)
+            .await
+            .unwrap());
+        assert_eq!(buf, b"last");
+        assert!(!read_line_capped(&mut reader, &mut buf, MAX_LOG_LINE)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

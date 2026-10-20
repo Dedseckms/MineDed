@@ -224,7 +224,7 @@ pub(crate) fn build_plan(i: PlanInputs<'_>) -> AppResult<LaunchPlan> {
     let mut seen = HashSet::new();
     for lib in &i.prepared.libs {
         if lib.usage == LibUse::Classpath {
-            let p = lib.local(i.libraries_dir);
+            let p = lib.local(i.libraries_dir)?;
             if seen.insert(p.clone()) {
                 classpath.push(p);
             }
@@ -423,7 +423,7 @@ mod tests {
     }
 
     fn prepared(profile: VersionJson, e: &Env) -> Prepared {
-        let libs = resolve_libraries(&profile.libraries, e);
+        let libs = resolve_libraries(&profile.libraries, e).unwrap();
         Prepared {
             client_jar: PathBuf::from("/root/versions")
                 .join(&profile.id)

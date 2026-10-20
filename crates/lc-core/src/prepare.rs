@@ -9,7 +9,7 @@ use lc_runtime::{Paths, ProgressSink};
 use lc_types::{AppError, AppResult, ErrorCode};
 
 use crate::meta::{resolve_libraries, AssetIndex, Env, LibFile, VersionJson, RESOURCES_URL};
-use crate::util::{io_err, join, parse_url, read_json, StageSink};
+use crate::util::{io_err, join, parse_url, read_json, safe_component, safe_join, StageSink};
 
 /// Where the game should look for assets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,9 +34,12 @@ pub(crate) fn client_jar_id(profile: &VersionJson) -> &str {
     profile.jar.as_deref().unwrap_or(&profile.id)
 }
 
-pub(crate) fn client_jar_path(paths: &Paths, profile: &VersionJson) -> PathBuf {
+pub(crate) fn client_jar_path(paths: &Paths, profile: &VersionJson) -> AppResult<PathBuf> {
     let id = client_jar_id(profile);
-    paths.versions().join(id).join(format!("{id}.jar"))
+    safe_component(
+        &safe_component(&paths.versions(), id)?,
+        &format!("{id}.jar"),
+    )
 }
 
 fn req(
@@ -61,7 +64,7 @@ pub(crate) fn library_requests(libs: &[LibFile], libraries: &Path) -> AppResult<
     let mut out = Vec::new();
     for lib in libs {
         let Some(url) = &lib.url else { continue };
-        let dest = lib.local(libraries);
+        let dest = lib.local(libraries)?;
         if seen.insert(dest.clone()) {
             out.push(req(
                 url,
@@ -84,11 +87,8 @@ pub(crate) fn asset_requests(index: &AssetIndex, assets: &Path) -> AppResult<Vec
         if !seen.insert(obj.hash.clone()) {
             continue;
         }
-        let rel = obj.rel_path();
-        let mut dest = objects.clone();
-        for part in rel.split('/') {
-            dest.push(part);
-        }
+        let rel = obj.rel_path()?;
+        let dest = safe_join(&objects, &rel)?;
         out.push(req(
             &format!("{RESOURCES_URL}{rel}"),
             Some(obj.hash.clone()),
@@ -144,9 +144,13 @@ pub(crate) async fn prepare(
     // Stage 1: asset index + logging config (the rest depends on the index).
     let mut meta = Vec::new();
     let index_ref = profile.asset_index.clone();
-    let index_path = index_ref
-        .as_ref()
-        .map(|i| assets_root.join("indexes").join(format!("{}.json", i.id)));
+    let index_path = match &index_ref {
+        Some(i) => Some(safe_component(
+            &assets_root.join("indexes"),
+            &format!("{}.json", i.id),
+        )?),
+        None => None,
+    };
     if let (Some(i), Some(p)) = (&index_ref, &index_path) {
         meta.push(req(
             &i.url,
@@ -159,7 +163,7 @@ pub(crate) async fn prepare(
     let log_cfg = profile.logging.as_ref().and_then(|l| l.client.clone());
     let mut log_arg = None;
     if let Some(c) = &log_cfg {
-        let dest = assets_root.join("log_configs").join(&c.file.id);
+        let dest = safe_component(&assets_root.join("log_configs"), &c.file.id)?;
         meta.push(req(
             &c.file.url,
             c.file.sha1.clone(),
@@ -172,7 +176,7 @@ pub(crate) async fn prepare(
     fetch_stage(dl, meta, verify, "stages.versionMeta", sink).await?;
 
     // Stage 2: client jar.
-    let client_jar = client_jar_path(paths, &profile);
+    let client_jar = client_jar_path(paths, &profile)?;
     let client = profile.downloads.as_ref().and_then(|d| d.get("client"));
     match client {
         Some(a) if !a.url.is_empty() => {
@@ -194,11 +198,11 @@ pub(crate) async fn prepare(
     }
 
     // Stage 3: libraries (classpath + natives jars).
-    let libs = resolve_libraries(&profile.libraries, env);
+    let libs = resolve_libraries(&profile.libraries, env)?;
     let lib_reqs = library_requests(&libs, &paths.libraries())?;
     fetch_stage(dl, lib_reqs, verify, "stages.libraries", sink).await?;
     for lib in libs.iter().filter(|l| l.url.is_none()) {
-        let p = lib.local(&paths.libraries());
+        let p = lib.local(&paths.libraries())?;
         if !tokio::fs::try_exists(&p).await.unwrap_or(false) {
             sink.log(&format!(
                 "missing library without download url: {}",
@@ -216,7 +220,7 @@ pub(crate) async fn prepare(
             let game_assets = if index.map_to_resources {
                 game_dir.join("resources")
             } else if index.is_virtual {
-                assets_root.join("virtual").join(&i.id)
+                safe_component(&assets_root.join("virtual"), &i.id)?
             } else {
                 assets_root.clone()
             };
@@ -247,23 +251,23 @@ pub(crate) async fn prepare(
 }
 
 /// Copies hashed objects to their named paths for `virtual`/`map_to_resources` indexes.
-async fn copy_legacy_assets(index: AssetIndex, objects: PathBuf, target: PathBuf) -> AppResult<()> {
+/// Every name is validated before anything is copied.
+pub(crate) async fn copy_legacy_assets(
+    index: AssetIndex,
+    objects: PathBuf,
+    target: PathBuf,
+) -> AppResult<()> {
+    let mut pairs = Vec::with_capacity(index.objects.len());
+    for (name, obj) in &index.objects {
+        let src = safe_join(&objects, &obj.rel_path()?)?;
+        let dst = safe_join(&target, name).map_err(|e| e.detail("asset", name.as_str()))?;
+        pairs.push((src, dst, obj.size));
+    }
     join(
         tokio::task::spawn_blocking(move || {
-            for (name, obj) in &index.objects {
-                let mut src = objects.clone();
-                for part in obj.rel_path().split('/') {
-                    src.push(part);
-                }
-                let mut dst = target.clone();
-                for part in name.split('/') {
-                    if part.is_empty() || part == ".." || part == "." {
-                        continue;
-                    }
-                    dst.push(part);
-                }
+            for (src, dst, size) in pairs {
                 if std::fs::metadata(&dst)
-                    .map(|m| m.len() == obj.size)
+                    .map(|m| m.len() == size)
                     .unwrap_or(false)
                 {
                     continue;
@@ -277,4 +281,68 @@ async fn copy_legacy_assets(index: AssetIndex, objects: PathBuf, target: PathBuf
         })
         .await,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lc_types::ErrorCode;
+
+    fn index(name: &str) -> AssetIndex {
+        let json = format!(
+            r#"{{"virtual":true,"objects":{{{}:{{"hash":"aa11223344556677889900aabbccddeeff001122","size":1}}}}}}"#,
+            serde_json::to_string(name).unwrap()
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[tokio::test]
+    async fn asset_name_with_backslash_stays_inside() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = dir.path().join("objects");
+        let src = objects
+            .join("aa")
+            .join("aa11223344556677889900aabbccddeeff001122");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"x").unwrap();
+        let target = dir.path().join("virtual").join("legacy");
+
+        for bad in [
+            r"..\..\evil.txt",
+            "../../evil.txt",
+            "C:/evil.txt",
+            "/evil.txt",
+            "a//b",
+        ] {
+            let err = copy_legacy_assets(index(bad), objects.clone(), target.clone())
+                .await
+                .unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidInput, "{bad}");
+        }
+        assert!(!dir.path().join("evil.txt").exists());
+        assert!(!target.exists());
+
+        copy_legacy_assets(index("sound/a.ogg"), objects, target.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(target.join("sound").join("a.ogg")).unwrap(),
+            b"x"
+        );
+    }
+
+    #[test]
+    fn unsafe_ids_rejected() {
+        let paths = Paths::new("/data");
+        let mut v = VersionJson {
+            id: "1.21.1".into(),
+            ..Default::default()
+        };
+        assert!(client_jar_path(&paths, &v).is_ok());
+        v.jar = Some("../../x".into());
+        assert_eq!(
+            client_jar_path(&paths, &v).unwrap_err().code,
+            ErrorCode::InvalidInput
+        );
+    }
 }

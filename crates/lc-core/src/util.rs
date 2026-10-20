@@ -28,6 +28,40 @@ pub(crate) fn sha1_hex(bytes: &[u8]) -> String {
     hex::encode(Sha1::digest(bytes))
 }
 
+fn unsafe_path(rel: &str) -> AppError {
+    AppError::new(ErrorCode::InvalidInput, "unsafe path in metadata").detail("path", rel)
+}
+
+/// Joins a `/`-separated relative path from untrusted metadata under `root`.
+/// Rejects empty, `.`/`..`, absolute and drive components, `\`, `:` and NUL,
+/// so the result always stays inside `root`.
+pub(crate) fn safe_join(root: &Path, rel: &str) -> AppResult<PathBuf> {
+    if rel.is_empty() {
+        return Err(unsafe_path(rel));
+    }
+    let mut p = root.to_path_buf();
+    for part in rel.split('/') {
+        let bad = part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.contains(['\\', ':', '\0'])
+            || Path::new(part).is_absolute();
+        if bad {
+            return Err(unsafe_path(rel));
+        }
+        p.push(part);
+    }
+    Ok(p)
+}
+
+/// One path component (version id, index id, file name) from metadata.
+pub(crate) fn safe_component(root: &Path, name: &str) -> AppResult<PathBuf> {
+    if name.contains('/') {
+        return Err(unsafe_path(name));
+    }
+    safe_join(root, name)
+}
+
 /// SHA-1 of a file, `None` when it does not exist.
 pub(crate) async fn file_sha1(path: &Path) -> AppResult<Option<String>> {
     let path = path.to_path_buf();
@@ -142,6 +176,33 @@ impl ProgressSink for StageSink<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_join_rejects_escapes() {
+        let root = Path::new("/data/libraries");
+        assert_eq!(
+            safe_join(root, "a/b/c.jar").unwrap(),
+            root.join("a").join("b").join("c.jar")
+        );
+        for bad in [
+            "",
+            "../x",
+            "a/../../x",
+            "a/./b",
+            "a//b",
+            "/etc/passwd",
+            "C:/x",
+            "a\\..\\..\\x",
+            "a/b:c",
+            "a/\0",
+        ] {
+            let e = safe_join(root, bad).unwrap_err();
+            assert_eq!(e.code, ErrorCode::InvalidInput, "{bad:?}");
+        }
+        assert!(safe_component(root, "1.21.1").is_ok());
+        assert!(safe_component(root, "a/b").is_err());
+        assert!(safe_component(root, "..").is_err());
+    }
 
     #[test]
     fn sha1_known_value() {

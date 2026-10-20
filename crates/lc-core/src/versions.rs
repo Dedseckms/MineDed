@@ -12,7 +12,9 @@ use lc_types::{AppError, AppResult, ErrorCode};
 use tokio::sync::Mutex;
 
 use crate::meta::{merge_inherited, ManifestVersion, VersionJson, VersionManifest, MANIFEST_URL};
-use crate::util::{file_sha1, json_err, parse_url, read_json, write_atomic, StageSink};
+use crate::util::{
+    file_sha1, json_err, parse_url, read_json, safe_component, write_atomic, StageSink,
+};
 
 const MANIFEST_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_INHERIT_DEPTH: usize = 8;
@@ -82,8 +84,12 @@ impl Versions {
         self.paths.cache().join("version_manifest_v2.json")
     }
 
-    pub fn json_path(&self, id: &str) -> PathBuf {
-        self.paths.versions().join(id).join(format!("{id}.json"))
+    /// `versions/<id>/<id>.json`; `InvalidInput` for ids that are not a single safe component.
+    pub fn json_path(&self, id: &str) -> AppResult<PathBuf> {
+        safe_component(
+            &safe_component(&self.paths.versions(), id)?,
+            &format!("{id}.json"),
+        )
     }
 
     /// Manifest from memory (fresh), network, or the disk cache when offline.
@@ -149,7 +155,10 @@ impl Versions {
         };
         while let Ok(Some(entry)) = rd.next_entry().await {
             let id = entry.file_name().to_string_lossy().into_owned();
-            if let Ok(v) = read_json::<VersionJson>(&self.json_path(&id)).await {
+            let Ok(path) = self.json_path(&id) else {
+                continue;
+            };
+            if let Ok(v) = read_json::<VersionJson>(&path).await {
                 if v.inherits_from.is_none() {
                     let major = v
                         .java_version
@@ -169,7 +178,7 @@ impl Versions {
         id: &str,
         sink: &dyn ProgressSink,
     ) -> AppResult<VersionJson> {
-        let path = self.json_path(id);
+        let path = self.json_path(id)?;
         let entry = self.manifest_entry(id).await;
         match entry {
             Some(entry) => {
@@ -231,7 +240,7 @@ impl Versions {
                 )
                 .detail("version", cur));
             }
-            let path = self.json_path(&cur);
+            let path = self.json_path(&cur)?;
             let json = match read_json::<VersionJson>(&path).await {
                 Ok(v) if v.inherits_from.is_some() => v,
                 // Vanilla jsons are always re-verified against the manifest.

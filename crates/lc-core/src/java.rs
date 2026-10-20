@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::util::StageSink;
-use crate::util::{io_err, json_err, parse_url, read_json, sha1_hex, write_atomic, write_json};
+use crate::util::{
+    io_err, json_err, parse_url, read_json, safe_join, sha1_hex, write_atomic, write_json,
+};
 
 pub(crate) const RUNTIME_MANIFEST_URL: &str = "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
 const MARKER: &str = "mineup-runtime.json";
@@ -314,6 +316,7 @@ impl JavaService {
     }
 
     async fn managed_component(&self, component: &str) -> Option<JavaRuntime> {
+        valid_component(component).ok()?;
         let dir = self.paths.java().join(component);
         let m: Marker = read_json(&dir.join(MARKER)).await.ok()?;
         let rt = self.runtime_from_marker(&dir, m);
@@ -428,6 +431,7 @@ impl JavaService {
                 .detail("platform", platform)
                 .detail("major", major.to_string())
             })?;
+        valid_component(&component)?;
         sink.check_cancelled()?;
 
         let murl = parse_url(&build.manifest.url)?;
@@ -525,21 +529,51 @@ pub(crate) struct InstallPlan {
     pub links: Vec<(PathBuf, String)>,
 }
 
-fn safe_join(root: &Path, rel: &str) -> AppResult<PathBuf> {
-    let mut p = root.to_path_buf();
-    for part in rel.split('/') {
-        if part.is_empty() || part == "." {
-            continue;
-        }
-        if part == ".." || part.contains(':') || part.contains('\\') {
-            return Err(
-                AppError::new(ErrorCode::InvalidInput, "unsafe path in runtime manifest")
-                    .detail("path", rel),
-            );
-        }
-        p.push(part);
+/// Component names come from `all.json`, which has no hash: only `[a-z0-9-]+`.
+pub(crate) fn valid_component(name: &str) -> AppResult<()> {
+    let ok = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            ErrorCode::InvalidInput,
+            "invalid java runtime component name",
+        )
+        .detail("component", name))
     }
-    Ok(p)
+}
+
+/// A symlink target must be relative and resolve inside the runtime root.
+/// `link_rel` is the link's own path relative to the root.
+pub(crate) fn check_link_target(link_rel: &str, target: &str) -> AppResult<()> {
+    let bad = || {
+        AppError::new(
+            ErrorCode::InvalidInput,
+            "unsafe symlink in runtime manifest",
+        )
+        .detail("link", link_rel)
+        .detail("target", target)
+    };
+    if target.is_empty()
+        || target.starts_with('/')
+        || target.contains(['\\', ':', '\0'])
+        || Path::new(target).is_absolute()
+    {
+        return Err(bad());
+    }
+    // Depth of the directory containing the link.
+    let mut depth = link_rel.split('/').count().saturating_sub(1);
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => depth = depth.checked_sub(1).ok_or_else(bad)?,
+            _ => depth += 1,
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn install_plan(m: &ComponentManifest, root: &Path) -> AppResult<InstallPlan> {
@@ -563,7 +597,10 @@ pub(crate) fn install_plan(m: &ComponentManifest, root: &Path) -> AppResult<Inst
                     kind: ResourceKind::JavaRuntime,
                 });
             }
-            ComponentFile::Link { target } => plan.links.push((dest, target.clone())),
+            ComponentFile::Link { target } => {
+                check_link_target(rel, target)?;
+                plan.links.push((dest, target.clone()));
+            }
         }
     }
     Ok(plan)
@@ -714,6 +751,62 @@ mod tests {
         assert_eq!(c, "jre-legacy");
         assert!(pick_component(&all, "linux", 11, None).is_none());
         assert!(pick_component(&all, "plan9", 8, None).is_none());
+    }
+
+    #[test]
+    fn runtime_component_name_rejected() {
+        assert!(valid_component("java-runtime-delta").is_ok());
+        assert!(valid_component("jre-legacy").is_ok());
+        for bad in [
+            "",
+            "../x",
+            "a/b",
+            "Jre",
+            "a\\b",
+            "c:",
+            "jre legacy",
+            "jre.legacy",
+        ] {
+            assert_eq!(
+                valid_component(bad).unwrap_err().code,
+                ErrorCode::InvalidInput,
+                "{bad:?}"
+            );
+        }
+        // A tampered all.json can only offer an unsafe name via the fallback scan;
+        // the picked name is validated before anything touches the disk.
+        let all: RuntimeAll = serde_json::from_str(
+            r#"{"linux":{"../../evil":[{"manifest":{"url":"https://e/m.json"},"version":{"name":"11.0.1"}}]}}"#,
+        )
+        .unwrap();
+        let (name, _) = pick_component(&all, "linux", 11, Some("../../evil")).unwrap();
+        assert!(valid_component(&name).is_err());
+    }
+
+    #[test]
+    fn symlink_targets_checked() {
+        assert!(check_link_target("lib/libjli.so", "../bin/jli").is_ok());
+        assert!(check_link_target("a/b/c", "../../x").is_ok());
+        assert!(check_link_target("a/b/c", "./d/../e").is_ok());
+        for (link, target) in [
+            ("lib/x", "../../etc/passwd"),
+            ("x", "../y"),
+            ("lib/x", "/etc/passwd"),
+            ("lib/x", "C:/Windows"),
+            ("lib/x", "..\\..\\y"),
+            ("lib/x", ""),
+        ] {
+            assert_eq!(
+                check_link_target(link, target).unwrap_err().code,
+                ErrorCode::InvalidInput,
+                "{link} -> {target}"
+            );
+        }
+        let m: ComponentManifest = serde_json::from_str(
+            r#"{"files":{"lib/l":{"type":"link","target":"../../../outside"}}}"#,
+        )
+        .unwrap();
+        assert!(install_plan(&m, Path::new("/rt")).is_err());
     }
 
     #[test]

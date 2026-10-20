@@ -495,3 +495,123 @@ async fn launch_without_java_reports_and_resets_state() {
         ErrorCode::NotFound
     );
 }
+
+/// Auth that parks the launch until released, so the instance stays `Preparing`.
+#[derive(Default)]
+struct GateAuth {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl AuthProvider for GateAuth {
+    async fn launch_auth(&self, account: Option<AccountId>) -> AppResult<LaunchAuth> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Auth.launch_auth(account).await
+    }
+}
+
+#[tokio::test]
+async fn repair_while_launching_conflicts() {
+    let w = world();
+    let obs = Arc::new(Obs::default());
+    let gate = Arc::new(GateAuth::default());
+    let core = CoreServices::new(
+        Paths::new(&w.root),
+        w.dl.clone(),
+        gate.clone(),
+        Arc::new(LoaderRegistry::default()),
+        obs.clone(),
+        Vec::new(),
+    );
+    let inst = core
+        .create(spec("busy", "1.21.1"), &RecSink::default())
+        .await
+        .unwrap();
+    // An existing file that is not a JVM: spawn fails after the gate.
+    let fake_java = w
+        .root
+        .join("instances")
+        .join(inst.id.to_string())
+        .join("instance.json");
+    core.update(
+        inst.id,
+        InstancePatch {
+            java: Some(JavaCfg {
+                path: Some(fake_java.to_string_lossy().into_owned()),
+                major: None,
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // 1) Launch parked in auth: repair, delete and a second launch conflict.
+    let launching = {
+        let core = core.clone();
+        tokio::spawn(async move {
+            core.launch(inst.id, LaunchOpts::default(), &RecSink::default())
+                .await
+        })
+    };
+    gate.entered.notified().await;
+    assert_eq!(core.state(inst.id), RunState::Preparing);
+    let sink = RecSink::default();
+    assert_eq!(
+        core.repair(inst.id, &sink).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        core.delete(inst.id).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        core.launch(inst.id, LaunchOpts::default(), &sink)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    gate.release.notify_one();
+    let err = launching.await.unwrap().unwrap_err();
+    assert_eq!(err.code, ErrorCode::JavaMissing);
+    assert_eq!(core.state(inst.id), RunState::Stopped);
+
+    // 2) A dropped (aborted) launch future releases its reservation.
+    let launching = {
+        let core = core.clone();
+        tokio::spawn(async move {
+            core.launch(inst.id, LaunchOpts::default(), &RecSink::default())
+                .await
+        })
+    };
+    gate.entered.notified().await;
+    assert_eq!(core.state(inst.id), RunState::Preparing);
+    launching.abort();
+    let _ = launching.await;
+    assert_eq!(core.state(inst.id), RunState::Stopped);
+    assert_eq!(
+        obs.states.lock().unwrap().last().copied(),
+        Some(RunState::Stopped)
+    );
+
+    // 3) Repair holds the slot too and frees it afterwards.
+    core.repair(inst.id, &RecSink::default()).await.unwrap();
+    assert_eq!(core.state(inst.id), RunState::Stopped);
+}
+
+#[tokio::test]
+async fn unsafe_version_id_rejected() {
+    let w = world();
+    let core = services(&w, Arc::default());
+    for bad in ["../../evil", "a/b", "..", "C:x"] {
+        let err = core
+            .create(spec("x", bad), &RecSink::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidInput, "{bad}");
+    }
+    assert!(!w.root.join("evil").exists());
+}

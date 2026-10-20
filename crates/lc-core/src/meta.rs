@@ -1,10 +1,15 @@
 //! Mojang metadata formats: version manifest, version json, asset index,
 //! plus rule evaluation and library resolution.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
+use lc_types::{AppError, AppResult, ErrorCode};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use crate::util::safe_join;
 
 pub(crate) const MANIFEST_URL: &str =
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -235,9 +240,15 @@ pub(crate) struct AssetObject {
 
 impl AssetObject {
     /// `xx/hash`, relative to `assets/objects` and to the resources host.
-    pub fn rel_path(&self) -> String {
-        let prefix = self.hash.get(..2).unwrap_or("00");
-        format!("{prefix}/{}", self.hash)
+    /// The hash must be 40 hex chars, so the path can never escape.
+    pub fn rel_path(&self) -> AppResult<String> {
+        let h = &self.hash;
+        if h.len() != 40 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(
+                AppError::new(ErrorCode::InvalidInput, "bad asset hash").detail("hash", h.as_str())
+            );
+        }
+        Ok(format!("{}/{h}", &h[..2]))
     }
 }
 
@@ -323,10 +334,7 @@ impl Rule {
                 }
             }
             if let Some(ver) = &os.version {
-                let ok = regex::Regex::new(ver)
-                    .map(|re| re.is_match(&env.os_version))
-                    .unwrap_or(false);
-                if !ok {
+                if !version_matches(ver, &env.os_version) {
                     return false;
                 }
             }
@@ -338,6 +346,21 @@ impl Rule {
         }
         true
     }
+}
+
+/// Full match like Java's `Matcher::matches()`; compiled patterns are cached
+/// (invalid ones cache as "never matches").
+fn version_matches(pattern: &str, value: &str) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<Regex>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut map) = cache.lock() else {
+        return false;
+    };
+    map.entry(pattern.to_owned())
+        .or_insert_with(|| Regex::new(&format!("^(?:{pattern})$")).ok())
+        .as_ref()
+        .map(|re| re.is_match(value))
+        .unwrap_or(false)
 }
 
 /// Mojang semantics: no rules = allowed; otherwise the last matching rule wins
@@ -381,12 +404,9 @@ pub(crate) struct LibFile {
 }
 
 impl LibFile {
-    pub fn local(&self, libraries: &std::path::Path) -> PathBuf {
-        let mut p = libraries.to_path_buf();
-        for part in self.path.split('/') {
-            p.push(part);
-        }
-        p
+    /// Absolute path under `libraries`; `InvalidInput` for paths escaping it.
+    pub fn local(&self, libraries: &std::path::Path) -> AppResult<PathBuf> {
+        safe_join(libraries, &self.path)
     }
 }
 
@@ -534,7 +554,8 @@ pub(crate) fn resolve_library(lib: &Library, env: &Env) -> Vec<LibFile> {
 }
 
 /// All library files for `env`, first occurrence of a `group:artifact:classifier` wins.
-pub(crate) fn resolve_libraries(libs: &[Library], env: &Env) -> Vec<LibFile> {
+/// Fails with `InvalidInput` when a library path would escape `libraries/`.
+pub(crate) fn resolve_libraries(libs: &[Library], env: &Env) -> AppResult<Vec<LibFile>> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for lib in libs {
@@ -547,9 +568,13 @@ pub(crate) fn resolve_libraries(libs: &[Library], env: &Env) -> Vec<LibFile> {
         if !seen.insert(key) {
             continue;
         }
+        for f in &files {
+            safe_join(std::path::Path::new("libraries"), &f.path)
+                .map_err(|e| e.detail("library", lib.name.as_str()))?;
+        }
         out.extend(files);
     }
-    out
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -637,11 +662,22 @@ mod tests {
         assert!(rules_allow(&only_x86, &env("windows", "x86")));
         assert!(!rules_allow(&only_x86, &env("windows", "x86_64")));
 
-        let win10: Vec<Rule> = serde_json::from_str(
+        // Full match, like Java `matches()`: a prefix pattern alone does not match.
+        let win10_prefix: Vec<Rule> = serde_json::from_str(
             r#"[{"action":"allow","os":{"name":"windows","version":"^10\\."}}]"#,
         )
         .unwrap();
-        assert!(rules_allow(&win10, &env("windows", "x86_64")));
+        assert!(!rules_allow(&win10_prefix, &env("windows", "x86_64")));
+        let win10_full: Vec<Rule> = serde_json::from_str(
+            r#"[{"action":"allow","os":{"name":"windows","version":"^10\\..*$"}}]"#,
+        )
+        .unwrap();
+        assert!(rules_allow(&win10_full, &env("windows", "x86_64")));
+        // Cached path gives the same answer; invalid regex never matches.
+        assert!(rules_allow(&win10_full, &env("windows", "x86_64")));
+        let invalid: Vec<Rule> =
+            serde_json::from_str(r#"[{"action":"allow","os":{"version":"("}}]"#).unwrap();
+        assert!(!rules_allow(&invalid, &env("windows", "x86_64")));
 
         let feature: Vec<Rule> =
             serde_json::from_str(r#"[{"action":"allow","features":{"is_demo_user":true}}]"#)
@@ -651,9 +687,43 @@ mod tests {
     }
 
     #[test]
+    fn library_path_traversal_rejected() {
+        let e = env("windows", "x86_64");
+        let bad = [
+            r#"{"name":"a:..:..","url":"https://maven.example/"}"#,
+            r#"{"name":"evil:x:1","downloads":{"artifact":{"path":"../../x.jar","url":"https://e/x"}}}"#,
+            r#"{"name":"evil:x:1","downloads":{"artifact":{"path":"a\\..\\..\\x.jar","url":"https://e/x"}}}"#,
+            r#"{"name":"evil:x:1","downloads":{"artifact":{"path":"C:/Windows/x.dll","url":"https://e/x"}}}"#,
+            r#"{"name":"evil:x:1","downloads":{"artifact":{"path":"/etc/x","url":"https://e/x"}}}"#,
+            r#"{"name":"evil:x:1","natives":{"windows":"natives-../../w"},"url":"https://e/"}"#,
+        ];
+        for json in bad {
+            let lib: Library = serde_json::from_str(json).unwrap();
+            let err = resolve_libraries(&[lib], &e).unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidInput, "{json}");
+        }
+        let lf = LibFile {
+            path: "../x.jar".into(),
+            url: None,
+            sha1: None,
+            size: None,
+            usage: LibUse::Classpath,
+        };
+        assert_eq!(
+            lf.local(std::path::Path::new("/libs")).unwrap_err().code,
+            ErrorCode::InvalidInput
+        );
+        let bad_hash = AssetObject {
+            hash: "../../../../etc/passwd/aaaaaaaaaaaaaaaaaaaa".into(),
+            size: 1,
+        };
+        assert!(bad_hash.rel_path().is_err());
+    }
+
+    #[test]
     fn legacy_natives_1_12_2() {
         let v = fixture("1.12.2.json");
-        let files = resolve_libraries(&v.libraries, &env("windows", "x86_64"));
+        let files = resolve_libraries(&v.libraries, &env("windows", "x86_64")).unwrap();
         let natives: Vec<_> = files
             .iter()
             .filter(|f| matches!(f.usage, LibUse::Native { .. }))
@@ -683,7 +753,7 @@ mod tests {
         // java-objc-bridge is osx-only.
         assert!(!files.iter().any(|f| f.path.contains("java-objc-bridge")));
 
-        let linux = resolve_libraries(&v.libraries, &env("linux", "x86_64"));
+        let linux = resolve_libraries(&v.libraries, &env("linux", "x86_64")).unwrap();
         assert!(linux
             .iter()
             .any(|f| f.path.ends_with("text2speech-1.10.3-natives-linux.jar")));
@@ -692,14 +762,14 @@ mod tests {
     #[test]
     fn modern_natives_1_21_1() {
         let v = fixture("1.21.1.json");
-        let win = resolve_libraries(&v.libraries, &env("windows", "x86_64"));
+        let win = resolve_libraries(&v.libraries, &env("windows", "x86_64")).unwrap();
         assert!(win.iter().all(|f| f.usage == LibUse::Classpath));
         assert!(win
             .iter()
             .any(|f| f.path.ends_with("lwjgl-3.3.3-natives-windows.jar")));
         assert!(!win.iter().any(|f| f.path.contains("natives-linux")));
         assert!(!win.iter().any(|f| f.path.contains("natives-macos")));
-        let linux = resolve_libraries(&v.libraries, &env("linux", "x86_64"));
+        let linux = resolve_libraries(&v.libraries, &env("linux", "x86_64")).unwrap();
         assert!(linux
             .iter()
             .any(|f| f.path.ends_with("lwjgl-3.3.3-natives-linux.jar")));
@@ -734,7 +804,7 @@ mod tests {
         assert_eq!(merged.jar.as_deref(), Some("1.21.1"));
         assert_eq!(merged.java_version.unwrap().major_version, 21);
         assert!(merged.main_class.unwrap().contains("Knot"));
-        let files = resolve_libraries(&merged.libraries, &env("windows", "x86_64"));
+        let files = resolve_libraries(&merged.libraries, &env("windows", "x86_64")).unwrap();
         let asm: Vec<_> = files
             .iter()
             .filter(|f| f.path.starts_with("org/ow2/asm/asm/"))
