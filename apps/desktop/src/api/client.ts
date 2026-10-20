@@ -13,7 +13,10 @@ const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 export const isMock: boolean = import.meta.env.VITE_USE_MOCKS === "1" || !inTauri;
 
-export const api: Commands = isMock ? createMockCommands() : commands;
+// A little latency in the browser makes loading states visible; none in tests.
+const mockLatency = import.meta.env.MODE === "test" ? 0 : 120;
+
+export const api: Commands = isMock ? createMockCommands({}, { latencyMs: mockLatency }) : commands;
 
 export class ApiError extends Error {
   constructor(public readonly error: AppError) {

@@ -4,11 +4,257 @@
     "version": "Version {{version}}",
     "mock": "mock backend"
   },
+  "nav": {
+    "label": "Sections",
+    "play": "Play",
+    "instances": "Instances",
+    "accounts": "Accounts",
+    "settings": "Settings"
+  },
+  "header": {
+    "accountHint": "Go to accounts",
+    "noAccount": "No account"
+  },
+  "common": {
+    "loading": "Loading…",
+    "cancel": "Cancel",
+    "save": "Save",
+    "reset": "Reset",
+    "delete": "Delete",
+    "copy": "Copy",
+    "copied": "Copied",
+    "soon": "Soon",
+    "optional": "Optional"
+  },
+  "play": {
+    "play": "Play",
+    "stop": "Stop",
+    "instance": "Instance",
+    "account": "Account",
+    "noAccounts": "Add an account in the Accounts section first",
+    "noInstances": "No instances yet",
+    "state": "State",
+    "exitCode": "Exit code: {{code}}",
+    "crashReport": "Crash report: {{path}}",
+    "log": "Game log",
+    "clearLog": "Clear",
+    "logEmpty": "The game log will appear here after launch."
+  },
+  "runState": {
+    "stopped": "Stopped",
+    "preparing": "Preparing",
+    "running": "Running",
+    "crashed": "Crashed"
+  },
   "instances": {
     "count_one": "{{count}} instance",
-    "count_other": "{{count}} instances"
+    "count_other": "{{count}} instances",
+    "create": "Create instance",
+    "createTitle": "New instance",
+    "name": "Name",
+    "namePlaceholder": "My instance",
+    "version": "Version type",
+    "versionKind": "Minecraft version type",
+    "mcVersion": "Minecraft version",
+    "loader": "Mod loader",
+    "settingsTitle": "Settings: {{name}}",
+    "javaPath": "Java path",
+    "javaPathHint": "Leave empty to let the launcher pick Java",
+    "javaPathPlaceholder": "Automatic",
+    "jvmArgs": "JVM arguments",
+    "jvmArgsHint": "Space-separated; quote values with spaces",
+    "cloneDefaultName": "{{name}} (copy)",
+    "cloneTitle": "Clone “{{name}}”",
+    "clone": "Clone",
+    "settings": "Settings",
+    "folder": "Folder",
+    "lastPlayed": "Played: {{date}}",
+    "neverPlayed": "Never played",
+    "playtime_one": "{{count}} hour played",
+    "playtime_other": "{{count}} hours played",
+    "empty": "No instances yet",
+    "deleteTitle": "Delete instance?",
+    "deleteMessage": "Instance “{{name}}” and all its files (worlds, mods, settings) will be permanently deleted."
+  },
+  "versionKind": {
+    "release": "Releases",
+    "snapshot": "Snapshots"
+  },
+  "loader": {
+    "vanilla": "Vanilla",
+    "fabric": "Fabric",
+    "quilt": "Quilt",
+    "forge": "Forge",
+    "neoForge": "NeoForge"
+  },
+  "memory": {
+    "auto": "Automatic",
+    "autoHint": "Maximum is calculated from system RAM and mod count on every launch",
+    "min": "Minimum",
+    "max": "Maximum",
+    "recommended": "Recommended {{min}}–{{max}}: {{reason}}",
+    "reasonGeneric": "based on your system",
+    "systemTotal": "Total RAM: {{total}}",
+    "systemHint": "Total RAM: {{total}}, {{free}} free. Suggested maximum is about {{suggested}}."
+  },
+  "ram": {
+    "reason": {
+      "vanilla": "enough for vanilla gameplay"
+    }
+  },
+  "accounts": {
+    "list": "Your accounts",
+    "empty": "No accounts yet",
+    "kind": {
+      "offline": "Offline",
+      "yggdrasil": "MineUP server"
+    },
+    "invalid": "Sign-in required",
+    "default": "Default",
+    "makeDefault": "Make default",
+    "offlineTitle": "Offline account",
+    "nick": "Nickname",
+    "nickHint": "3–16 characters: Latin letters, digits and _",
+    "add": "Add",
+    "removeTitle": "Remove account?",
+    "removeMessage": "Account “{{name}}” will be removed from the launcher.",
+    "yggdrasil": {
+      "title": "Sign in with MineUP server",
+      "soon": "Signing in with the MineUP server is coming soon.",
+      "username": "Login or e-mail",
+      "password": "Password",
+      "server": "Server: {{name}}",
+      "login": "Sign in"
+    }
+  },
+  "settings": {
+    "appearance": "Appearance",
+    "theme": "Theme",
+    "themeDark": "Dark",
+    "themeLight": "Light",
+    "themeSystem": "System",
+    "language": "Language",
+    "langRu": "Русский",
+    "langEn": "English",
+    "lightMode": "Light mode",
+    "lightModeHint": "No blur and animations — for low-end computers",
+    "reduceMotion": "Reduce motion",
+    "reduceMotionHint": "Turns off interface transitions and movement",
+    "game": "Game",
+    "gameDir": "Game folder",
+    "gameDirHint": "Instances, libraries and assets are stored here",
+    "defaultPlaceholder": "Default",
+    "javaPath": "Java path",
+    "javaPathHint": "Global setting; an instance may override it",
+    "javaAutoPlaceholder": "Automatic",
+    "memory": "Default memory",
+    "fixErrors": "Fix the highlighted fields",
+    "proxy": {
+      "title": "Proxy",
+      "hint": "Manual proxy for launcher downloads (independent of the built-in VPN)",
+      "mode": "Proxy mode",
+      "off": "Off",
+      "http": "HTTP",
+      "socks5": "SOCKS5",
+      "host": "Host",
+      "port": "Port",
+      "username": "Username",
+      "password": "Password"
+    }
+  },
+  "tasks": {
+    "center": "Tasks",
+    "clearFinished": "Clear finished",
+    "empty": "No active tasks",
+    "cancel": "Cancel",
+    "speed": "{{value}} {{unit}}",
+    "generic": "Task",
+    "javaInstall": "Installing Java",
+    "instanceCreate": "Creating instance",
+    "instanceClone": "Cloning instance",
+    "instanceRepair": "Repairing instance",
+    "instanceImport": "Importing instance",
+    "instanceExport": "Exporting instance",
+    "launch": "Launching game",
+    "contentInstall": "Installing content",
+    "contentUpdate": "Updating content",
+    "presetApply": "Applying preset",
+    "accountLogin": "Signing in",
+    "vpnUpdate": "Updating VPN",
+    "appUpdate": "Updating launcher"
+  },
+  "taskStatus": {
+    "running": "Running",
+    "succeeded": "Done",
+    "failed": "Failed",
+    "cancelled": "Cancelled"
+  },
+  "stages": {
+    "working": "Working…",
+    "manifest": "Fetching version list",
+    "client": "Downloading client",
+    "libraries": "Downloading libraries",
+    "assets": "Downloading assets",
+    "natives": "Extracting natives",
+    "java": "Preparing Java",
+    "copying": "Copying files",
+    "verifying": "Verifying files",
+    "launching": "Starting JVM"
+  },
+  "units": {
+    "bps": "B/s",
+    "kbps": "KB/s",
+    "mbps": "MB/s",
+    "gbps": "GB/s",
+    "mb": "{{value}} MB",
+    "gb": "{{value}} GB"
+  },
+  "validation": {
+    "required": "Required",
+    "nick": {
+      "chars": "Only Latin letters, digits and _",
+      "length": "3 to 16 characters"
+    },
+    "name": {
+      "length": "64 characters at most",
+      "chars": "These characters are not allowed: < > : \" / \\ | ? *"
+    },
+    "path": {
+      "chars": "The path contains invalid characters",
+      "absolute": "Enter a full path (e.g. C:\\Games or /home/user/games)"
+    },
+    "memory": {
+      "minTooLow": "Minimum is 512 MB",
+      "maxBelowMin": "Maximum can't be lower than minimum",
+      "exceedsRam": "More than installed RAM"
+    },
+    "args": {
+      "quote": "Unclosed quote"
+    },
+    "proxy": {
+      "scheme": "Enter the host only, without http:// or socks5://",
+      "host": "Invalid host or IP address",
+      "port": "Port must be a number from 1 to 65535",
+      "credLength": "255 characters at most",
+      "usernameRequired": "Enter a username when a password is set"
+    }
   },
   "errors": {
-    "notImplemented": "Not implemented yet"
+    "network": "Network error. Check your internet connection.",
+    "blocked": "The server is unreachable — it may be blocked. Try enabling VPN or a proxy.",
+    "hashMismatch": "A file was corrupted during download. Please try again.",
+    "notFound": "Not found.",
+    "authExpired": "Your session has expired — please sign in again.",
+    "authRequired": "Select or add an account first.",
+    "javaMissing": "No suitable Java found.",
+    "loaderInstall": "Failed to install the mod loader.",
+    "manualDownloadRequired": "This file must be downloaded manually.",
+    "cancelled": "Cancelled.",
+    "io": "File read or write error.",
+    "invalidInput": "Invalid data.",
+    "conflict": "Conflict: this action is not possible right now.",
+    "permissionDenied": "Permission denied.",
+    "notImplemented": "Not available yet.",
+    "internal": "Internal error. See the logs for details."
   }
 }
