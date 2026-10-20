@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
+use lc_types::settings::ProxyCfg;
 use lc_types::AppResult;
 use url::Url;
 
@@ -46,7 +47,8 @@ pub struct DownloadReq {
 #[async_trait]
 pub trait Downloader: Send + Sync {
     /// Downloads all requests with bounded concurrency, skipping files that
-    /// already exist with the right hash. Atomic: write to `*.part`, then rename.
+    /// already exist with the right hash. Atomic: write to `*.part`, then rename;
+    /// an existing `*.part` is resumed with an HTTP Range request.
     /// Reports aggregated progress (bytes) to `sink` and honours cancellation.
     async fn fetch_many(&self, reqs: Vec<DownloadReq>, sink: &dyn ProgressSink) -> AppResult<()>;
 
@@ -58,4 +60,8 @@ pub trait Downloader: Send + Sync {
 
     /// Official URL → ordered candidate list (mirrors + original).
     fn mirrors_for(&self, original: &Url, kind: ResourceKind) -> Vec<Url>;
+
+    /// Applies the manual proxy from settings (`None` = direct). Takes effect
+    /// for requests started after the call; `Route::Proxied` still means VPN.
+    fn set_manual_proxy(&self, proxy: Option<ProxyCfg>);
 }

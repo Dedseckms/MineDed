@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
+use lc_types::settings::ProxyCfg;
 use lc_types::{AppError, AppResult};
 use url::Url;
 
@@ -26,6 +27,8 @@ impl Downloader for StubDownloader {
     fn mirrors_for(&self, original: &Url, _kind: ResourceKind) -> Vec<Url> {
         vec![original.clone()]
     }
+
+    fn set_manual_proxy(&self, _proxy: Option<ProxyCfg>) {}
 }
 
 #[cfg(test)]

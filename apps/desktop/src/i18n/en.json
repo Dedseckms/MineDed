@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "Launcher",
+    "title": "MineUP",
     "version": "Version {{version}}",
     "mock": "mock backend"
   },

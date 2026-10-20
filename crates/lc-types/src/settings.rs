@@ -20,6 +20,24 @@ pub enum Theme {
     Custom(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyKind {
+    Http,
+    Socks5,
+}
+
+/// Manual proxy for launcher HTTP traffic (independent of the built-in VPN).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyCfg {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
 /// Global launcher settings (`settings_get` / `settings_set`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +56,8 @@ pub struct Settings {
     pub max_parallel_downloads: u32,
     /// Prefer mirrors (BMCLAPI, own mirror) over official hosts.
     pub prefer_mirrors: bool,
+    /// Manual proxy; `None` = direct (or built-in VPN when enabled).
+    pub proxy: Option<ProxyCfg>,
     pub close_on_launch: bool,
     pub auto_update: bool,
     /// Hub API root, e.g. `https://mc.example.ru/api/v1`.
@@ -61,6 +81,7 @@ impl Default for Settings {
             default_jvm_args: Vec::new(),
             max_parallel_downloads: 16,
             prefer_mirrors: false,
+            proxy: None,
             close_on_launch: false,
             auto_update: true,
             hub_url: String::new(),

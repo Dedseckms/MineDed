@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "Лаунчер",
+    "title": "MineUP",
     "version": "Версия {{version}}",
     "mock": "моковый бэкенд"
   },

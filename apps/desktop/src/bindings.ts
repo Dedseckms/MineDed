@@ -441,6 +441,17 @@ export type ProjectSummary = {
 	categories: string[],
 };
 
+/**  Manual proxy for launcher HTTP traffic (independent of the built-in VPN). */
+export type ProxyCfg = {
+	kind: ProxyKind,
+	host: string,
+	port: number,
+	username: string | null,
+	password: string | null,
+};
+
+export type ProxyKind = "http" | "socks5";
+
 /**  Result of dependency resolution; confirmed by the user, then installed. */
 export type ResolvePlan = {
 	install: ContentVersion[],
@@ -515,6 +526,8 @@ export type Settings = {
 	maxParallelDownloads: number,
 	/**  Prefer mirrors (BMCLAPI, own mirror) over official hosts. */
 	preferMirrors: boolean,
+	/**  Manual proxy; `None` = direct (or built-in VPN when enabled). */
+	proxy: ProxyCfg | null,
 	closeOnLaunch: boolean,
 	autoUpdate: boolean,
 	/**  Hub API root, e.g. `https://mc.example.ru/api/v1`. */
