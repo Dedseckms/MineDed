@@ -3,8 +3,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use lc_runtime::ProgressSink;
-use lc_types::account::{Account, DeviceCode, YggdrasilServer};
+use lc_types::account::{Account, YggdrasilServer};
 use lc_types::skin::{Cape, Skin, SkinModel};
 use lc_types::{AccountId, AppResult, SkinId};
 use url::Url;
@@ -29,11 +28,12 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// `--userType` game argument.
+/// `--userType` game argument. Microsoft accounts are out of scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserType {
-    Msa,
+    /// Offline accounts.
     Legacy,
+    /// Yggdrasil (authlib-injector) accounts.
     Mojang,
 }
 
@@ -54,8 +54,6 @@ pub struct LaunchAuth {
     pub uuid: String,
     pub access_token: Secret,
     pub user_type: UserType,
-    pub xuid: Option<String>,
-    pub client_id: Option<String>,
     pub authlib: Option<AuthlibInjector>,
 }
 
@@ -69,11 +67,6 @@ pub trait AuthProvider: Send + Sync {
 #[async_trait]
 pub trait AccountService: Send + Sync {
     async fn list(&self) -> AppResult<Vec<Account>>;
-    /// Starts Microsoft device-code flow.
-    async fn msa_begin(&self) -> AppResult<DeviceCode>;
-    /// Polls until the user finishes (or the code expires): MSA → XBL → XSTS →
-    /// Minecraft token → entitlement → profile. Long-running.
-    async fn msa_complete(&self, flow_id: &str, sink: &dyn ProgressSink) -> AppResult<Account>;
     async fn offline_add(&self, name: &str) -> AppResult<Account>;
     async fn yggdrasil_login(
         &self,

@@ -1,6 +1,6 @@
 [package]
 name = "lc-accounts"
-description = "Microsoft device flow, offline, Yggdrasil/authlib-injector, keyring, skins. Owner: accounts."
+description = "Offline and Yggdrasil/authlib-injector accounts, keyring, skins. Owner: accounts."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -56,7 +56,7 @@ type TaskEvent =
 | `system.rs` (core) | `system_info`, `ram_recommend(id)` |
 | `loaders.rs` (mods) | `loader_versions(loader, mc)` |
 | `content.rs` (mods) | `content_search(query)`, `content_versions(source, projectId, filter)`, `content_resolve(instance, picks)`, 🕒`content_install(instance, plan)`, `content_list(instance)`, `content_set_enabled(instance, fileName, enabled)`, `content_remove(instance, fileName)`, 🕒`content_update_all(instance)`, 🕒`preset_apply(instance, preset)`, 🕒`instance_import(path)`, 🕒`instance_export(id, format, path)` |
-| `accounts.rs` (accounts) | `account_list`, `account_msa_begin` → `DeviceCode`, 🕒`account_msa_complete(flowId)`, `account_offline_add(name)`, `account_yggdrasil_login(apiRoot, username, password)`, `account_yggdrasil_servers`, `account_remove(id)`, `account_set_default(id)` |
+| `accounts.rs` (accounts) | `account_list`, `account_offline_add(name)`, `account_yggdrasil_login(apiRoot, username, password)`, `account_yggdrasil_servers`, `account_remove(id)`, `account_set_default(id)` |
 | `skins.rs` (accounts) | `skin_library`, `skin_add(pngPath, name, model)`, `skin_remove(id)`, `skin_apply(account, skin)`, `cape_list(account)`, `cape_set(account, capeId)` |
 | `vpn.rs` (net) | `vpn_state`, `vpn_set_subscription(urls)`, 🕒`vpn_refresh`, `vpn_set_mode(mode)`, `vpn_nodes`, `vpn_select(node)`, `vpn_test_latency` |
 | `rooms.rs` (net) | `room_create(instance, authMode)`, `room_join(code, instance)`, `room_leave`, `room_state`, `room_kick(peerId)`, `chat_send(text)` |

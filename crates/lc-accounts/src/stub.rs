@@ -1,6 +1,5 @@
 use async_trait::async_trait;
-use lc_runtime::ProgressSink;
-use lc_types::account::{Account, DeviceCode, YggdrasilServer};
+use lc_types::account::{Account, YggdrasilServer};
 use lc_types::skin::{Cape, Skin, SkinModel};
 use lc_types::{AccountId, AppError, AppResult, SkinId};
 use url::Url;
@@ -22,14 +21,6 @@ impl AuthProvider for StubAccounts {
 impl AccountService for StubAccounts {
     async fn list(&self) -> AppResult<Vec<Account>> {
         Ok(Vec::new())
-    }
-
-    async fn msa_begin(&self) -> AppResult<DeviceCode> {
-        Err(AppError::not_implemented("AccountService::msa_begin"))
-    }
-
-    async fn msa_complete(&self, _flow_id: &str, _sink: &dyn ProgressSink) -> AppResult<Account> {
-        Err(AppError::not_implemented("AccountService::msa_complete"))
     }
 
     async fn offline_add(&self, _name: &str) -> AppResult<Account> {
