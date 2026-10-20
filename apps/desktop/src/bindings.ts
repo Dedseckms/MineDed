@@ -429,7 +429,10 @@ export type ProjectSummary = {
 	categories: string[],
 };
 
-/**  Manual proxy for launcher HTTP traffic (independent of the built-in VPN). */
+/**
+ *  Manual proxy for launcher HTTP traffic (independent of the built-in VPN).
+ *  The password crosses IPC (settings form) but never appears in `Debug`.
+ */
 export type ProxyCfg = {
 	kind: ProxyKind,
 	host: string,
