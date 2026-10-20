@@ -6,7 +6,7 @@
 
 1. Все версии Minecraft (version manifest), лоадеры Forge, NeoForge, Fabric, Quilt.
 2. Инстансы: создание, клонирование, импорт/экспорт `.mrpack` и CurseForge zip; моды, ресурспаки, шейдеры из Modrinth и CurseForge с зависимостями.
-3. Аккаунты: Microsoft (device flow), оффлайн, свой Yggdrasil (authlib-injector), Ely.by.
+3. Аккаунты: оффлайн, свой Yggdrasil (authlib-injector), Ely.by. Microsoft-аккаунты не поддерживаются (решение владельца).
 4. Свой сервер скинов/аккаунтов (Docker, домашний сервер рядом с mihomo); библиотека скинов с 3D-превью; скины видны на серверах с authlib-injector и в P2P.
 5. P2P-мультиплеер по коду комнаты: NAT traversal + relay на нашем сервере.
 6. Текстовый и голосовой чат в сессии, push-to-talk.
@@ -35,7 +35,7 @@
 
 | # | Риск / ограничение | Что делаем |
 |---|---|---|
-| R1 | **Microsoft-вход**: нужен Azure app + одобрение Mojang для доступа к `api.minecraftservices.com` (ждать недели). | Владелец подаёт заявку сразу. До одобрения MSA за feature-флагом; разработка на оффлайн/Yggdrasil. |
+| R1 | **Microsoft-вход** не поддерживается (решение владельца): лицензионные аккаунты и серверы с `online-mode=true` Mojang недоступны. | Оффлайн + свой Yggdrasil; серверы — с authlib-injector на наш домен или offline-mode. |
 | R2 | **TLauncher-аккаунты не поддерживаются**: закрытый API, реверс нарушает ToS и хрупок. | Оффлайн-аккаунт с тем же ником; возможно импорт скина по нику, если найдётся публичный эндпоинт (проверка в волне 0, не обещаем). Ely.by как открытая альтернатива. |
 | R3 | **Скины с нашего сервера** видны только на серверах с authlib-injector (наш домен), в наших P2P-сессиях, на оффлайн-серверах со SkinsRestorer или у игроков с CustomSkinLoader. На лицензионных серверах Mojang — нет. | Честно объясняем в UI. |
 | R4 | **CurseForge**: нужен API-ключ; файлы с `allowModDistribution=false` нельзя скачивать автоматически. | Заявка на ключ (владелец). `ManualDownloadRequired` → UI открывает страницу в браузере и ждёт файл в папке загрузок. |
@@ -58,7 +58,7 @@ crates/
   lc-core       [core]     version manifest, Java manager, инстансы, запуск JVM, логи, SystemProbe
   lc-loaders    [mods]     Fabric/Quilt (meta API), Forge/NeoForge (install_profile + processors)
   lc-content    [mods]     Modrinth/CurseForge, разрешение зависимостей, mrpack/CF zip, пресеты
-  lc-accounts   [accounts] MSA device flow, оффлайн, Yggdrasil/authlib-injector, keyring, скины
+  lc-accounts   [accounts] оффлайн, Yggdrasil/authlib-injector, keyring, скины
   lc-vpn        [net]      mihomo: подписки, режимы, TUN, health
   lc-p2p        [net]      iroh: комнаты, TCP-туннель, LAN-детект, чат; proto.rs — протокол
   lc-voice      [voice]    cpal, Opus, jitter buffer, PTT/VAD, шумоподавление
@@ -125,7 +125,7 @@ src-tauri → всё (единственное место, где стабы з�
 ### Волна 1 — параллельно, зависимости только на контракты
 - net: `lc-http` (**блокирует остальных** — первым делом), затем VPN «только лаунчер».
 - core: манифест, Java manager, assets/libraries, ванильный запуск (оффлайн-аккаунт).
-- accounts: оффлайн-вход, Yggdrasil + authlib-injector, keyring; MSA за флагом.
+- accounts: оффлайн-аккаунты, keyring (для токенов Yggdrasil); Yggdrasil + authlib-injector — когда поднимется сервер.
 - ui: оболочка, дизайн-система, темы, i18n, все экраны на моках.
 - server-ops: рабочий Drasl, hub `/health`, `/mirrors`, `/skins`.
 - qa: тест-план, фикстуры, contract-тесты (bindings, OpenAPI).
@@ -152,13 +152,13 @@ src-tauri → всё (единственное место, где стабы з�
 - release: NSIS/MSI/AppImage/deb, автообновление через зеркала, подпись.
 - закрытая бета.
 
-**Критический путь:** `lc-types` → `lc-http` → запуск в core → лоадеры → P2P + запуск → голос. MSA — отдельная ветка, зависит только от одобрения Mojang.
+**Критический путь:** `lc-types` → `lc-http` → запуск в core → лоадеры → P2P + запуск → голос.
 
 ## 7. Решения владельца и открытые вопросы
 
 Решено (2026-10-20):
 - Название **MineUP**, identifier `ru.dedseckms.mineup`, домен сервера `dedseckms.ru`.
-- Заявки Azure/Mojang и CurseForge **не подаются**. Следствия: MSA device flow реализуется с настраиваемым `client_id` (`MINEUP_MSA_CLIENT_ID`), но без одобренного приложения Mojang вход не работает; чужие client ID не используем. Контент — только Modrinth; CurseForge отложен.
+- **Microsoft-аккаунты не нужны** — убраны из контрактов. Заявки Azure/Mojang и CurseForge не подаются; контент — только Modrinth, CurseForge отложен.
 - Правила безопасности сервера — в `.claude/agents/server-ops.md`.
 
 Открыто:

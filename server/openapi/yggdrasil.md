@@ -31,8 +31,7 @@ not by `hub`. The launcher talks to it through authlib-injector conventions.
 
 ## Required Drasl settings (server-ops)
 
-- Fallback API servers: Mojang (session + account + services). Lets hosts in P2P rooms
-  (authMode `yggdrasil`) accept Microsoft players and show their Mojang skins.
+- Fallback API servers: not needed (the launcher has no Microsoft accounts).
 - Texture signing key persisted in a volume (rotating it breaks cached skins).
 - Registration policy: decided by the owner (invite-only recommended).
 - Skin library uploads come from `hub` via Drasl's admin API (token kept on the server only).

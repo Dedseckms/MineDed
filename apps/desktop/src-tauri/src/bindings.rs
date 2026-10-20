@@ -48,8 +48,6 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             content::instance_export,
             // accounts
             accounts::account_list,
-            accounts::account_msa_begin,
-            accounts::account_msa_complete,
             accounts::account_offline_add,
             accounts::account_yggdrasil_login,
             accounts::account_yggdrasil_servers,

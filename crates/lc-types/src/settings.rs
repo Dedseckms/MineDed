@@ -28,7 +28,8 @@ pub enum ProxyKind {
 }
 
 /// Manual proxy for launcher HTTP traffic (independent of the built-in VPN).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+/// The password crosses IPC (settings form) but never appears in `Debug`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyCfg {
     pub kind: ProxyKind,
@@ -36,6 +37,35 @@ pub struct ProxyCfg {
     pub port: u16,
     pub username: Option<String>,
     pub password: Option<String>,
+}
+
+impl std::fmt::Debug for ProxyCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyCfg")
+            .field("kind", &self.kind)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "***"))
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_debug_hides_password() {
+        let p = ProxyCfg {
+            kind: ProxyKind::Socks5,
+            host: "h".into(),
+            port: 1080,
+            username: Some("u".into()),
+            password: Some("hunter2".into()),
+        };
+        assert!(!format!("{p:?}").contains("hunter2"));
+    }
 }
 
 /// Global launcher settings (`settings_get` / `settings_set`).

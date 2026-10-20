@@ -38,9 +38,6 @@ export const commands = {
 	instanceImport: (path: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_import", { path, onEvent })),
 	instanceExport: (id: InstanceId, format: PackFormat, path: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_export", { id, format, path, onEvent })),
 	accountList: () => typedError<Account[], AppError>(__TAURI_INVOKE("account_list")),
-	accountMsaBegin: () => typedError<DeviceCode, AppError>(__TAURI_INVOKE("account_msa_begin")),
-	/**  Polls Microsoft until the user confirms the device code. */
-	accountMsaComplete: (flowId: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("account_msa_complete", { flowId, onEvent })),
 	accountOfflineAdd: (name: string) => typedError<Account, AppError>(__TAURI_INVOKE("account_offline_add", { name })),
 	accountYggdrasilLogin: (apiRoot: string, username: string, password: string) => typedError<Account, AppError>(__TAURI_INVOKE("account_yggdrasil_login", { apiRoot, username, password })),
 	accountYggdrasilServers: () => typedError<YggdrasilServer[], AppError>(__TAURI_INVOKE("account_yggdrasil_servers")),
@@ -132,7 +129,7 @@ export type Account = {
 
 export type AccountId = string;
 
-export type AccountKind = "microsoft" | "offline" | 
+export type AccountKind = "offline" | 
 /**  Any authlib-injector compatible server: own skin server, Ely.by... */
 "yggdrasil";
 
@@ -225,15 +222,6 @@ export type Dependency = {
 };
 
 export type DependencyKind = "required" | "optional" | "incompatible" | "embedded";
-
-/**  Microsoft device-code flow, shown to the user. */
-export type DeviceCode = {
-	flowId: string,
-	userCode: string,
-	verificationUri: string,
-	expiresInSec: number,
-	intervalSec: number,
-};
 
 /**  Machine-readable error class. The UI maps it to an i18n key `errors.<code>`. */
 export type ErrorCode = 
