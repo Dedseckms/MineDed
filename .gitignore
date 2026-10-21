@@ -29,3 +29,9 @@ Thumbs.db
 
 # Local Claude settings
 .claude/settings.local.json
+
+# Skin server runtime (never commit)
+/server/skinserver/.secrets
+/server/skinserver/backups/
+/server/skinserver/.env
+

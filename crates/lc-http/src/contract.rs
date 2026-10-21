@@ -12,7 +12,8 @@ use url::Url;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Route {
     Direct,
-    /// Through mihomo's local mixed-port (VPN mode `launcherOnly` or higher).
+    /// Through the proxy: the manual proxy now, mihomo's mixed-port once the
+    /// built-in VPN exists (TODO lead+net). Without a proxy requests fail.
     Proxied,
     /// Direct first; on timeout / network error / `Blocked` / hash mismatch /
     /// spoofed response (HTML block page instead of expected data) retry via the
@@ -64,7 +65,9 @@ pub trait Downloader: Send + Sync {
     /// Official URL → ordered candidate list (mirrors + original).
     fn mirrors_for(&self, original: &Url, kind: ResourceKind) -> Vec<Url>;
 
-    /// Applies the manual proxy from settings (`None` = direct). Takes effect
-    /// for requests started after the call; `Route::Proxied` still means VPN.
+    /// Applies the manual proxy from settings. It is never used for
+    /// `Route::Direct`; it is the fallback route of `Route::Auto` and the route
+    /// of `Route::Proxied` (until the built-in VPN provides its own proxy).
+    /// Takes effect for requests started after the call.
     fn set_manual_proxy(&self, proxy: Option<ProxyCfg>);
 }

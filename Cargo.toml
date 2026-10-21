@@ -46,7 +46,7 @@ url = { version = "2.5.8", features = ["serde"] }
 reqwest = { version = "0.13.5", features = ["json"] }
 specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid", "url"] }
 specta-typescript = "=0.0.12"
-tauri = { version = "2.12.4", features = [] }
+tauri = { version = "2.12.4", features = ["protocol-asset"] }
 tauri-build = { version = "2.7.3", features = [] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 axum = { version = "0.8.9", features = ["ws"] }
