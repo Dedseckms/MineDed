@@ -54,7 +54,7 @@ export function SkinFlat({
 /**
  * Interactive 3D preview. Exactly one per screen (one WebGL context): the
  * library loads `skinview3d` lazily, only once the canvas is on screen.
- * Falls back to `SkinFlat` when WebGL is unavailable.
+ * Falls back to `SkinFlat` when WebGL or the texture fails; a new skin retries.
  */
 export function Skin3D({
   url,
@@ -70,6 +70,7 @@ export function Skin3D({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<SkinViewer | null>(null);
   const [visible, setVisible] = useState(false);
@@ -78,9 +79,12 @@ export function Skin3D({
   const latest = useRef({ url, model, capeUrl, animate });
   latest.current = { url, model, capeUrl, animate };
 
-  // Lazy init: wait until the canvas is actually visible.
+  // A different skin gets a fresh attempt after a failure.
+  useEffect(() => setFailed(false), [url, model]);
+
+  // Lazy init: wait until the preview box is actually visible.
   useEffect(() => {
-    const el = canvasRef.current;
+    const el = boxRef.current;
     if (!el) return;
     if (typeof IntersectionObserver === "undefined") {
       setVisible(true);
@@ -96,19 +100,21 @@ export function Skin3D({
     return () => io.disconnect();
   }, []);
 
+  // Viewer lifetime: created when visible and not failed; disposed on failure/unmount.
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || failed) return;
     let disposed = false;
     void (async () => {
       try {
         const sv = await import("skinview3d");
         const canvas = canvasRef.current;
-        if (disposed || !canvas) return;
+        const box = boxRef.current;
+        if (disposed || !canvas || !box) return;
         const cur = latest.current;
         const viewer = new sv.SkinViewer({
           canvas,
-          width: canvas.clientWidth || 240,
-          height: canvas.clientHeight || 320,
+          width: box.clientWidth || 240,
+          height: box.clientHeight || 320,
           model: cur.model === "slim" ? "slim" : "default",
           zoom: 0.85,
         });
@@ -116,6 +122,10 @@ export function Skin3D({
         viewer.autoRotateSpeed = 0.6;
         viewer.animation = cur.animate ? new sv.WalkingAnimation() : null;
         if (viewer.animation) viewer.animation.speed = 0.6;
+        if (disposed) {
+          viewer.dispose();
+          return;
+        }
         viewerRef.current = viewer;
         setReady(true);
       } catch {
@@ -128,7 +138,20 @@ export function Skin3D({
       viewerRef.current = null;
       setReady(false);
     };
-  }, [visible]);
+  }, [visible, failed]);
+
+  // Keep the drawing buffer in sync with the layout.
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box || !ready || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const w = box.clientWidth;
+      const h = box.clientHeight;
+      if (w > 0 && h > 0) viewerRef.current?.setSize(w, h);
+    });
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [ready]);
 
   // Texture / settings updates reuse the same viewer (and context).
   useEffect(() => {
@@ -164,13 +187,13 @@ export function Skin3D({
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
-  if (failed) return <SkinFlat url={url} model={model} className={`h-full ${className}`} />;
   return (
-    <canvas
-      ref={canvasRef}
-      role="img"
-      aria-label={t("skins.preview3d")}
-      className={`size-full cursor-grab active:cursor-grabbing ${className}`}
-    />
+    <div ref={boxRef} className={`flex size-full items-center justify-center ${className}`}>
+      {failed ? (
+        <SkinFlat url={url} model={model} className="h-full" />
+      ) : (
+        <canvas ref={canvasRef} role="img" aria-label={t("skins.preview3d")} className="size-full cursor-grab active:cursor-grabbing" />
+      )}
+    </div>
   );
 }

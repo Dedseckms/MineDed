@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { visibleRange } from "../../lib/content";
 
@@ -10,13 +10,31 @@ export interface VirtualListProps<T> {
   getKey: (item: T) => string;
   renderRow: (item: T, index: number) => ReactNode;
   ariaLabel?: string;
+  /** Called when the last rows come into view (infinite loading). */
+  onEndReached?: () => void;
+  /** Rows before the end that trigger `onEndReached`. */
+  endThreshold?: number;
 }
 
 /** Fixed-row-height windowed list: only visible rows are mounted. */
-export function VirtualList<T>({ items, rowHeight, height, getKey, renderRow, ariaLabel }: VirtualListProps<T>) {
+export function VirtualList<T>({
+  items,
+  rowHeight,
+  height,
+  getKey,
+  renderRow,
+  ariaLabel,
+  onEndReached,
+  endThreshold = 3,
+}: VirtualListProps<T>) {
   const [scrollTop, setScrollTop] = useState(0);
   const viewport = Math.min(height, items.length * rowHeight);
   const [start, end] = visibleRange(scrollTop, viewport || height, rowHeight, items.length);
+  const lastVisible = Math.min(items.length, Math.ceil((scrollTop + (viewport || height)) / rowHeight));
+  const nearEnd = items.length > 0 && lastVisible >= items.length - endThreshold;
+  useEffect(() => {
+    if (nearEnd) onEndReached?.();
+  }, [nearEnd, items.length, onEndReached]);
   return (
     <div
       role="list"

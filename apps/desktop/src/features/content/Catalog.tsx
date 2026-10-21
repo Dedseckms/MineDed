@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 
 import type { InstalledContent, Instance, ProjectSummary, SortBy } from "../../bindings";
 import { useContentSearch } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
-import { Card } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
+import { VirtualList } from "../../components/ui/VirtualList";
 import { Segmented, Select, Switch, TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
 import { useDebounced } from "../../hooks/useDebounced";
@@ -35,7 +35,7 @@ function ResultCard({
 }) {
   const { t, i18n } = useTranslation();
   return (
-    <Card className="flex gap-3">
+    <div className="flex h-full gap-3 overflow-hidden rounded-xl border border-border bg-surface p-4">
       <ProjectIcon project={project} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
@@ -61,9 +61,12 @@ function ResultCard({
           {t("content.versions.title")}
         </Button>
       </div>
-    </Card>
+    </div>
   );
 }
+
+const RESULT_ROW = 148;
+const RESULT_VIEWPORT = 640;
 
 /** Modrinth / CurseForge search with instance-aware filters and infinite scroll. */
 export function Catalog({
@@ -99,17 +102,10 @@ export function Catalog({
   const total = search.data?.pages[0]?.total ?? 0;
   const installedIds = new Set(installed.map((c) => c.projectId).filter((x): x is string => x !== null));
 
-  // Infinite scroll: load the next page when the sentinel becomes visible.
-  const sentinel = useRef<HTMLDivElement>(null);
+  // Infinite scroll: the windowed list asks for more when its last rows show up.
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = search;
-  useEffect(() => {
-    const el = sentinel.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting) && hasNextPage && !isFetchingNextPage) void fetchNextPage();
-    });
-    io.observe(el);
-    return () => io.disconnect();
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   return (
@@ -191,18 +187,27 @@ export function Catalog({
           <p className="text-xs text-muted" aria-live="polite">
             {t("content.results", { shown: items.length, total })}
           </p>
-          <div className={`flex flex-col gap-3 ${search.isPlaceholderData ? "opacity-60" : ""}`}>
-            {items.map((p) => (
-              <ResultCard
-                key={`${p.source}:${p.projectId}`}
-                project={p}
-                installed={installedIds.has(p.projectId)}
-                onOpen={() => onOpen(p)}
-                onInstall={() => onInstall(p)}
-              />
-            ))}
+          <div className={search.isPlaceholderData ? "opacity-60" : ""}>
+            <VirtualList
+              items={items}
+              rowHeight={RESULT_ROW}
+              height={RESULT_VIEWPORT}
+              ariaLabel={t("content.tabs.browse")}
+              getKey={(p) => `${p.source}:${p.projectId}`}
+              onEndReached={loadMore}
+              renderRow={(p) => (
+                <div className="h-full pb-3">
+                  <ResultCard
+                    project={p}
+                    installed={installedIds.has(p.projectId)}
+                    onOpen={() => onOpen(p)}
+                    onInstall={() => onInstall(p)}
+                  />
+                </div>
+              )}
+            />
           </div>
-          <div ref={sentinel} className="flex justify-center py-2">
+          <div className="flex justify-center py-2">
             {hasNextPage ? (
               <Button variant="ghost" loading={isFetchingNextPage} onClick={() => void fetchNextPage()}>
                 {t("content.loadMore")}

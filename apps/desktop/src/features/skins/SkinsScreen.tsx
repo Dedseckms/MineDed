@@ -20,6 +20,7 @@ import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/f
 import { useMotionPrefs } from "../../hooks/useAppearance";
 import { SKIN_EXTS, skinNameFromPath, validateFilePath, validateSkinName } from "../../lib/validation";
 import { Skin3D, SkinFlat } from "./SkinPreview";
+import { skinSrc } from "./skinSrc";
 
 function AddSkinForm({ onAdded }: { onAdded: (s: Skin) => void }) {
   const { t } = useTranslation();
@@ -105,6 +106,7 @@ function AddSkinForm({ onAdded }: { onAdded: (s: Skin) => void }) {
 
 function SkinTile({ skin, selected, onSelect }: { skin: Skin; selected: boolean; onSelect: () => void }) {
   const { t } = useTranslation();
+  const src = skinSrc(skin);
   return (
     <button
       type="button"
@@ -115,7 +117,7 @@ function SkinTile({ skin, selected, onSelect }: { skin: Skin; selected: boolean;
         selected ? "border-accent bg-accent/10" : "border-border bg-surface hover:bg-surface-2"
       }`}
     >
-      <SkinFlat url={skin.url} model={skin.model} className="h-28" />
+      {src ? <SkinFlat url={src} model={skin.model} className="h-28" /> : <span className="h-28 w-14 rounded-md bg-surface-2" aria-hidden />}
       <span className="w-full truncate text-center text-sm font-medium">{skin.name}</span>
       <span className="flex gap-1">
         <Badge>{t(`skins.models.${skin.model}`)}</Badge>
@@ -176,6 +178,7 @@ export function SkinsScreen() {
   const list = skins.data ?? [];
   const selected = list.find((s) => s.id === selectedId) ?? list[0] ?? null;
   const account = accounts.data?.find((a) => a.id === accountId) ?? accounts.data?.find((a) => a.isDefault) ?? accounts.data?.[0] ?? null;
+  const selectedSrc = selected ? skinSrc(selected) : null;
   const appliedHere = !!selected && !!account && account.skinUrl === selected.url;
 
   return (
@@ -205,10 +208,12 @@ export function SkinsScreen() {
           {selected ? (
             <div className="flex flex-col gap-4">
               <div className="flex h-72 items-center justify-center rounded-lg bg-surface-2">
-                {light ? (
-                  <SkinFlat url={selected.url} model={selected.model} className="h-64" />
+                {!selectedSrc ? (
+                  <Icon name="shirt" className="size-16 text-muted" />
+                ) : light ? (
+                  <SkinFlat url={selectedSrc} model={selected.model} className="h-64" />
                 ) : (
-                  <Skin3D url={selected.url} model={selected.model} capeUrl={capeUrl} animate={!reduced} />
+                  <Skin3D url={selectedSrc} model={selected.model} capeUrl={capeUrl} animate={!reduced} />
                 )}
               </div>
               <p className="truncate text-center font-medium">{selected.name}</p>
