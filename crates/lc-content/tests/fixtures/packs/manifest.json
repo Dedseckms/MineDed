@@ -1,0 +1,16 @@
+{
+  "minecraft": {
+    "version": "1.20.1",
+    "modLoaders": [{ "id": "forge-47.3.0", "primary": true }]
+  },
+  "manifestType": "minecraftModpack",
+  "manifestVersion": 1,
+  "name": "CF Test Pack",
+  "version": "1.0",
+  "author": "someone",
+  "files": [
+    { "projectID": 238222, "fileID": 4712345, "required": true },
+    { "projectID": 1001, "fileID": 4711, "required": true }
+  ],
+  "overrides": "overrides"
+}

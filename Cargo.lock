@@ -2415,10 +2415,22 @@ name = "lc-content"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
+ "lc-accounts",
+ "lc-core",
  "lc-http",
+ "lc-loaders",
  "lc-runtime",
  "lc-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tempfile",
  "tokio",
+ "url",
+ "zip",
 ]
 
 [[package]]
@@ -2468,10 +2480,18 @@ name = "lc-loaders"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
  "lc-http",
  "lc-runtime",
  "lc-types",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tempfile",
  "tokio",
+ "url",
+ "zip",
 ]
 
 [[package]]

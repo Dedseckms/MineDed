@@ -1,0 +1,33 @@
+{
+  "id": "t3ruzodq",
+  "project_id": "YL57xq9U",
+  "author_id": "x",
+  "featured": false,
+  "name": "Iris 1.8.8 for 1.21.1",
+  "version_number": "1.8.8+1.21.1-fabric",
+  "changelog": "",
+  "date_published": "2025-02-10T12:00:00.000000Z",
+  "downloads": 1,
+  "version_type": "release",
+  "status": "listed",
+  "files": [
+    {
+      "hashes": {
+        "sha1": "0f6a2b2c8a1e3b6d0e7d7b6a2c1f9d8e7a6b5c4d",
+        "sha512": "aa"
+      },
+      "url": "https://cdn.modrinth.com/data/YL57xq9U/versions/t3ruzodq/iris-fabric-1.8.8%2Bmc1.21.1.jar",
+      "filename": "iris-fabric-1.8.8+mc1.21.1.jar",
+      "primary": true,
+      "size": 2400000,
+      "file_type": null
+    }
+  ],
+  "dependencies": [
+    { "version_id": null, "project_id": "AANobbMI", "file_name": null, "dependency_type": "required" },
+    { "version_id": null, "project_id": "NNAgCjsB", "file_name": null, "dependency_type": "incompatible" },
+    { "version_id": null, "project_id": null, "file_name": "x.jar", "dependency_type": "required" }
+  ],
+  "game_versions": ["1.21.1"],
+  "loaders": ["fabric", "neoforge"]
+}

@@ -1,0 +1,30 @@
+{
+  "formatVersion": 1,
+  "game": "minecraft",
+  "versionId": "1.0.0",
+  "name": "Test Pack",
+  "summary": "fixture",
+  "files": [
+    {
+      "path": "mods/sodium-fabric-0.6.0+mc1.21.1.jar",
+      "hashes": {
+        "sha1": "1111111111111111111111111111111111111111",
+        "sha512": "22"
+      },
+      "env": { "client": "required", "server": "unsupported" },
+      "downloads": ["https://cdn.modrinth.com/data/AANobbMI/versions/u1OEbNKx/sodium-fabric-0.6.0%2Bmc1.21.1.jar"],
+      "fileSize": 1000
+    },
+    {
+      "path": "mods/server-only.jar",
+      "hashes": { "sha1": "3333333333333333333333333333333333333333", "sha512": "44" },
+      "env": { "client": "unsupported", "server": "required" },
+      "downloads": ["https://cdn.modrinth.com/data/x/versions/y/server-only.jar"],
+      "fileSize": 10
+    }
+  ],
+  "dependencies": {
+    "minecraft": "1.21.1",
+    "fabric-loader": "0.16.9"
+  }
+}

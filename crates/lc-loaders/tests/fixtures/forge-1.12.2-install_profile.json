@@ -1,0 +1,30 @@
+{
+  "install": {
+    "profileName": "forge",
+    "target": "1.12.2-forge-14.23.5.2860",
+    "path": "net.minecraftforge:forge:1.12.2-14.23.5.2860",
+    "version": "forge 1.12.2-14.23.5.2860",
+    "filePath": "forge-1.12.2-14.23.5.2860.jar",
+    "welcome": "Welcome to the simple Forge installer.",
+    "minecraft": "1.12.2",
+    "mirrorList": "http://files.minecraftforge.net/mirror-brand.list",
+    "logo": "/big_logo.png",
+    "modList": "none"
+  },
+  "versionInfo": {
+    "id": "1.12.2-forge-14.23.5.2860",
+    "time": "2021-12-13T19:31:06+0000",
+    "releaseTime": "1960-01-01T00:00:00-0700",
+    "type": "release",
+    "minecraftArguments": "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --tweakClass net.minecraftforge.fml.common.launcher.FMLTweaker --versionType Forge",
+    "mainClass": "net.minecraft.launchwrapper.Launch",
+    "inheritsFrom": "1.12.2",
+    "jar": "1.12.2",
+    "libraries": [
+      { "name": "net.minecraftforge:forge:1.12.2-14.23.5.2860", "url": "http://files.minecraftforge.net/maven/" },
+      { "name": "net.minecraft:launchwrapper:1.12", "serverreq": true },
+      { "name": "org.ow2.asm:asm-all:5.2", "url": "http://files.minecraftforge.net/maven/", "checksums": ["3354e11e2b34215f06dab629ab88e06aca477c19"], "serverreq": true, "clientreq": true },
+      { "name": "jline:jline:2.13", "url": "http://files.minecraftforge.net/maven/", "serverreq": true, "clientreq": false }
+    ]
+  }
+}

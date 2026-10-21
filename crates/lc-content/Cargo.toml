@@ -9,10 +9,23 @@ license.workspace = true
 lc-types.workspace = true
 lc-runtime.workspace = true
 lc-http.workspace = true
+lc-core.workspace = true
 async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+sha1 = "0.10.7"
+sha2 = "0.10.9"
+hex = "0.4.3"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tokio.workspace = true
+tempfile = "3.20"
+lc-loaders.workspace = true
+lc-accounts.workspace = true
 
 [lints]
 workspace = true
