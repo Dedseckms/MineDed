@@ -59,6 +59,10 @@ pub fn validate_skin_png(data: &[u8]) -> AppResult<(u32, u32)> {
     Ok((w, h))
 }
 
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 fn hex_sha256(data: &[u8]) -> String {
     Sha256::digest(data)
         .iter()
@@ -94,10 +98,21 @@ impl SkinsService {
         let path = self.dir.join(SKINS_INDEX);
         match read_optional(&path)? {
             None => Ok(SkinsFile::default()),
-            Some(b) => serde_json::from_slice(&b).map_err(|e| {
-                AppError::new(ErrorCode::Io, format!("skins.json is invalid: {e}"))
-                    .detail("path", path.display().to_string())
-            }),
+            Some(b) => {
+                let mut data: SkinsFile = serde_json::from_slice(&b).map_err(|e| {
+                    AppError::new(ErrorCode::Io, format!("skins.json is invalid: {e}"))
+                        .detail("path", path.display().to_string())
+                })?;
+                // The hash becomes a file name: drop tampered entries (path traversal).
+                data.skins.retain(|s| {
+                    let ok = is_sha256_hex(&s.hash);
+                    if !ok {
+                        tracing::warn!(skin = %s.id, "skins.json entry with invalid hash ignored");
+                    }
+                    ok
+                });
+                Ok(data)
+            }
         }
     }
 
@@ -299,6 +314,33 @@ pub(crate) mod tests {
         v.extend_from_slice(&h.to_be_bytes());
         v.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
         v
+    }
+
+    #[test]
+    fn tampered_hash_entries_are_ignored() {
+        let dir = crate::fsutil::testutil::TempDir::new();
+        let paths = Paths::new(dir.path());
+        let accounts = Arc::new(AccountsService::new(
+            &paths,
+            Arc::new(lc_http::StubDownloader),
+            Arc::new(crate::tokens::MemoryTokenStore::new()),
+        ));
+        let svc = SkinsService::new(&paths, accounts);
+        let good = "a".repeat(64);
+        let index = serde_json::json!({"skins": [
+            {"id": SkinId::new(), "name": "ok", "model": "classic", "hash": good},
+            {"id": SkinId::new(), "name": "evil", "model": "classic", "hash": "../../x"},
+            {"id": SkinId::new(), "name": "upper", "model": "classic", "hash": "A".repeat(64)},
+        ]});
+        std::fs::create_dir_all(dir.path().join("skins")).unwrap();
+        std::fs::write(
+            dir.path().join("skins").join(SKINS_INDEX),
+            index.to_string(),
+        )
+        .unwrap();
+        let loaded = svc.load().unwrap();
+        assert_eq!(loaded.skins.len(), 1);
+        assert_eq!(loaded.skins[0].name, "ok");
     }
 
     #[test]

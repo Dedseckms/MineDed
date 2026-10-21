@@ -85,6 +85,8 @@ impl AuthlibManager {
     }
 
     /// Custom artifact bases (tests, self-hosted mirror). Each base must end with `/`.
+    /// `bases[0]` is the trusted source of `latest.json` (SHA-256); every base
+    /// may serve the jar, which is always verified against that hash.
     pub fn with_bases(dir: PathBuf, bases: Vec<Url>) -> Self {
         Self {
             dir,
@@ -132,31 +134,30 @@ impl AuthlibManager {
         Ok(bytes.to_vec())
     }
 
-    async fn fetch_latest(&self, client: &Client) -> AppResult<(Latest, usize)> {
-        let mut last = None;
-        for (i, base) in self.bases.iter().enumerate() {
-            let Ok(url) = base.join("artifact/latest.json") else {
-                continue;
-            };
-            match Self::get(client, &url, 64 * 1024).await {
-                Ok(b) => match serde_json::from_slice::<Latest>(&b) {
-                    Ok(l) => return Ok((l, i)),
-                    Err(e) => {
-                        last = Some(
-                            AppError::new(ErrorCode::Network, format!("bad latest.json: {e}"))
-                                .detail("url", url.as_str()),
-                        )
-                    }
-                },
-                Err(e) => last = Some(e),
-            }
+    /// `latest.json` (with the trusted SHA-256) only from the primary base;
+    /// mirrors are never trusted for checksums.
+    async fn fetch_latest(&self, client: &Client) -> AppResult<Latest> {
+        let primary = self
+            .bases
+            .first()
+            .ok_or_else(|| AppError::internal("no authlib-injector sources"))?;
+        let url = primary
+            .join("artifact/latest.json")
+            .map_err(|e| AppError::internal(format!("bad authlib-injector base: {e}")))?;
+        let bad = |m: String| AppError::new(ErrorCode::Network, m).detail("url", url.as_str());
+        let bytes = Self::get(client, &url, 64 * 1024).await?;
+        let latest: Latest =
+            serde_json::from_slice(&bytes).map_err(|e| bad(format!("bad latest.json: {e}")))?;
+        let sha = latest.checksums.sha256.trim();
+        if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(bad("latest.json has no valid sha256".into()));
         }
-        Err(last.unwrap_or_else(|| AppError::internal("no authlib-injector sources")))
+        Ok(latest)
     }
 
-    /// Download candidates: the URL rewritten onto the base that answered,
-    /// then onto every other base, then the original URL.
-    fn candidates(&self, download_url: &str, first: usize) -> Vec<Url> {
+    /// Jar download candidates: the URL rewritten onto every base in order.
+    /// The original URL is used only when it already points at a configured base.
+    fn candidates(&self, download_url: &str) -> Vec<Url> {
         let rel = self
             .bases
             .iter()
@@ -164,12 +165,10 @@ impl AuthlibManager {
             .chain(std::iter::once(AUTHLIB_PRIMARY_BASE))
             .chain(std::iter::once(AUTHLIB_MIRROR_BASE))
             .find_map(|b| download_url.strip_prefix(b));
-        let mut order: Vec<usize> = vec![first];
-        order.extend((0..self.bases.len()).filter(|&i| i != first));
         let mut out: Vec<Url> = Vec::new();
         if let Some(rel) = rel {
-            for i in order {
-                if let Some(u) = self.bases.get(i).and_then(|b| b.join(rel).ok()) {
+            for b in &self.bases {
+                if let Ok(u) = b.join(rel) {
                     if !out.contains(&u) {
                         out.push(u);
                     }
@@ -177,7 +176,11 @@ impl AuthlibManager {
             }
         }
         if let Ok(u) = Url::parse(download_url) {
-            if !out.contains(&u) {
+            let known = self
+                .bases
+                .iter()
+                .any(|b| u.as_str().starts_with(b.as_str()));
+            if known && !out.contains(&u) {
                 out.push(u);
             }
         }
@@ -198,7 +201,7 @@ impl AuthlibManager {
             }
         }
 
-        let (latest, idx) = match self.fetch_latest(client).await {
+        let latest = match self.fetch_latest(client).await {
             Ok(v) => v,
             Err(e) => {
                 if let Some((_, path)) = cached {
@@ -219,7 +222,7 @@ impl AuthlibManager {
         }
 
         let mut last = None;
-        for url in self.candidates(&latest.download_url, idx) {
+        for url in self.candidates(&latest.download_url) {
             let bytes = match Self::get(client, &url, MAX_JAR).await {
                 Ok(b) => b,
                 Err(e) => {
@@ -266,14 +269,28 @@ mod tests {
         let m = AuthlibManager::new(PathBuf::from("x"));
         let c = m.candidates(
             "https://authlib-injector.yushi.moe/artifact/53/authlib-injector-1.2.5.jar",
-            1,
         );
         assert_eq!(
             c.iter().map(Url::as_str).collect::<Vec<_>>(),
             vec![
-                "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/53/authlib-injector-1.2.5.jar",
                 "https://authlib-injector.yushi.moe/artifact/53/authlib-injector-1.2.5.jar",
+                "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/53/authlib-injector-1.2.5.jar",
             ]
+        );
+    }
+
+    #[test]
+    fn foreign_download_url_is_not_used() {
+        let local = AuthlibManager::with_bases(
+            PathBuf::from("x"),
+            vec![Url::parse("http://127.0.0.1:1/p/").unwrap()],
+        );
+        assert!(local
+            .candidates("https://evil.example/artifact/1/a.jar")
+            .is_empty());
+        assert_eq!(
+            local.candidates("https://authlib-injector.yushi.moe/artifact/1/a.jar")[0].as_str(),
+            "http://127.0.0.1:1/p/artifact/1/a.jar"
         );
     }
 

@@ -410,33 +410,42 @@ impl AccountService for AccountsService {
     }
 
     async fn remove(&self, id: AccountId) -> AppResult<()> {
-        let _g = self.lock.lock().await;
-        let mut data = self.load()?;
-        let Some(pos) = data.accounts.iter().position(|a| a.id == id) else {
-            return Err(Self::not_found(id));
+        let logout = {
+            let _g = self.lock.lock().await;
+            let mut data = self.load()?;
+            let Some(pos) = data.accounts.iter().position(|a| a.id == id) else {
+                return Err(Self::not_found(id));
+            };
+            // Captured before the token is deleted; used after the lock is released.
+            let mut logout = None;
+            if data.accounts[pos].kind == AccountKind::Yggdrasil {
+                let root = data.accounts[pos]
+                    .server
+                    .as_deref()
+                    .and_then(|s| ygg::parse_server_input(s).ok());
+                if let (Some(root), Ok(Some(s))) = (root, self.load_session(id).await) {
+                    logout = Some((root, s));
+                }
+            }
+            // Drop the secret first so a failure never leaves an orphaned token behind.
+            // Offline accounts have no token, so a broken store must not block their removal.
+            if let Err(e) = self.tokens.delete(&token_key(id)).await {
+                if data.accounts[pos].kind == AccountKind::Offline {
+                    tracing::warn!(account = %id, error = %e.message, "token delete failed");
+                } else {
+                    return Err(e);
+                }
+            }
+            data.accounts.remove(pos);
+            data.fix_default();
+            self.save(&data)?;
+            logout
         };
-        // Best-effort server logout; never blocks removal.
-        if data.accounts[pos].kind == AccountKind::Yggdrasil {
-            let root = data.accounts[pos]
-                .server
-                .as_deref()
-                .and_then(|s| ygg::parse_server_input(s).ok());
-            if let (Some(root), Ok(Some(s))) = (root, self.load_session(id).await) {
-                ygg::invalidate(&self.http(), &root, &s).await;
-            }
+        // Best-effort server logout outside the lock; never fails removal.
+        if let Some((root, s)) = logout {
+            ygg::invalidate(&self.http(), &root, &s).await;
         }
-        // Drop the secret first so a failure never leaves an orphaned token behind.
-        // Offline accounts have no token, so a broken store must not block their removal.
-        if let Err(e) = self.tokens.delete(&token_key(id)).await {
-            if data.accounts[pos].kind == AccountKind::Offline {
-                tracing::warn!(account = %id, error = %e.message, "token delete failed");
-            } else {
-                return Err(e);
-            }
-        }
-        data.accounts.remove(pos);
-        data.fix_default();
-        self.save(&data)
+        Ok(())
     }
 
     async fn set_default(&self, id: AccountId) -> AppResult<()> {

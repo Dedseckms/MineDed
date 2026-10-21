@@ -196,23 +196,41 @@ pub(crate) async fn fetch_metadata(client: &Client, root: &Url) -> AppResult<Vec
     Ok(bytes)
 }
 
+/// Resolves the ALI header against the final response URL `base`.
+/// `Some(root)` = a different API root; `None` = `input` is the root.
+/// An https input is never downgraded to http (redirect or header).
+pub(crate) fn ali_target(input: &Url, base: &Url, header: Option<&str>) -> AppResult<Option<Url>> {
+    let downgrade = |u: &Url| input.scheme() == "https" && u.scheme() != "https";
+    let refuse = || {
+        AppError::new(ErrorCode::InvalidInput, "https to http downgrade refused")
+            .detail("url", input.as_str())
+    };
+    if downgrade(base) {
+        return Err(refuse());
+    }
+    match header.and_then(|loc| base.join(loc).ok()) {
+        Some(root) if downgrade(&root) => Err(refuse()),
+        Some(root) if root != *base && root != *input => Ok(Some(root)),
+        _ => Ok(None),
+    }
+}
+
 /// ALI discovery: follows `X-Authlib-Injector-API-Location` (relative or
 /// absolute) once; otherwise `input` itself must be the API root.
 /// Returns the API root and its metadata.
 pub(crate) async fn discover(client: &Client, input: &Url) -> AppResult<(Url, Vec<u8>)> {
     let resp = send(client.get(input.clone()), input).await?;
-    let base = resp.url().clone();
-    let located = resp
+    let header = resp
         .headers()
         .get(ALI_HEADER)
         .and_then(|v| v.to_str().ok())
-        .and_then(|loc| base.join(loc).ok());
-    match located {
-        Some(root) if root != base && root != *input => {
+        .map(str::to_owned);
+    match ali_target(input, resp.url(), header.as_deref())? {
+        Some(root) => {
             let meta = fetch_metadata(client, &root).await?;
             Ok((root, meta))
         }
-        _ => {
+        None => {
             if !resp.status().is_success() {
                 return Err(status_error(resp, input).await);
             }
@@ -555,6 +573,35 @@ mod tests {
                 .as_str(),
             "https://h/authlib-injector/authserver/validate"
         );
+    }
+
+    #[test]
+    fn ali_never_downgrades_https() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        let input = u("https://h/");
+        assert_eq!(
+            ali_target(&input, &input, Some("/authlib-injector"))
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            "https://h/authlib-injector"
+        );
+        assert_eq!(ali_target(&input, &input, None).unwrap(), None);
+        for (base, header) in [
+            ("https://h/", Some("http://h/authlib-injector")),
+            ("http://h/", Some("/authlib-injector")),
+            ("http://h/", None),
+        ] {
+            assert_eq!(
+                ali_target(&input, &u(base), header).unwrap_err().code,
+                ErrorCode::InvalidInput
+            );
+        }
+        // Plain-http input may point to https (upgrade is fine).
+        let plain = u("http://h/");
+        assert!(ali_target(&plain, &plain, Some("https://h/a"))
+            .unwrap()
+            .is_some());
     }
 
     #[test]

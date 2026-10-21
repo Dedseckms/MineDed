@@ -220,8 +220,12 @@ async fn handle(
             json_resp(StatusCode::OK, json!({"username": u}))
         }
         ("GET", "/dead/artifact/latest.json") => StatusCode::BAD_GATEWAY.into_response(),
-        ("GET", "/mirror/artifact/latest.json") => {
+        ("GET", "/primary/artifact/latest.json") => {
             json_resp(StatusCode::OK, latest(&sha256_hex(JAR)))
+        }
+        // Must never be used: checksums come only from the primary source.
+        ("GET", "/mirror/artifact/latest.json") => {
+            json_resp(StatusCode::OK, latest(&"1".repeat(64)))
         }
         ("GET", "/bad/artifact/latest.json") => json_resp(StatusCode::OK, latest(&"0".repeat(64))),
         ("GET", "/mirror/artifact/53/authlib-injector-1.2.5.jar")
@@ -294,7 +298,7 @@ async fn env_with_bases(bases: &[&str]) -> Env {
 }
 
 async fn env() -> Env {
-    env_with_bases(&["dead", "mirror"]).await
+    env_with_bases(&["primary", "mirror"]).await
 }
 
 impl Env {
@@ -543,17 +547,39 @@ async fn skin_library_apply_and_capes() {
 async fn authlib_download_mirror_cache_and_hash() {
     let e = env().await;
     let client = e.svc.http();
-    let dir = e.dir_path.join("cache-a");
-    let mgr = AuthlibManager::with_bases(
-        dir.clone(),
-        vec![
-            Url::parse(&format!("http://{}/dead/", e.addr)).unwrap(),
-            Url::parse(&format!("http://{}/mirror/", e.addr)).unwrap(),
-        ],
+    let base = |p: &str| Url::parse(&format!("http://{}/{p}/", e.addr)).unwrap();
+
+    // Primary down: the mirror's latest.json is never trusted → error without cache.
+    let untrusted = AuthlibManager::with_bases(
+        e.dir_path.join("cache-0"),
+        vec![base("dead"), base("mirror")],
     );
+    assert_eq!(
+        untrusted.ensure(&client).await.unwrap_err().code,
+        ErrorCode::Network
+    );
+    assert!(!e
+        .mock
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|c| c.contains("/mirror/")));
+
+    // Hash from the primary, jar (missing on the primary) from the mirror.
+    let dir = e.dir_path.join("cache-a");
+    let mgr = AuthlibManager::with_bases(dir.clone(), vec![base("primary"), base("mirror")]);
     let jar = mgr.ensure(&client).await.unwrap();
     assert_eq!(std::fs::read(&jar).unwrap(), JAR);
     assert!(jar.ends_with("authlib-injector-1.2.5.jar"));
+    {
+        let m = e.mock.lock().unwrap();
+        assert!(m.calls.iter().any(|c| c.contains("/primary/artifact/53/")));
+        assert!(!m
+            .calls
+            .iter()
+            .any(|c| c.contains("/mirror/artifact/latest.json")));
+    }
 
     // Fresh cache: no network at all.
     let before = e.mock.lock().unwrap().calls.len();
