@@ -64,12 +64,9 @@ pub(crate) fn parse_dotenv(text: &str, key: &str) -> Option<String> {
     })
 }
 
-/// Default `.env` locations: current dir, executable dir, launcher data root.
+/// Default `.env` locations: executable dir, launcher data root (never the cwd).
 pub(crate) fn default_env_dirs(root: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(d) = std::env::current_dir() {
-        dirs.push(d);
-    }
     if let Some(d) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))

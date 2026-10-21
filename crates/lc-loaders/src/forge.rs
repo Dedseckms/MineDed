@@ -315,11 +315,10 @@ async fn fetch_installer(
         .get_bytes(&parse_url(&format!("{url}.sha1"))?, ResourceKind::Loader)
         .await
     {
-        Ok(b) => {
-            let s = String::from_utf8_lossy(&b).trim().to_ascii_lowercase();
-            let s: String = s.chars().take(40).collect();
-            (s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())).then_some(s)
-        }
+        Ok(b) => Some(parse_sha1_file(&b).ok_or_else(|| {
+            AppError::new(ErrorCode::HashMismatch, "installer .sha1 is not a SHA-1")
+                .detail("url", format!("{url}.sha1"))
+        })?),
         Err(e) if e.code == ErrorCode::NotFound => {
             return Err(AppError::new(ErrorCode::NotFound, "loader build not found")
                 .detail("url", url.as_str()));
@@ -341,6 +340,13 @@ async fn fetch_installer(
     let staged = StageSink::new(sink, "stages.loaderInstaller");
     ctx.downloader.fetch_many(vec![req], &staged).await?;
     Ok(dest)
+}
+
+/// First token of a `.sha1` sidecar if it is a 40-char hex digest.
+pub(crate) fn parse_sha1_file(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let s = text.split_whitespace().next()?.to_ascii_lowercase();
+    (s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())).then_some(s)
 }
 
 fn open_zip(path: &Path) -> AppResult<zip::ZipArchive<std::fs::File>> {
@@ -862,6 +868,18 @@ async fn install_legacy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sha1_sidecar_parsing() {
+        let h = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+        assert_eq!(parse_sha1_file(h.as_bytes()).as_deref(), Some(h));
+        assert_eq!(
+            parse_sha1_file(format!("{}  forge.jar\n", h.to_uppercase()).as_bytes()).as_deref(),
+            Some(h)
+        );
+        assert_eq!(parse_sha1_file(b"<html>blocked</html>"), None);
+        assert_eq!(parse_sha1_file(b""), None);
+    }
 
     #[test]
     fn neoforge_prefixes() {

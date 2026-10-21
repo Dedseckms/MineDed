@@ -35,6 +35,32 @@ const ALLOWED_HOSTS: [&str; 6] = [
     "mediafilez.forgecdn.net",
 ];
 
+/// Unpacking limits for untrusted archives.
+const MAX_ENTRIES: usize = 20_000;
+const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// JVM args accepted from a foreign launcher zip: heap, `-XX:` (except
+/// command hooks) and `-D` properties. Everything else is dropped and logged.
+pub(crate) fn safe_jvm_args(args: &[String], sink: &dyn ProgressSink) -> Vec<String> {
+    args.iter()
+        .filter(|a| {
+            let ok = if let Some(xx) = a.strip_prefix("-XX:") {
+                let lower = xx.to_ascii_lowercase();
+                !(lower.contains("onerror")
+                    || lower.contains("onoutofmemoryerror")
+                    || lower.contains("command"))
+            } else {
+                a.starts_with("-Xms") || a.starts_with("-Xmx") || a.starts_with("-D")
+            };
+            if !ok {
+                sink.log(&format!("import: dropped JVM argument {a}"));
+            }
+            ok
+        })
+        .cloned()
+        .collect()
+}
+
 /// Game-dir folders never exported.
 const EXPORT_SKIP: [&str; 9] = [
     "logs",
@@ -324,7 +350,11 @@ fn read_entry(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> AppResult
 fn extract_prefix(path: &Path, prefix: &str, dest: &Path) -> AppResult<usize> {
     let mut zip = open_zip(path)?;
     let prefix = format!("{}/", prefix.trim_end_matches('/'));
+    if zip.len() > MAX_ENTRIES {
+        return Err(bad_pack("archive has too many entries"));
+    }
     let mut n = 0;
+    let mut total: u64 = 0;
     for i in 0..zip.len() {
         let mut e = zip.by_index(i).map_err(zip_err)?;
         let name = e.name().to_owned();
@@ -339,7 +369,16 @@ fn extract_prefix(path: &Path, prefix: &str, dest: &Path) -> AppResult<usize> {
             std::fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
         }
         let mut f = std::fs::File::create(&out).map_err(|e| io_err(&out, e))?;
-        std::io::copy(&mut e, &mut f).map_err(|e| io_err(&out, e))?;
+        // Real bytes are counted (declared sizes can lie).
+        let left = MAX_TOTAL_BYTES - total;
+        let copied =
+            std::io::copy(&mut (&mut e).take(left + 1), &mut f).map_err(|e| io_err(&out, e))?;
+        total += copied;
+        if copied > left {
+            drop(f);
+            let _ = std::fs::remove_file(&out);
+            return Err(bad_pack("archive is too large when unpacked"));
+        }
         n += 1;
     }
     Ok(n)
@@ -494,6 +533,9 @@ impl Inner {
                 .get("sha1")
                 .cloned()
                 .ok_or_else(|| bad_pack("mrpack file has no sha1").detail("path", &f.path))?;
+            if !f.hashes.contains_key("sha512") {
+                return Err(bad_pack("mrpack file has no sha512").detail("path", &f.path));
+            }
             safe_join(Path::new("game"), &f.path)?;
             planned.push((f.clone(), url, sha1));
         }
@@ -647,9 +689,13 @@ impl Inner {
             .update(
                 inst.id,
                 InstancePatch {
-                    java: Some(m.java),
+                    // Never trust an executable path from a foreign archive.
+                    java: Some(JavaCfg {
+                        path: None,
+                        major: m.java.major,
+                    }),
                     memory: Some(m.memory),
-                    jvm_args: Some(m.jvm_args),
+                    jvm_args: Some(safe_jvm_args(&m.jvm_args, sink)),
                     ..Default::default()
                 },
             )
@@ -837,6 +883,37 @@ mod tests {
         let v = serde_json::to_value(&idx).unwrap();
         assert_eq!(v["formatVersion"], 1);
         assert!(v["files"][0]["fileSize"].is_u64());
+    }
+
+    #[test]
+    fn foreign_jvm_args_are_filtered() {
+        let args: Vec<String> = [
+            "-Xmx4G",
+            "-Xms1G",
+            "-Dfoo=bar",
+            "-XX:+UseG1GC",
+            "-XX:OnOutOfMemoryError=calc.exe",
+            "-XX:OnError=cmd",
+            "-XX:+ShowCodeDetailsInExceptionMessages",
+            "-XX:AbortVMOnExceptionCommand=x",
+            "-javaagent:evil.jar",
+            "-agentpath:x.dll",
+            "-cp",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let out = safe_jvm_args(&args, &lc_runtime::NullSink::default());
+        assert_eq!(
+            out,
+            vec![
+                "-Xmx4G",
+                "-Xms1G",
+                "-Dfoo=bar",
+                "-XX:+UseG1GC",
+                "-XX:+ShowCodeDetailsInExceptionMessages"
+            ]
+        );
     }
 
     #[test]

@@ -57,7 +57,13 @@ pub(crate) async fn file_hashes(path: &Path) -> AppResult<(String, String)> {
 /// A bare file name (no separators, no `..`, no drive).
 pub(crate) fn check_file_name(name: &str) -> AppResult<&str> {
     let bad = || AppError::new(ErrorCode::InvalidInput, "bad file name").detail("file", name);
-    if name.is_empty() || name.len() > 255 || name.contains(['/', '\\', ':', '\0']) {
+    if name.is_empty()
+        || name.len() > 255
+        || name.contains(['/', '\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
+        || name.chars().any(|c| c.is_control())
+        || (name != "." && name != ".." && name.ends_with(['.', ' ']))
+        || is_reserved_windows_name(name)
+    {
         return Err(bad());
     }
     let mut c = Path::new(name).components();
@@ -65,6 +71,22 @@ pub(crate) fn check_file_name(name: &str) -> AppResult<&str> {
         (Some(Component::Normal(_)), None) => Ok(name),
         _ => Err(bad()),
     }
+}
+
+/// `CON`, `NUL`, `COM1.txt`... are device names on Windows.
+fn is_reserved_windows_name(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end()
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() == 4
+        && stem[3..].chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Joins a relative `/`-separated path under `root`, rejecting escapes.
@@ -136,6 +158,12 @@ mod tests {
         assert!(check_file_name("a/b.jar").is_err());
         assert!(check_file_name("..").is_err());
         assert!(check_file_name("C:x").is_err());
+        assert!(check_file_name("CON").is_err());
+        assert!(check_file_name("nul.txt").is_err());
+        assert!(check_file_name("COM1.jar").is_err());
+        assert!(check_file_name("trailing.").is_err());
+        assert!(check_file_name("console.jar").is_ok());
+        assert!(safe_join(Path::new("/g"), "config/aux.json").is_err());
         assert!(safe_join(Path::new("/g"), "config/a.toml").is_ok());
         assert!(safe_join(Path::new("/g"), "config/../../a").is_err());
     }
