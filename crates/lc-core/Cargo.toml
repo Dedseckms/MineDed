@@ -12,9 +12,23 @@ lc-http.workspace = true
 lc-accounts.workspace = true
 lc-loaders.workspace = true
 async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "io-util"] }
+sha1 = "0.10.6"
+hex = "0.4.3"
+regex = "1.11"
+chrono = { version = "0.4.41", default-features = false, features = ["clock", "std"] }
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 tokio.workspace = true
+tempfile = "3.20"
+# Only to name `reqwest::Client` in the mock `Downloader` (the mock delegates to `StubDownloader`).
+reqwest.workspace = true
 
 [lints]
 workspace = true
