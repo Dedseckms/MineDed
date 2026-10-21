@@ -4,17 +4,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lc_http::Downloader;
-use lc_runtime::Paths;
+use base64::Engine as _;
+use lc_http::{Downloader, Route};
+use lc_runtime::{MemorySettingsStore, Paths, SettingsStore};
 use lc_types::account::{Account, AccountKind, YggdrasilServer};
 use lc_types::{AccountId, AppError, AppResult, ErrorCode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::contract::{AccountService, AuthProvider, LaunchAuth, Secret, TokenStore, UserType};
+use crate::authlib::AuthlibManager;
+use crate::contract::{
+    AccountService, AuthProvider, AuthlibInjector, LaunchAuth, Secret, TokenStore, UserType,
+};
 use crate::fsutil::{read_optional, write_atomic};
 use crate::offline::{offline_uuid, random_access_token, validate_offline_name};
+use crate::yggdrasil::{self as ygg, Session};
 
 /// File with the account list in `Paths::root()`. Contains no secrets.
 pub const ACCOUNTS_FILE: &str = "accounts.json";
@@ -84,15 +89,24 @@ impl AccountsFile {
     }
 }
 
-/// Real `AccountService` + `AuthProvider`. Offline accounts are implemented;
-/// Yggdrasil is pending (needs the server), skins live in `StubSkins` for now.
+/// Real `AccountService` + `AuthProvider`: offline and Yggdrasil
+/// (authlib-injector) accounts. Yggdrasil tokens live in the `TokenStore`.
 pub struct AccountsService {
     file: PathBuf,
-    #[allow(dead_code)] // used by the Yggdrasil client (next task)
     downloader: Arc<dyn Downloader>,
     tokens: Arc<dyn TokenStore>,
+    settings: Arc<dyn SettingsStore>,
+    authlib: AuthlibManager,
     /// Serializes read-modify-write cycles of `accounts.json`.
     lock: Mutex<()>,
+}
+
+/// A Yggdrasil account with fresh (validated or refreshed) tokens.
+pub(crate) struct YggTarget {
+    pub root: Url,
+    pub session: Session,
+    pub uuid: String,
+    pub name: String,
 }
 
 impl std::fmt::Debug for AccountsService {
@@ -104,6 +118,8 @@ impl std::fmt::Debug for AccountsService {
 }
 
 impl AccountsService {
+    /// authlib-injector is cached in `Paths::cache()`. Without
+    /// [`Self::with_settings`] the own server is [`ygg::DEFAULT_API_ROOT`].
     pub fn new(
         paths: &Paths,
         downloader: Arc<dyn Downloader>,
@@ -113,8 +129,175 @@ impl AccountsService {
             file: paths.root().join(ACCOUNTS_FILE),
             downloader,
             tokens: token_store,
+            settings: Arc::new(MemorySettingsStore::default()),
+            authlib: AuthlibManager::new(paths.cache().join("authlib-injector")),
             lock: Mutex::new(()),
         }
+    }
+
+    /// Settings source for `skin_server` (own server API root, read on every call).
+    pub fn with_settings(mut self, settings: Arc<dyn SettingsStore>) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// Replaces the authlib-injector source (tests, self-hosted mirror).
+    pub fn with_authlib(mut self, authlib: AuthlibManager) -> Self {
+        self.authlib = authlib;
+        self
+    }
+
+    pub(crate) fn http(&self) -> reqwest::Client {
+        self.downloader.client(Route::Auto)
+    }
+
+    /// Own server API root: `Settings.skin_server` or [`ygg::DEFAULT_API_ROOT`].
+    pub async fn own_api_root(&self) -> AppResult<Url> {
+        let configured = self.settings.get().await?.skin_server;
+        match configured.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => ygg::parse_server_input(s),
+            _ => ygg::parse_server_input(ygg::DEFAULT_API_ROOT),
+        }
+    }
+
+    async fn load_session(&self, id: AccountId) -> AppResult<Option<Session>> {
+        let Some(secret) = self.tokens.get(&token_key(id)).await? else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str(secret.expose()).ok())
+    }
+
+    async fn store_session(&self, id: AccountId, s: &Session) -> AppResult<()> {
+        let json = serde_json::to_string(s)
+            .map_err(|e| AppError::internal(format!("serialize session: {e}")))?;
+        self.tokens.set(&token_key(id), &Secret::new(json)).await
+    }
+
+    /// Applies `f` to a stored account and saves (no-op if it vanished).
+    async fn update_account(
+        &self,
+        id: AccountId,
+        f: impl FnOnce(&mut StoredAccount),
+    ) -> AppResult<()> {
+        let _g = self.lock.lock().await;
+        let mut data = self.load()?;
+        if let Some(a) = data.accounts.iter_mut().find(|a| a.id == id) {
+            f(a);
+            self.save(&data)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn set_skin_url(&self, id: AccountId, url: Option<String>) -> AppResult<()> {
+        self.update_account(id, move |a| a.skin_url = url).await
+    }
+
+    async fn find(&self, id: Option<AccountId>) -> AppResult<StoredAccount> {
+        let data = {
+            let _g = self.lock.lock().await;
+            self.load()?
+        };
+        let id = match id.or(data.default) {
+            Some(id) => id,
+            None => return Err(AppError::new(ErrorCode::AuthRequired, "no account")),
+        };
+        data.accounts
+            .into_iter()
+            .find(|a| a.id == id)
+            .ok_or_else(|| Self::not_found(id))
+    }
+
+    async fn expired(&self, id: AccountId) -> AppError {
+        if let Err(e) = self.update_account(id, |a| a.valid = false).await {
+            tracing::warn!(account = %id, error = %e.message, "cannot mark account invalid");
+        }
+        AppError::new(ErrorCode::AuthExpired, "session expired, log in again")
+            .detail("account", id.to_string())
+    }
+
+    /// Yggdrasil account with working tokens: `validate`, else `refresh`,
+    /// else `AuthExpired` (and the account is marked invalid).
+    pub(crate) async fn ygg_target(&self, id: Option<AccountId>) -> AppResult<YggTarget> {
+        let acc = self.find(id).await?;
+        if acc.kind != AccountKind::Yggdrasil {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "account has no skin server",
+            ));
+        }
+        let root = acc
+            .server
+            .as_deref()
+            .ok_or_else(|| AppError::internal("yggdrasil account without server"))
+            .and_then(ygg::parse_server_input)?;
+        let Some(mut session) = self.load_session(acc.id).await? else {
+            return Err(self.expired(acc.id).await);
+        };
+        let client = self.http();
+        let mut name = acc.name.clone();
+        if !ygg::validate(&client, &root, &session).await? {
+            match ygg::refresh(&client, &root, &session, None).await? {
+                Some((s, profile)) => {
+                    session = s;
+                    self.store_session(acc.id, &session).await?;
+                    if let Some(p) = profile {
+                        name = p.name;
+                    }
+                }
+                None => return Err(self.expired(acc.id).await),
+            }
+        }
+        if !acc.valid || name != acc.name {
+            let n = name.clone();
+            self.update_account(acc.id, move |a| {
+                a.valid = true;
+                a.name = n;
+            })
+            .await?;
+        }
+        Ok(YggTarget {
+            root,
+            session,
+            uuid: acc.uuid,
+            name,
+        })
+    }
+
+    /// Adds or updates (same server + profile) a Yggdrasil account.
+    async fn upsert_yggdrasil(
+        &self,
+        root: &Url,
+        session: &Session,
+        profile: &ygg::GameProfile,
+    ) -> AppResult<Account> {
+        let uuid = profile.dashed_uuid()?;
+        let server = root.as_str().to_owned();
+        let _g = self.lock.lock().await;
+        let mut data = self.load()?;
+        let existing = data.accounts.iter().position(|a| {
+            a.kind == AccountKind::Yggdrasil
+                && a.server.as_deref() == Some(server.as_str())
+                && a.uuid == uuid
+        });
+        let id = existing.map_or_else(AccountId::new, |i| data.accounts[i].id);
+        // Token first: an account without a token would be unusable.
+        self.store_session(id, session).await?;
+        let account = StoredAccount {
+            id,
+            kind: AccountKind::Yggdrasil,
+            name: profile.name.clone(),
+            uuid,
+            server: Some(server),
+            skin_url: existing.and_then(|i| data.accounts[i].skin_url.clone()),
+            valid: true,
+        };
+        match existing {
+            Some(i) => data.accounts[i] = account.clone(),
+            None => data.accounts.push(account.clone()),
+        }
+        data.fix_default();
+        self.save(&data)?;
+        Ok(data.to_dto(&account))
     }
 
     fn load(&self) -> AppResult<AccountsFile> {
@@ -181,29 +364,49 @@ impl AccountService for AccountsService {
         Ok(data.to_dto(&account))
     }
 
+    /// `api_root` may be just the domain: the real root is found via ALI.
     async fn yggdrasil_login(
         &self,
-        _api_root: &Url,
-        _username: &str,
-        _password: &str,
+        api_root: &Url,
+        username: &str,
+        password: &str,
     ) -> AppResult<Account> {
-        Err(AppError::not_implemented("AccountService::yggdrasil_login"))
+        let username = check_credentials(username, password)?;
+        let client = self.http();
+        let (root, _meta) = ygg::discover(&client, api_root).await?;
+        let (session, profile) =
+            ygg::authenticate(&client, &root, username, password, &random_access_token()).await?;
+        self.upsert_yggdrasil(&root, &session, &profile).await
     }
 
+    /// Drasl `POST /drasl/api/v3/users` with the invite, then a normal login.
     async fn yggdrasil_register(
         &self,
-        _api_root: &Url,
-        _invite: &str,
-        _username: &str,
-        _password: &str,
+        api_root: &Url,
+        invite: &str,
+        username: &str,
+        password: &str,
     ) -> AppResult<Account> {
-        Err(AppError::not_implemented(
-            "AccountService::yggdrasil_register",
-        ))
+        let username = check_credentials(username, password)?;
+        let client = self.http();
+        let (root, _meta) = ygg::discover(&client, api_root).await?;
+        ygg::drasl_register(&client, &root, invite, username, password).await?;
+        self.yggdrasil_login(&root, username, password).await
     }
 
     async fn yggdrasil_servers(&self) -> AppResult<Vec<YggdrasilServer>> {
-        Ok(Vec::new())
+        Ok(vec![
+            YggdrasilServer {
+                name: "MineUP".into(),
+                api_root: self.own_api_root().await?.to_string(),
+                official: true,
+            },
+            YggdrasilServer {
+                name: "Ely.by".into(),
+                api_root: ygg::ELY_BY_API_ROOT.into(),
+                official: false,
+            },
+        ])
     }
 
     async fn remove(&self, id: AccountId) -> AppResult<()> {
@@ -212,6 +415,16 @@ impl AccountService for AccountsService {
         let Some(pos) = data.accounts.iter().position(|a| a.id == id) else {
             return Err(Self::not_found(id));
         };
+        // Best-effort server logout; never blocks removal.
+        if data.accounts[pos].kind == AccountKind::Yggdrasil {
+            let root = data.accounts[pos]
+                .server
+                .as_deref()
+                .and_then(|s| ygg::parse_server_input(s).ok());
+            if let (Some(root), Ok(Some(s))) = (root, self.load_session(id).await) {
+                ygg::invalidate(&self.http(), &root, &s).await;
+            }
+        }
         // Drop the secret first so a failure never leaves an orphaned token behind.
         // Offline accounts have no token, so a broken store must not block their removal.
         if let Err(e) = self.tokens.delete(&token_key(id)).await {
@@ -239,20 +452,10 @@ impl AccountService for AccountsService {
 
 #[async_trait]
 impl AuthProvider for AccountsService {
+    /// Yggdrasil: validate → refresh → `AuthExpired`; then authlib-injector
+    /// jar + prefetched metadata (`-javaagent` is added by core).
     async fn launch_auth(&self, account: Option<AccountId>) -> AppResult<LaunchAuth> {
-        let data = {
-            let _g = self.lock.lock().await;
-            self.load()?
-        };
-        let id = match account.or(data.default) {
-            Some(id) => id,
-            None => return Err(AppError::new(ErrorCode::AuthRequired, "no account")),
-        };
-        let acc = data
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or_else(|| Self::not_found(id))?;
+        let acc = self.find(account).await?;
         match acc.kind {
             AccountKind::Offline => Ok(LaunchAuth {
                 name: acc.name.clone(),
@@ -261,11 +464,43 @@ impl AuthProvider for AccountsService {
                 user_type: UserType::Legacy,
                 authlib: None,
             }),
-            AccountKind::Yggdrasil => Err(AppError::not_implemented(
-                "AuthProvider::launch_auth for Yggdrasil accounts",
-            )),
+            AccountKind::Yggdrasil => {
+                let t = self.ygg_target(Some(acc.id)).await?;
+                let client = self.http();
+                let jar = self.authlib.ensure(&client).await?;
+                let meta = ygg::fetch_metadata(&client, &t.root).await?;
+                Ok(LaunchAuth {
+                    name: t.name,
+                    uuid: t.uuid,
+                    access_token: Secret::new(t.session.access_token),
+                    user_type: UserType::Mojang,
+                    authlib: Some(AuthlibInjector {
+                        jar,
+                        api_root: t.root,
+                        prefetched: Some(base64::engine::general_purpose::STANDARD.encode(meta)),
+                    }),
+                })
+            }
         }
     }
+}
+
+/// Trimmed non-empty username + non-empty password.
+fn check_credentials<'a>(username: &'a str, password: &str) -> AppResult<&'a str> {
+    let username = username.trim();
+    if username.is_empty() || username.len() > 256 {
+        return Err(
+            AppError::new(ErrorCode::InvalidInput, "username is required")
+                .detail("field", "username"),
+        );
+    }
+    if password.is_empty() {
+        return Err(
+            AppError::new(ErrorCode::InvalidInput, "password is required")
+                .detail("field", "password"),
+        );
+    }
+    Ok(username)
 }
 
 #[cfg(test)]
@@ -461,14 +696,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn yggdrasil_is_stubbed() {
+    async fn yggdrasil_servers_use_settings() {
+        let dir = TempDir::new();
+        let settings = Arc::new(lc_runtime::MemorySettingsStore::default());
+        let svc = AccountsService::new(&Paths::new(dir.path()), Arc::new(StubDownloader), mem())
+            .with_settings(settings.clone());
+        let list = svc.yggdrasil_servers().await.unwrap();
+        assert_eq!(list[0].api_root, ygg::DEFAULT_API_ROOT);
+        assert!(list[0].official && !list[1].official);
+
+        let mut s = settings.get().await.unwrap();
+        s.skin_server = Some("my.host".into());
+        settings.set(s).await.unwrap();
+        let list = svc.yggdrasil_servers().await.unwrap();
+        assert_eq!(list[0].api_root, "https://my.host/");
+    }
+
+    #[tokio::test]
+    async fn credentials_are_validated_before_network() {
         let dir = TempDir::new();
         let svc = service(&dir, mem());
-        let url = Url::parse("https://example.invalid/api/yggdrasil").unwrap();
-        assert_eq!(
-            svc.yggdrasil_login(&url, "u", "p").await.unwrap_err().code,
-            ErrorCode::NotImplemented
-        );
-        assert!(svc.yggdrasil_servers().await.unwrap().is_empty());
+        let url = Url::parse("https://example.invalid/").unwrap();
+        for (u, p) in [("", "p"), ("  ", "p"), ("u", "")] {
+            assert_eq!(
+                svc.yggdrasil_login(&url, u, p).await.unwrap_err().code,
+                ErrorCode::InvalidInput
+            );
+        }
     }
 }
