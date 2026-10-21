@@ -14,7 +14,9 @@ import { useNavStore } from "../../stores/navStore";
 import { selectVisibleTasks, useTaskStore } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 import { CloneInstanceDialog } from "./CloneInstanceDialog";
+import { InstancePage } from "../content/InstancePage";
 import { CreateInstanceDialog } from "./CreateInstanceDialog";
+import { ImportDialog } from "./ImportDialog";
 import { InstanceSettingsDialog } from "./InstanceSettingsDialog";
 
 function GameDirRow({ id }: { id: string }) {
@@ -60,6 +62,7 @@ function InstanceCard({
   const { t, i18n } = useTranslation();
   const go = useNavStore((s) => s.go);
   const select = useNavStore((s) => s.selectPlayInstance);
+  const showInstance = useNavStore((s) => s.showInstance);
   const state = useGameStore((s) => s.runs[instance.id]?.state);
   const [showDir, setShowDir] = useState(false);
   const hours = Math.floor(instance.playtimeSec / 3600);
@@ -68,7 +71,11 @@ function InstanceCard({
     <Card className="flex flex-col">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h3 className="truncate font-semibold">{instance.name}</h3>
+          <h3 className="truncate font-semibold">
+            <button type="button" className="cursor-pointer truncate hover:underline" onClick={() => showInstance(instance.id)}>
+              {instance.name}
+            </button>
+          </h3>
           <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
             <Badge>{instance.mc}</Badge>
             <Badge>{t(`loader.${instance.loader.kind}`)}</Badge>
@@ -96,6 +103,9 @@ function InstanceCard({
         </Button>
       </div>
       <div className="mt-3 flex flex-wrap gap-1">
+        <Button size="sm" variant="ghost" icon={<Icon name="box" />} onClick={() => showInstance(instance.id)}>
+          {t("instances.content")}
+        </Button>
         <Button size="sm" variant="ghost" icon={<Icon name="sliders" />} onClick={onSettings}>
           {t("instances.settings")}
         </Button>
@@ -128,16 +138,24 @@ function InstanceCard({
 }
 
 export function InstancesScreen() {
+  const openInstance = useNavStore((s) => s.openInstance);
+  return openInstance ? <InstancePage id={openInstance} /> : <InstanceLibrary />;
+}
+
+const LIBRARY_TASKS = new Set(["instanceCreate", "instanceImport"]);
+
+function InstanceLibrary() {
   const { t } = useTranslation();
   const instances = useInstances();
   const del = useDeleteInstance();
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [editing, setEditing] = useState<Instance | null>(null);
   const [cloning, setCloning] = useState<Instance | null>(null);
   const [deleting, setDeleting] = useState<Instance | null>(null);
   const pending = useTaskStore(
     useShallow((s) =>
-      selectVisibleTasks(s).filter((x) => x.kind === "instanceCreate" && x.status !== "succeeded"),
+      selectVisibleTasks(s).filter((x) => x.kind !== null && LIBRARY_TASKS.has(x.kind) && x.status !== "succeeded"),
     ),
   );
 
@@ -148,9 +166,14 @@ export function InstancesScreen() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted">{t("instances.count", { count: instances.data?.length ?? 0 })}</p>
-        <Button variant="primary" icon={<Icon name="plus" />} onClick={() => setCreating(true)}>
-          {t("instances.create")}
-        </Button>
+        <div className="flex gap-2">
+          <Button icon={<Icon name="download" />} onClick={() => setImporting(true)}>
+            {t("import.button")}
+          </Button>
+          <Button variant="primary" icon={<Icon name="plus" />} onClick={() => setCreating(true)}>
+            {t("instances.create")}
+          </Button>
+        </div>
       </div>
 
       {pending.map((task) => (
@@ -190,6 +213,7 @@ export function InstancesScreen() {
       )}
 
       <CreateInstanceDialog open={creating} onClose={() => setCreating(false)} />
+      <ImportDialog open={importing} onClose={() => setImporting(false)} />
       <InstanceSettingsDialog instance={editingFresh} onClose={() => setEditing(null)} />
       <CloneInstanceDialog source={cloning} onClose={() => setCloning(null)} />
       <ConfirmDialog

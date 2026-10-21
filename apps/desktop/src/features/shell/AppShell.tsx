@@ -14,11 +14,13 @@ import { AccountsScreen } from "../accounts/AccountsScreen";
 import { InstancesScreen } from "../instances/InstancesScreen";
 import { PlayScreen } from "../play/PlayScreen";
 import { SettingsScreen } from "../settings/SettingsScreen";
+import { SkinsScreen } from "../skins/SkinsScreen";
 import { TaskCenter } from "./TaskCenter";
 
 const ICONS: Record<Section, IconName> = {
   play: "play",
   instances: "layers",
+  skins: "shirt",
   accounts: "user",
   settings: "settings",
 };
@@ -26,6 +28,7 @@ const ICONS: Record<Section, IconName> = {
 const SCREENS: Record<Section, ComponentType> = {
   play: PlayScreen,
   instances: InstancesScreen,
+  skins: SkinsScreen,
   accounts: AccountsScreen,
   settings: SettingsScreen,
 };

@@ -1,0 +1,108 @@
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+
+import type { Instance, PackFormat } from "../../bindings";
+import { api } from "../../api/client";
+import { useStartTask } from "../../api/queries";
+import { Button } from "../../components/ui/Button";
+import { Modal } from "../../components/ui/Modal";
+import { Field, Segmented, TextInput } from "../../components/ui/form";
+import { ErrorMessage } from "../../components/ui/feedback";
+import { PACK_FORMATS, packExt, withPackExt } from "../../lib/content";
+import { validateFilePath } from "../../lib/validation";
+import { useTaskView } from "../../stores/taskStore";
+import { TaskProgress } from "../tasks/TaskProgress";
+
+export function ExportDialog({ instance, onClose }: { instance: Instance | null; onClose: () => void }) {
+  const { t } = useTranslation();
+  const [format, setFormat] = useState<PackFormat>("mrpack");
+  const [path, setPath] = useState("");
+  const [touched, setTouched] = useState(false);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const task = useTaskView(taskId);
+  const exp = useStartTask<{ id: string; format: PackFormat; path: string }>({
+    run: (v, ch) => api.instanceExport(v.id, v.format, v.path, ch),
+  });
+
+  const open = instance !== null;
+  const resetExp = exp.reset;
+  useEffect(() => {
+    if (!open) return;
+    setPath("");
+    setTouched(false);
+    setTaskId(null);
+    resetExp();
+  }, [open, resetExp]);
+
+  const error = validateFilePath(path, [packExt(format)]);
+  const running = exp.isPending || task?.status === "running";
+  const done = task?.status === "succeeded";
+
+  const submit = () => {
+    setTouched(true);
+    if (error || !instance) return;
+    exp.mutate({ id: instance.id, format, path: path.trim() }, { onSuccess: setTaskId });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t("export.title", { name: instance?.name ?? "" })}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            {done ? t("common.close") : t("common.cancel")}
+          </Button>
+          {!done ? (
+            <Button variant="primary" type="submit" form="export-instance" loading={running} disabled={touched && !!error}>
+              {t("instances.export")}
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      <form
+        id="export-instance"
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-medium">{t("export.format")}</span>
+          <Segmented<PackFormat>
+            ariaLabel={t("export.format")}
+            value={format}
+            onChange={(f) => {
+              setFormat(f);
+              setPath((p) => withPackExt(p, f));
+            }}
+            options={PACK_FORMATS.map((f) => ({ value: f, label: t(`export.formats.${f}`) }))}
+          />
+          <p className="text-xs text-muted">{t(`export.formatHint.${format}`)}</p>
+        </div>
+        <Field label={t("export.path")} error={touched ? error : null} hint={t("export.pathHint")}>
+          {(id, d, inv) => (
+            <TextInput
+              id={id}
+              aria-describedby={d}
+              invalid={inv}
+              value={path}
+              placeholder={t(`export.pathPlaceholder.${format}`)}
+              onChange={(e) => setPath(e.target.value)}
+              onBlur={() => {
+                setTouched(true);
+                if (path.trim() !== "" && !/\.(mrpack|zip)$/i.test(path.trim())) setPath(withPackExt(path, format));
+              }}
+            />
+          )}
+        </Field>
+        {task ? <TaskProgress task={task} /> : null}
+        {done ? <p className="text-sm text-accent">{t("export.done", { path: path.trim() })}</p> : null}
+        <ErrorMessage error={exp.error} />
+      </form>
+    </Modal>
+  );
+}

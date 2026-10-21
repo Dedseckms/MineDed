@@ -9,7 +9,8 @@
     "play": "Play",
     "instances": "Instances",
     "accounts": "Accounts",
-    "settings": "Settings"
+    "settings": "Settings",
+    "skins": "Skins"
   },
   "header": {
     "accountHint": "Go to accounts",
@@ -24,7 +25,9 @@
     "copy": "Copy",
     "copied": "Copied",
     "soon": "Soon",
-    "optional": "Optional"
+    "optional": "Optional",
+    "close": "Close",
+    "copyLink": "Copy link"
   },
   "play": {
     "play": "Play",
@@ -75,7 +78,14 @@
     "playtime_other": "{{count}} hours played",
     "empty": "No instances yet",
     "deleteTitle": "Delete instance?",
-    "deleteMessage": "Instance “{{name}}” and all its files (worlds, mods, settings) will be permanently deleted."
+    "deleteMessage": "Instance “{{name}}” and all its files (worlds, mods, settings) will be permanently deleted.",
+    "content": "Content",
+    "export": "Export",
+    "loaderVersion": "Loader version",
+    "loaderVersionHint": "The recommended build is selected by default",
+    "noLoaderBuilds": "This loader has no builds for the selected Minecraft version",
+    "recommended": "recommended",
+    "unstable": "beta"
   },
   "versionKind": {
     "release": "Releases",
@@ -127,7 +137,13 @@
       "username": "Login or e-mail",
       "password": "Password",
       "server": "Server: {{name}}",
-      "login": "Sign in"
+      "login": "Sign in",
+      "mode": "Sign in or register",
+      "register": "Register",
+      "invite": "Invite code",
+      "inviteHint": "Get it from the server owner",
+      "confirm": "Repeat password",
+      "noServer": "Server is not configured — set its address in Settings"
     }
   },
   "settings": {
@@ -168,6 +184,12 @@
       },
       "username": "Username",
       "password": "Password"
+    },
+    "skinServer": {
+      "title": "Account server",
+      "url": "Server address",
+      "hint": "API root of your skin/account server (authlib-injector). Empty = MineUP default.",
+      "placeholder": "https://auth.example.com/api/yggdrasil"
     }
   },
   "tasks": {
@@ -213,7 +235,9 @@
     "mbps": "MB/s",
     "gbps": "GB/s",
     "mb": "{{value}} MB",
-    "gb": "{{value}} GB"
+    "gb": "{{value}} GB",
+    "b": "{{value}} B",
+    "kb": "{{value}} KB"
   },
   "validation": {
     "required": "Required",
@@ -227,7 +251,8 @@
     },
     "path": {
       "chars": "The path contains invalid characters",
-      "absolute": "Enter a full path (e.g. C:\\Games or /home/user/games)"
+      "absolute": "Enter a full path (e.g. C:\\Games or /home/user/games)",
+      "ext": "Unsupported file type"
     },
     "memory": {
       "minTooLow": "Minimum is 512 MB",
@@ -243,6 +268,18 @@
       "port": "Port must be a number from 1 to 65535",
       "credLength": "255 characters at most",
       "usernameRequired": "Enter a username when a password is set"
+    },
+    "url": {
+      "scheme": "The address must start with https:// or http://",
+      "invalid": "Invalid address"
+    },
+    "skinName": {
+      "length": "32 characters at most"
+    },
+    "invite": "Invalid invite code",
+    "password": {
+      "short": "At least 8 characters",
+      "mismatch": "Passwords don't match"
     }
   },
   "errors": {
@@ -262,5 +299,188 @@
     "permissionDenied": "Permission denied.",
     "notImplemented": "Not available yet.",
     "internal": "Internal error. See the logs for details."
+  },
+  "import": {
+    "button": "Import",
+    "title": "Import modpack",
+    "submit": "Import",
+    "hint": "Supported: Modrinth .mrpack and CurseForge modpack .zip.",
+    "path": "Pack file",
+    "pathHint": "Full path to the file on this computer",
+    "pathPlaceholder": "C:\\Users\\me\\Downloads\\pack.mrpack"
+  },
+  "export": {
+    "title": "Export “{{name}}”",
+    "format": "Format",
+    "formats": {
+      "mrpack": "Modrinth (.mrpack)",
+      "curseForgeZip": "CurseForge (.zip)",
+      "launcherZip": "Full backup (.zip)"
+    },
+    "formatHint": {
+      "mrpack": "Mod list with download links plus configs — small file, imports into any Modrinth-compatible launcher.",
+      "curseForgeZip": "CurseForge manifest with overrides — for the CurseForge app and compatible launchers.",
+      "launcherZip": "The whole instance folder including worlds — for backups and moving to another PC."
+    },
+    "path": "Save to",
+    "pathHint": "Full path including the file name",
+    "pathPlaceholder": {
+      "mrpack": "C:\\Users\\me\\Desktop\\pack.mrpack",
+      "curseForgeZip": "C:\\Users\\me\\Desktop\\pack.zip",
+      "launcherZip": "C:\\Users\\me\\Desktop\\backup.zip"
+    },
+    "done": "Saved to {{path}}"
+  },
+  "preset": {
+    "button": "Optimization",
+    "title": "Optimization preset",
+    "hint": "The preset installs performance mods and adjusts game settings and memory. Your own mods are kept.",
+    "apply": "Apply",
+    "current": "Current",
+    "optional": "Optimization preset",
+    "none": "None",
+    "noneHint": "You can apply a preset later on the instance page",
+    "potato": {
+      "title": "Potato",
+      "description": "Maximum FPS on weak PCs: short render distance, simple graphics, minimum memory."
+    },
+    "balanced": {
+      "title": "Balanced",
+      "description": "Optimization mods with near-vanilla visuals. Good for most computers."
+    },
+    "quality": {
+      "title": "Quality",
+      "description": "Long render distance and nicer visuals; prepared for shaders. Needs a good GPU."
+    }
+  },
+  "content": {
+    "back": "All instances",
+    "install": "Install",
+    "installed": "Installed",
+    "by": "by {{author}}",
+    "downloads": "{{count}} downloads",
+    "manualBadge": "Manual download",
+    "results": "Showing {{shown}} of {{total}}",
+    "noResults": "Nothing found. Try another query or turn off the compatibility filter.",
+    "loadMore": "Load more",
+    "end": "That's all",
+    "vanillaMods": "This is a vanilla instance: mods need a loader (Fabric, Quilt, Forge or NeoForge). Create an instance with a loader.",
+    "updateAvailable": "Update",
+    "updates_one": "{{count}} update available",
+    "updates_other": "{{count}} updates available",
+    "updateAll": "Update all",
+    "browse": "Find more",
+    "filterInstalled": "Filter installed",
+    "enabledCount": "{{enabled}} of {{total}} enabled",
+    "noMatches": "No matches",
+    "emptyKind": {
+      "mod": "No mods installed",
+      "resourcePack": "No resource packs installed",
+      "shader": "No shader packs installed"
+    },
+    "removeTitle": "Remove file?",
+    "removeMessage": "“{{name}}” will be deleted from the instance.",
+    "removeNamed": "Remove {{name}}",
+    "enable": "Enable {{name}}",
+    "disable": "Disable {{name}}",
+    "source": {
+      "modrinth": "Modrinth",
+      "curseForge": "CurseForge",
+      "local": "Local file"
+    },
+    "kind": {
+      "mod": "Mods",
+      "resourcePack": "Resource packs",
+      "shader": "Shaders",
+      "dataPack": "Data packs",
+      "modpack": "Modpacks"
+    },
+    "sort": {
+      "relevance": "Relevance",
+      "downloads": "Downloads",
+      "updated": "Recently updated",
+      "newest": "Newest"
+    },
+    "filters": {
+      "source": "Source",
+      "kind": "Content type",
+      "sort": "Sort",
+      "search": "Search",
+      "searchPlaceholder": "Search by name or description",
+      "compatible": "Compatible only",
+      "compatibleHint": "Minecraft {{mc}}",
+      "compatibleHintLoader": "Minecraft {{mc}} · {{loader}}"
+    },
+    "tabs": {
+      "label": "Instance content",
+      "mods": "Mods",
+      "resourcePacks": "Resource packs",
+      "shaders": "Shaders",
+      "browse": "Catalog"
+    },
+    "versions": {
+      "title": "Versions",
+      "showAll": "Show all versions",
+      "compatibleHint": "By default only versions for {{mc}} · {{loader}} are listed",
+      "none": "No compatible versions"
+    },
+    "plan": {
+      "title": "Installation plan",
+      "resolving": "Resolving dependencies…",
+      "install_one": "Install {{count}} file · {{size}}",
+      "install_other": "Install {{count}} files · {{size}}",
+      "conflicts": "Conflicts",
+      "conflict": "“{{a}}” is incompatible with “{{b}}”",
+      "conflictsHint": "Remove or disable the conflicting mod and try again.",
+      "toInstall": "Will be installed",
+      "dependency": "dependency",
+      "manual": "Manual download",
+      "manualHint": "The authors do not allow these files to be downloaded by launchers. Open the page, download the file and put it into the instance folder.",
+      "openPage": "Open download page",
+      "already": "Already installed: {{list}}",
+      "nothing": "Everything is already installed."
+    },
+    "shaders": {
+      "hintTitle": "Shaders need a shader loader",
+      "vanillaWarning": "Shaders don't work in a vanilla instance. Create an instance with Fabric/Quilt/NeoForge (Iris) or Forge (Oculus).",
+      "missingLoader": "{{loader}} is not installed — shader packs will not load without it.",
+      "ready": "{{loader}} is installed: enable a shader pack in the game's video settings.",
+      "installLoader": "Install {{loader}}",
+      "optifine": "OptiFine can't be installed automatically — its license forbids redistribution.",
+      "optifineLink": "Download OptiFine manually",
+      "loaderName": {
+        "iris": "Iris",
+        "oculus": "Oculus"
+      }
+    }
+  },
+  "skins": {
+    "library": "Skin library",
+    "preview": "Preview",
+    "preview3d": "3D skin preview: drag to rotate",
+    "empty": "No skins yet — add a PNG below",
+    "path": "PNG file",
+    "pathHint": "64×64 or 64×32 skin texture; full path to the file",
+    "pathPlaceholder": "C:\\Users\\me\\Pictures\\skin.png",
+    "name": "Name",
+    "namePlaceholder": "My skin",
+    "model": "Model",
+    "models": {
+      "classic": "Classic (Steve)",
+      "slim": "Slim (Alex)"
+    },
+    "add": "Add to library",
+    "addTitle": "Add a skin",
+    "localOnly": "Local",
+    "cape": "Cape",
+    "noCape": "No cape",
+    "noCapes": "This account has no capes",
+    "account": "Account",
+    "apply": "Apply to account",
+    "applied": "Applied",
+    "noAccounts": "Add an account to apply skins",
+    "selectHint": "Select a skin",
+    "removeTitle": "Delete skin?",
+    "removeMessage": "“{{name}}” will be removed from the library."
   }
 }

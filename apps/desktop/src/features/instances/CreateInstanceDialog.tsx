@@ -1,30 +1,50 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { LoaderKind, VersionKind } from "../../bindings";
+import type { LoaderKind, PerfPreset, VersionKind } from "../../bindings";
 import { api } from "../../api/client";
-import { qk, useStartTask, useVersions } from "../../api/queries";
+import { qk, useLoaderVersions, useStartTask, useVersions } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/form";
-import { Badge, ErrorMessage } from "../../components/ui/feedback";
+import { ErrorMessage } from "../../components/ui/feedback";
+import { pickLoaderVersion } from "../../lib/content";
 import { validateInstanceName } from "../../lib/validation";
+import { PRESETS } from "./PresetDialog";
 
 const LOADERS: LoaderKind[] = ["vanilla", "fabric", "quilt", "forge", "neoForge"];
 type KindFilter = Extract<VersionKind, "release" | "snapshot">;
+
+interface CreateVars {
+  name: string;
+  mc: string;
+  loader: LoaderKind;
+  loaderVersion: string | null;
+  preset: PerfPreset | null;
+}
 
 export function CreateInstanceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [kind, setKind] = useState<KindFilter>("release");
   const [mc, setMc] = useState("");
+  const [loader, setLoader] = useState<LoaderKind>("vanilla");
+  const [loaderVersion, setLoaderVersion] = useState("");
+  const [preset, setPreset] = useState<PerfPreset | "">("");
   const [touched, setTouched] = useState(false);
   const versions = useVersions([kind]);
+  const loaderVersions = useLoaderVersions(loader, mc);
 
-  const create = useStartTask<{ name: string; mc: string }>({
+  const create = useStartTask<CreateVars>({
     run: (v, ch) =>
       api.instanceCreate(
-        { name: v.name, mc: v.mc, loader: { kind: "vanilla", version: null }, preset: null, icon: null },
+        {
+          name: v.name,
+          mc: v.mc,
+          loader: { kind: v.loader, version: v.loader === "vanilla" ? null : v.loaderVersion },
+          preset: v.preset,
+          icon: null,
+        },
         ch,
       ),
     invalidate: [qk.instances],
@@ -36,22 +56,42 @@ export function CreateInstanceDialog({ open, onClose }: { open: boolean; onClose
     if (!list.some((v) => v.id === mc)) setMc(list[0]?.id ?? "");
   }, [versions.data, mc]);
 
+  // Default loader build: recommended → stable → newest.
+  useEffect(() => {
+    const list = loaderVersions.data ?? [];
+    if (!list.some((v) => v.version === loaderVersion)) setLoaderVersion(pickLoaderVersion(list) ?? "");
+  }, [loaderVersions.data, loaderVersion]);
+
   const resetCreate = create.reset;
   useEffect(() => {
     if (open) {
       setName("");
       setTouched(false);
+      setLoader("vanilla");
+      setPreset("");
       resetCreate();
     }
   }, [open, resetCreate]);
 
   const nameError = validateInstanceName(name);
-  const canSubmit = nameError === null && mc !== "" && !create.isPending;
+  const needsLoaderVersion = loader !== "vanilla";
+  const noLoaderBuilds = needsLoaderVersion && loaderVersions.isSuccess && loaderVersions.data.length === 0;
+  const loaderReady = !needsLoaderVersion || loaderVersion !== "";
+  const canSubmit = nameError === null && mc !== "" && loaderReady && !create.isPending;
 
   const submit = () => {
     setTouched(true);
     if (!canSubmit) return;
-    create.mutate({ name: name.trim(), mc }, { onSuccess: onClose });
+    create.mutate(
+      {
+        name: name.trim(),
+        mc,
+        loader,
+        loaderVersion: needsLoaderVersion ? loaderVersion : null,
+        preset: preset === "" ? null : preset,
+      },
+      { onSuccess: onClose },
+    );
   };
 
   return (
@@ -64,7 +104,13 @@ export function CreateInstanceDialog({ open, onClose }: { open: boolean; onClose
           <Button variant="ghost" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button variant="primary" type="submit" form="create-instance" disabled={!canSubmit && touched} loading={create.isPending}>
+          <Button
+            variant="primary"
+            type="submit"
+            form="create-instance"
+            disabled={(!canSubmit && touched) || noLoaderBuilds}
+            loading={create.isPending}
+          >
             {t("instances.create")}
           </Button>
         </>
@@ -128,16 +174,51 @@ export function CreateInstanceDialog({ open, onClose }: { open: boolean; onClose
           <span className="text-sm font-medium">{t("instances.loader")}</span>
           <Segmented<LoaderKind>
             ariaLabel={t("instances.loader")}
-            value="vanilla"
-            onChange={() => {}}
-            options={LOADERS.map((l) => ({
-              value: l,
-              label: t(`loader.${l}`),
-              disabled: l !== "vanilla",
-              badge: l !== "vanilla" ? <Badge>{t("common.soon")}</Badge> : undefined,
-            }))}
+            value={loader}
+            onChange={setLoader}
+            options={LOADERS.map((l) => ({ value: l, label: t(`loader.${l}`) }))}
           />
         </div>
+        {needsLoaderVersion ? (
+          <Field
+            label={t("instances.loaderVersion")}
+            hint={noLoaderBuilds ? null : t("instances.loaderVersionHint")}
+            error={noLoaderBuilds ? "instances.noLoaderBuilds" : null}
+          >
+            {(id, d, inv) => (
+              <Select
+                id={id}
+                aria-describedby={d}
+                invalid={inv}
+                value={loaderVersion}
+                disabled={loaderVersions.isPending || noLoaderBuilds}
+                onChange={(e) => setLoaderVersion(e.target.value)}
+              >
+                {loaderVersions.isPending ? <option value="">{t("common.loading")}</option> : null}
+                {(loaderVersions.data ?? []).map((v) => (
+                  <option key={v.version} value={v.version}>
+                    {v.version}
+                    {v.recommended ? ` · ${t("instances.recommended")}` : !v.stable ? ` · ${t("instances.unstable")}` : ""}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+        ) : null}
+        <ErrorMessage error={loaderVersions.error} />
+
+        <Field label={t("preset.optional")} hint={preset ? t(`preset.${preset}.description`) : t("preset.noneHint")}>
+          {(id, d) => (
+            <Select id={id} aria-describedby={d} value={preset} onChange={(e) => setPreset(e.target.value as PerfPreset | "")}>
+              <option value="">{t("preset.none")}</option>
+              {PRESETS.map((p) => (
+                <option key={p} value={p}>
+                  {t(`preset.${p}.title`)}
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
         <ErrorMessage error={create.error} />
       </form>
     </Modal>

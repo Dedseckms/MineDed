@@ -7,17 +7,20 @@ import {
   useAddOfflineAccount,
   useRemoveAccount,
   useSetDefaultAccount,
+  useSettings,
   useYggdrasilLogin,
+  useYggdrasilRegister,
   useYggdrasilServers,
 } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Card, CardList, Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
-import { Field, TextInput } from "../../components/ui/form";
+import { Field, Segmented, TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
 import { isNotImplemented } from "../../lib/errors";
-import { NICK_MAX, validateNick } from "../../lib/validation";
+import { NICK_MAX, type RegisterDraft, hasErrors, validateNick, validateRegister } from "../../lib/validation";
+import { SkinFlat } from "../skins/SkinPreview";
 
 function OfflineAddForm() {
   const { t } = useTranslation();
@@ -68,14 +71,121 @@ function OfflineAddForm() {
   );
 }
 
+type YggMode = "login" | "register";
+
+/** Account server: `Settings.skinServer` wins over the built-in official server. */
+function useAccountServer() {
+  const servers = useYggdrasilServers();
+  const settings = useSettings();
+  const custom = settings.data?.skinServer ?? null;
+  const official = servers.data?.find((s) => s.official) ?? servers.data?.[0];
+  const server = custom ? { name: custom, apiRoot: custom } : official ? { name: official.name, apiRoot: official.apiRoot } : null;
+  return { server, servers };
+}
+
+function SoonNotice() {
+  const { t } = useTranslation();
+  return (
+    <div role="status" className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+      <Badge tone="warning">{t("common.soon")}</Badge>
+      {t("accounts.yggdrasil.soon")}
+    </div>
+  );
+}
+
+function YggdrasilSection() {
+  const { t } = useTranslation();
+  const [mode, setMode] = useState<YggMode>("login");
+  return (
+    <div className="flex flex-col gap-4">
+      <Segmented<YggMode>
+        ariaLabel={t("accounts.yggdrasil.mode")}
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: "login", label: t("accounts.yggdrasil.login") },
+          { value: "register", label: t("accounts.yggdrasil.register") },
+        ]}
+      />
+      {mode === "login" ? <YggdrasilForm /> : <RegisterForm />}
+    </div>
+  );
+}
+
+function RegisterForm() {
+  const { t } = useTranslation();
+  const { server, servers } = useAccountServer();
+  const register = useYggdrasilRegister();
+  const [draft, setDraft] = useState<RegisterDraft>({ invite: "", username: "", password: "", confirm: "" });
+  const [touched, setTouched] = useState(false);
+  const errors = validateRegister(draft);
+  const unavailable = isNotImplemented(servers.error) || isNotImplemented(register.error);
+  const set = (patch: Partial<RegisterDraft>) => {
+    setDraft((d) => ({ ...d, ...patch }));
+    register.reset();
+  };
+  const err = (k: keyof RegisterDraft) => (touched ? (errors[k] ?? null) : null);
+
+  return (
+    <form
+      className="flex flex-col gap-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        setTouched(true);
+        if (hasErrors(errors) || !server) return;
+        register.mutate(
+          { apiRoot: server.apiRoot, invite: draft.invite.trim(), username: draft.username, password: draft.password },
+          {
+            onSettled: () => setDraft((d) => ({ ...d, password: "", confirm: "" })),
+            onSuccess: () => {
+              setDraft({ invite: "", username: "", password: "", confirm: "" });
+              setTouched(false);
+            },
+          },
+        );
+      }}
+    >
+      {unavailable ? <SoonNotice /> : null}
+      <Field label={t("accounts.yggdrasil.invite")} error={err("invite")} hint={t("accounts.yggdrasil.inviteHint")}>
+        {(id, d, inv) => (
+          <TextInput id={id} aria-describedby={d} invalid={inv} value={draft.invite} onChange={(e) => set({ invite: e.target.value })} />
+        )}
+      </Field>
+      <Field label={t("accounts.nick")} error={err("username")} hint={t("accounts.nickHint")}>
+        {(id, d, inv) => (
+          <TextInput id={id} aria-describedby={d} invalid={inv} value={draft.username} autoComplete="username" onChange={(e) => set({ username: e.target.value })} />
+        )}
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t("accounts.yggdrasil.password")} error={err("password")}>
+          {(id, d, inv) => (
+            <TextInput id={id} type="password" aria-describedby={d} invalid={inv} autoComplete="new-password" value={draft.password} onChange={(e) => set({ password: e.target.value })} />
+          )}
+        </Field>
+        <Field label={t("accounts.yggdrasil.confirm")} error={err("confirm")}>
+          {(id, d, inv) => (
+            <TextInput id={id} type="password" aria-describedby={d} invalid={inv} autoComplete="new-password" value={draft.confirm} onChange={(e) => set({ confirm: e.target.value })} />
+          )}
+        </Field>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate text-xs text-muted">{server ? t("accounts.yggdrasil.server", { name: server.name }) : t("accounts.yggdrasil.noServer")}</p>
+        <Button type="submit" variant="primary" disabled={!server || unavailable} loading={register.isPending}>
+          {t("accounts.yggdrasil.register")}
+        </Button>
+      </div>
+      {!isNotImplemented(register.error) ? <ErrorMessage error={register.error} /> : null}
+    </form>
+  );
+}
+
 function YggdrasilForm() {
   const { t } = useTranslation();
-  const servers = useYggdrasilServers();
+  const { server, servers } = useAccountServer();
   const login = useYggdrasilLogin();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const server = servers.data?.find((s) => s.official) ?? servers.data?.[0];
-  const unavailable = isNotImplemented(servers.error) || isNotImplemented(login.error) || (servers.isSuccess && !server);
+  const unavailable = isNotImplemented(servers.error) || isNotImplemented(login.error);
   const canSubmit = !!server && username.trim() !== "" && password !== "" && !unavailable;
 
   return (
@@ -94,12 +204,7 @@ function YggdrasilForm() {
         );
       }}
     >
-      {unavailable ? (
-        <div role="status" className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-          <Badge tone="warning">{t("common.soon")}</Badge>
-          {t("accounts.yggdrasil.soon")}
-        </div>
-      ) : null}
+      {unavailable ? <SoonNotice /> : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label={t("accounts.yggdrasil.username")}>
           {(id) => (
@@ -127,7 +232,7 @@ function YggdrasilForm() {
       </div>
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted">
-          {server ? t("accounts.yggdrasil.server", { name: server.name }) : null}
+          {server ? t("accounts.yggdrasil.server", { name: server.name }) : t("accounts.yggdrasil.noServer")}
         </p>
         <Button type="submit" variant="primary" disabled={!canSubmit} loading={login.isPending}>
           {t("accounts.yggdrasil.login")}
@@ -145,9 +250,13 @@ function AccountRow({ account, onRemove }: { account: Account; onRemove: () => v
   return (
     <Card className="flex flex-col gap-2">
       <div className="flex items-center gap-3">
-        <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-2 font-semibold uppercase">
-          {account.name.slice(0, 1)}
-        </span>
+        {account.skinUrl ? (
+          <SkinFlat url={account.skinUrl} model="classic" variant="head" className="size-10 shrink-0 rounded-lg" />
+        ) : (
+          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-2 font-semibold uppercase">
+            {account.name.slice(0, 1)}
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-2 truncate font-medium">
             {account.name}
@@ -207,7 +316,7 @@ export function AccountsScreen() {
       </Section>
 
       <Section title={t("accounts.yggdrasil.title")}>
-        <YggdrasilForm />
+        <YggdrasilSection />
       </Section>
 
       <ConfirmDialog

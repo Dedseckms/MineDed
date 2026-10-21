@@ -1,16 +1,32 @@
 // TanStack Query hooks over `api`. All backend access from components goes here.
-import { type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type QueryKey,
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import type {
   AccountId,
   AppError,
+  ContentFilter,
+  ContentSourceKind,
+  ContentVersionRef,
+  InstalledContent,
   InstanceId,
   InstancePatch,
+  LoaderKind,
+  SearchQuery,
   Settings,
+  SkinId,
+  SkinModel,
   TaskEvent,
   TaskId,
   VersionKind,
 } from "../bindings";
+import { nextOffset } from "../lib/content";
 import { useTaskStore } from "../stores/taskStore";
 import { createTaskChannel } from "./channel";
 import { api, unwrap } from "./client";
@@ -27,6 +43,13 @@ export const qk = {
   systemInfo: ["systemInfo"] as const,
   tasks: ["tasks"] as const,
   appVersion: ["appVersion"] as const,
+  loaderVersions: (loader: LoaderKind, mc: string) => ["loaderVersions", loader, mc] as const,
+  content: (id: InstanceId) => ["content", id] as const,
+  search: (q: SearchQuery) => ["search", q] as const,
+  contentVersions: (source: ContentSourceKind, projectId: string, filter: ContentFilter) =>
+    ["contentVersions", source, projectId, filter] as const,
+  skins: ["skins"] as const,
+  capes: (account: AccountId) => ["capes", account] as const,
 };
 
 // ---- queries ---------------------------------------------------------------
@@ -157,6 +180,136 @@ export function useKillInstance() {
 export function useCancelTask() {
   return useMutation({
     mutationFn: async (id: TaskId) => unwrap(await api.taskCancel(id)),
+  });
+}
+
+export function useYggdrasilRegister() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { apiRoot: string; invite: string; username: string; password: string }) =>
+      unwrap(await api.accountYggdrasilRegister(v.apiRoot, v.invite, v.username, v.password)),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.accounts }),
+  });
+}
+
+// ---- loaders & content -----------------------------------------------------
+
+export const useLoaderVersions = (loader: LoaderKind, mc: string) =>
+  useQuery({
+    queryKey: qk.loaderVersions(loader, mc),
+    queryFn: async () => unwrap(await api.loaderVersions(loader, mc)),
+    enabled: loader !== "vanilla" && mc !== "",
+    staleTime: 5 * 60_000,
+  });
+
+export const useContentList = (id: InstanceId) =>
+  useQuery({ queryKey: qk.content(id), queryFn: async () => unwrap(await api.contentList(id)) });
+
+/** Paged catalog search (infinite scroll); `query.offset` is ignored. */
+export function useContentSearch(query: SearchQuery, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: qk.search({ ...query, offset: 0 }),
+    queryFn: async ({ pageParam }) => unwrap(await api.contentSearch({ ...query, offset: pageParam })),
+    initialPageParam: 0,
+    getNextPageParam: nextOffset,
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+    enabled,
+  });
+}
+
+export const useContentVersions = (
+  source: ContentSourceKind,
+  projectId: string | null,
+  filter: ContentFilter,
+) =>
+  useQuery({
+    queryKey: qk.contentVersions(source, projectId ?? "", filter),
+    queryFn: async () => unwrap(await api.contentVersions(source, projectId ?? "", filter)),
+    enabled: projectId !== null,
+    staleTime: 60_000,
+  });
+
+export function useResolveContent() {
+  return useMutation({
+    mutationFn: async (v: { instance: InstanceId; picks: ContentVersionRef[] }) =>
+      unwrap(await api.contentResolve(v.instance, v.picks)),
+  });
+}
+
+/** Toggles a file; the list is updated optimistically. */
+export function useSetContentEnabled(instance: InstanceId) {
+  const qc = useQueryClient();
+  const key = qk.content(instance);
+  return useMutation({
+    mutationFn: async (v: { fileName: string; enabled: boolean }) =>
+      unwrap(await api.contentSetEnabled(instance, v.fileName, v.enabled)),
+    onMutate: async (v) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<InstalledContent[]>(key);
+      qc.setQueryData<InstalledContent[]>(key, (list) =>
+        list?.map((c) => (c.fileName === v.fileName ? { ...c, enabled: v.enabled } : c)),
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: key }),
+  });
+}
+
+export function useRemoveContent(instance: InstanceId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (fileName: string) => unwrap(await api.contentRemove(instance, fileName)),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.content(instance) }),
+  });
+}
+
+// ---- skins -----------------------------------------------------------------
+
+export const useSkins = () =>
+  useQuery({ queryKey: qk.skins, queryFn: async () => unwrap(await api.skinLibrary()) });
+
+export function useAddSkin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { path: string; name: string; model: SkinModel }) =>
+      unwrap(await api.skinAdd(v.path, v.name, v.model)),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.skins }),
+  });
+}
+
+export function useRemoveSkin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: SkinId) => unwrap(await api.skinRemove(id)),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.skins }),
+  });
+}
+
+export function useApplySkin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { account: AccountId; skin: SkinId }) => unwrap(await api.skinApply(v.account, v.skin)),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.accounts }),
+  });
+}
+
+export const useCapes = (account: AccountId | null) =>
+  useQuery({
+    queryKey: qk.capes(account ?? ""),
+    queryFn: async () => unwrap(await api.capeList(account ?? "")),
+    enabled: account !== null,
+  });
+
+export function useSetCape() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { account: AccountId; capeId: string | null }) =>
+      unwrap(await api.capeSet(v.account, v.capeId)),
+    onSettled: (_d, _e, v) => qc.invalidateQueries({ queryKey: qk.capes(v.account) }),
   });
 }
 
