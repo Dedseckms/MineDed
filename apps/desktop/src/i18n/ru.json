@@ -4,13 +4,267 @@
     "version": "Версия {{version}}",
     "mock": "моковый бэкенд"
   },
+  "nav": {
+    "label": "Разделы",
+    "play": "Играть",
+    "instances": "Сборки",
+    "accounts": "Аккаунты",
+    "settings": "Настройки"
+  },
+  "header": {
+    "accountHint": "Перейти к аккаунтам",
+    "noAccount": "Нет аккаунта"
+  },
+  "common": {
+    "loading": "Загрузка…",
+    "cancel": "Отмена",
+    "save": "Сохранить",
+    "reset": "Сбросить",
+    "delete": "Удалить",
+    "copy": "Копировать",
+    "copied": "Скопировано",
+    "soon": "Скоро",
+    "optional": "Необязательно"
+  },
+  "play": {
+    "play": "Играть",
+    "stop": "Остановить",
+    "instance": "Сборка",
+    "account": "Аккаунт",
+    "noAccounts": "Сначала добавьте аккаунт в разделе «Аккаунты»",
+    "noInstances": "Пока нет ни одной сборки",
+    "state": "Состояние",
+    "exitCode": "Код выхода: {{code}}",
+    "crashReport": "Отчёт о сбое: {{path}}",
+    "log": "Лог игры",
+    "clearLog": "Очистить",
+    "logEmpty": "Здесь появится лог игры после запуска."
+  },
+  "runState": {
+    "stopped": "Остановлена",
+    "preparing": "Подготовка",
+    "running": "Запущена",
+    "crashed": "Аварийно завершена"
+  },
   "instances": {
     "count_one": "{{count}} сборка",
     "count_few": "{{count}} сборки",
     "count_many": "{{count}} сборок",
-    "count_other": "{{count}} сборки"
+    "count_other": "{{count}} сборки",
+    "create": "Создать сборку",
+    "createTitle": "Новая сборка",
+    "name": "Название",
+    "namePlaceholder": "Моя сборка",
+    "version": "Тип версий",
+    "versionKind": "Тип версий Minecraft",
+    "mcVersion": "Версия Minecraft",
+    "loader": "Загрузчик модов",
+    "settingsTitle": "Настройки: {{name}}",
+    "javaPath": "Путь к Java",
+    "javaPathHint": "Оставьте пустым — лаунчер подберёт Java сам",
+    "javaPathPlaceholder": "Автоматически",
+    "jvmArgs": "Аргументы JVM",
+    "jvmArgsHint": "Через пробел; значения с пробелами — в кавычках",
+    "jvmArgsPlaceholder": "Например, -XX:+UseG1GC",
+    "cloneDefaultName": "{{name}} (копия)",
+    "cloneTitle": "Клонировать «{{name}}»",
+    "clone": "Клонировать",
+    "settings": "Настройки",
+    "folder": "Папка",
+    "lastPlayed": "Запуск: {{date}}",
+    "neverPlayed": "Ещё не запускалась",
+    "playtime_one": "{{count}} час в игре",
+    "playtime_few": "{{count}} часа в игре",
+    "playtime_many": "{{count}} часов в игре",
+    "playtime_other": "{{count}} часа в игре",
+    "empty": "Сборок пока нет",
+    "deleteTitle": "Удалить сборку?",
+    "deleteMessage": "Сборка «{{name}}» и все её файлы (миры, моды, настройки) будут удалены без возможности восстановления."
+  },
+  "versionKind": {
+    "release": "Релизы",
+    "snapshot": "Снапшоты"
+  },
+  "loader": {
+    "vanilla": "Vanilla",
+    "fabric": "Fabric",
+    "quilt": "Quilt",
+    "forge": "Forge",
+    "neoForge": "NeoForge"
+  },
+  "memory": {
+    "auto": "Автоматически",
+    "autoHint": "Максимум подбирается по объёму ОЗУ и числу модов при каждом запуске",
+    "min": "Минимум",
+    "max": "Максимум",
+    "recommended": "Рекомендуется {{min}}–{{max}}: {{reason}}",
+    "reasonGeneric": "по характеристикам системы",
+    "systemTotal": "Всего ОЗУ: {{total}}",
+    "systemHint": "Всего ОЗУ: {{total}}, свободно {{free}}. Рекомендуемый максимум — около {{suggested}}.",
+    "reason": {
+      "default": "стандартное значение для этой сборки",
+      "largeModpack": "в сборке много модов",
+      "lowTotalRam": "в системе мало оперативной памяти",
+      "lowFreeRam": "сейчас мало свободной памяти"
+    }
+  },
+  "accounts": {
+    "list": "Ваши аккаунты",
+    "empty": "Аккаунтов пока нет",
+    "kind": {
+      "offline": "Оффлайн",
+      "yggdrasil": "Сервер MineUP"
+    },
+    "invalid": "Нужен вход",
+    "default": "По умолчанию",
+    "makeDefault": "Сделать основным",
+    "offlineTitle": "Оффлайн-аккаунт",
+    "nick": "Ник",
+    "nickHint": "3–16 символов: латиница, цифры и _",
+    "nickPlaceholder": "Например, Steve",
+    "add": "Добавить",
+    "removeTitle": "Удалить аккаунт?",
+    "removeMessage": "Аккаунт «{{name}}» будет удалён из лаунчера.",
+    "yggdrasil": {
+      "title": "Вход через сервер MineUP",
+      "soon": "Вход через сервер MineUP скоро появится.",
+      "username": "Логин или e-mail",
+      "password": "Пароль",
+      "server": "Сервер: {{name}}",
+      "login": "Войти"
+    }
+  },
+  "settings": {
+    "appearance": "Внешний вид",
+    "theme": "Тема",
+    "themeDark": "Тёмная",
+    "themeLight": "Светлая",
+    "themeSystem": "Системная",
+    "language": "Язык",
+    "langRu": "Русский",
+    "langEn": "English",
+    "lightMode": "Лёгкий режим",
+    "lightModeHint": "Без размытия и анимаций — для слабых компьютеров",
+    "reduceMotion": "Уменьшить анимацию",
+    "reduceMotionHint": "Отключает переходы и движения интерфейса",
+    "game": "Игра",
+    "gameDir": "Папка игры",
+    "gameDirHint": "Здесь хранятся сборки, библиотеки и ресурсы",
+    "defaultPlaceholder": "По умолчанию",
+    "javaPath": "Путь к Java",
+    "javaPathHint": "Глобальная настройка; у сборки может быть своя",
+    "javaAutoPlaceholder": "Автоматически",
+    "memory": "Память по умолчанию",
+    "fixErrors": "Исправьте ошибки в полях",
+    "proxy": {
+      "title": "Прокси",
+      "hint": "Ручной прокси для загрузок лаунчера (не влияет на встроенный VPN)",
+      "mode": "Режим прокси",
+      "off": "Выключен",
+      "http": "HTTP",
+      "socks5": "SOCKS5",
+      "host": "Хост",
+      "hostPlaceholder": "127.0.0.1",
+      "port": "Порт",
+      "portPlaceholder": {
+        "http": "8080",
+        "socks5": "1080"
+      },
+      "username": "Логин",
+      "password": "Пароль"
+    }
+  },
+  "tasks": {
+    "center": "Задачи",
+    "clearFinished": "Убрать завершённые",
+    "empty": "Активных задач нет",
+    "cancel": "Отменить",
+    "speed": "{{value}} {{unit}}",
+    "generic": "Задача",
+    "javaInstall": "Установка Java",
+    "instanceCreate": "Создание сборки",
+    "instanceClone": "Клонирование сборки",
+    "instanceRepair": "Восстановление сборки",
+    "instanceImport": "Импорт сборки",
+    "instanceExport": "Экспорт сборки",
+    "launch": "Запуск игры",
+    "contentInstall": "Установка контента",
+    "contentUpdate": "Обновление контента",
+    "presetApply": "Применение пресета",
+    "accountLogin": "Вход в аккаунт",
+    "vpnUpdate": "Обновление VPN",
+    "appUpdate": "Обновление лаунчера"
+  },
+  "taskStatus": {
+    "running": "Выполняется",
+    "succeeded": "Готово",
+    "failed": "Ошибка",
+    "cancelled": "Отменено"
+  },
+  "stages": {
+    "working": "Выполняется…",
+    "versionMeta": "Получение данных версии",
+    "client": "Загрузка клиента",
+    "libraries": "Загрузка библиотек",
+    "assets": "Загрузка ресурсов",
+    "java": "Подготовка Java",
+    "copy": "Копирование файлов",
+    "download": "Загрузка файлов"
+  },
+  "units": {
+    "bps": "Б/с",
+    "kbps": "КБ/с",
+    "mbps": "МБ/с",
+    "gbps": "ГБ/с",
+    "mb": "{{value}} МБ",
+    "gb": "{{value}} ГБ"
+  },
+  "validation": {
+    "required": "Обязательное поле",
+    "nick": {
+      "chars": "Только латинские буквы, цифры и _",
+      "length": "От 3 до 16 символов"
+    },
+    "name": {
+      "length": "Не длиннее 64 символов",
+      "chars": "Нельзя использовать символы < > : \" / \\ | ? *"
+    },
+    "path": {
+      "chars": "Путь содержит недопустимые символы",
+      "absolute": "Укажите полный путь (например, C:\\Games или /home/user/games)"
+    },
+    "memory": {
+      "minTooLow": "Минимум — 512 МБ",
+      "maxBelowMin": "Максимум не может быть меньше минимума",
+      "exceedsRam": "Больше, чем установлено ОЗУ"
+    },
+    "args": {
+      "quote": "Незакрытая кавычка"
+    },
+    "proxy": {
+      "scheme": "Укажите только хост, без http:// или socks5://",
+      "host": "Некорректный хост или IP-адрес",
+      "port": "Порт — число от 1 до 65535",
+      "credLength": "Не длиннее 255 символов",
+      "usernameRequired": "Укажите логин, если задан пароль"
+    }
   },
   "errors": {
-    "notImplemented": "Ещё не реализовано"
+    "network": "Ошибка сети. Проверьте подключение к интернету.",
+    "blocked": "Сервер недоступен — возможно, он заблокирован. Попробуйте включить VPN или прокси.",
+    "hashMismatch": "Файл повреждён при загрузке. Попробуйте ещё раз.",
+    "notFound": "Не найдено.",
+    "authExpired": "Сессия истекла — войдите в аккаунт снова.",
+    "authRequired": "Нужно выбрать или добавить аккаунт.",
+    "javaMissing": "Не найдена подходящая Java.",
+    "loaderInstall": "Не удалось установить загрузчик модов.",
+    "manualDownloadRequired": "Этот файл нужно скачать вручную.",
+    "cancelled": "Отменено.",
+    "io": "Ошибка чтения или записи файлов.",
+    "invalidInput": "Некорректные данные.",
+    "conflict": "Конфликт: действие сейчас невозможно.",
+    "permissionDenied": "Недостаточно прав.",
+    "notImplemented": "Пока недоступно.",
+    "internal": "Внутренняя ошибка. Подробности — в логах."
   }
 }

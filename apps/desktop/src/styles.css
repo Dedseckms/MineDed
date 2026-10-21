@@ -1,12 +1,39 @@
 @import "tailwindcss";
 
-/* Design tokens. Owned by ui; themes override these on [data-theme]. */
+/* Design tokens. Owned by ui; themes override these on [data-theme].
+   Utilities: bg-bg, bg-surface, bg-surface-2, border-border, text-muted, bg-accent… */
 @theme {
   --color-bg: #0f1115;
   --color-surface: #171a21;
+  --color-surface-2: #1f232c;
+  --color-border: #2a2f3a;
   --color-text: #e6e8ee;
   --color-muted: #8a90a0;
   --color-accent: #4ade80;
+  --color-accent-strong: #22c55e;
+  --color-accent-fg: #06210f;
+  --color-danger: #f87171;
+  --color-warning: #fbbf24;
+  --color-info: #60a5fa;
+  --color-overlay: rgb(0 0 0 / 0.55);
+  --font-sans: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  --color-bg: #f4f5f8;
+  --color-surface: #ffffff;
+  --color-surface-2: #eceef3;
+  --color-border: #d8dce4;
+  --color-text: #161a22;
+  --color-muted: #5d6475;
+  --color-accent: #16a34a;
+  --color-accent-strong: #15803d;
+  --color-accent-fg: #ffffff;
+  --color-danger: #dc2626;
+  --color-warning: #b45309;
+  --color-info: #2563eb;
+  --color-overlay: rgb(15 17 21 / 0.35);
 }
 
 html,
@@ -19,10 +46,64 @@ body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+input,
+textarea,
+.selectable {
+  user-select: text;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 /* Light mode: no blur/backdrop effects (expensive on WebKitGTK). */
-[data-light-mode="true"] * {
+[data-light-mode="true"] *,
+[data-light-mode="true"] *::before,
+[data-light-mode="true"] *::after {
   backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
+/* Reduced motion: kill CSS transitions/animations too (Motion is handled by MotionConfig). */
+[data-reduce-motion="true"] *,
+[data-reduce-motion="true"] *::before,
+[data-reduce-motion="true"] *::after {
+  transition-duration: 0s !important;
+  animation-duration: 0s !important;
+  animation-iteration-count: 1 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.progress-indeterminate {
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
+/* Slider */
+input[type="range"] {
+  accent-color: var(--color-accent);
 }
