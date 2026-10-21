@@ -30,11 +30,25 @@ describe("App shell (mocks)", () => {
     expect(await screen.findByRole("option", { name: /1\.21\.10/ })).toBeTruthy();
     expect(await screen.findAllByText("Steve_42")).not.toHaveLength(0);
 
-    for (const section of ["instances", "accounts", "settings", "play"] as const) {
+    for (const section of ["instances", "skins", "accounts", "settings", "play"] as const) {
       await act(async () => useNavStore.getState().go(section));
       const heading = await screen.findByRole("heading", { level: 1 });
       expect(heading.textContent).toBe(i18n.t(`nav.${section}`));
     }
+  });
+
+  it("shows instance content, the shader hint and the skin library", async () => {
+    await i18n.changeLanguage("en");
+    await act(async () => useNavStore.getState().showInstance("inst-fabric", "mods"));
+    renderApp();
+    expect(await screen.findByText("Sodium")).toBeTruthy();
+    expect(await screen.findByText(/^(Update all|Обновить всё)$/)).toBeTruthy();
+    await act(async () => useNavStore.getState().setInstanceTab("shaders"));
+    expect(await screen.findByText(/OptiFine/, { selector: "a span" })).toBeTruthy();
+    await act(async () => useNavStore.getState().setInstanceTab("browse"));
+    expect(await screen.findByText("Fabric API")).toBeTruthy();
+    await act(async () => useNavStore.getState().go("skins"));
+    expect(await screen.findAllByText("Explorer")).not.toHaveLength(0);
   });
 
   it("validates the offline nickname inline", async () => {

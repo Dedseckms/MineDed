@@ -64,6 +64,11 @@ export const useTaskStore = create<TaskState>()((set) => ({
   reset: () => set(initial),
 }));
 
+/** Live view of one task (e.g. the one a dialog started). */
+export function useTaskView(id: string | null | undefined): TaskView | undefined {
+  return useTaskStore((s) => (id ? s.tasks[id] : undefined));
+}
+
 /** Visible tasks, newest first. */
 export function selectVisibleTasks(s: Pick<TaskState, "tasks" | "order" | "dismissed">): TaskView[] {
   const out: TaskView[] = [];

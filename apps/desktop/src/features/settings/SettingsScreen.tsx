@@ -16,6 +16,7 @@ import {
   proxyToDraft,
   validateMemory,
   validateOptionalPath,
+  validateOptionalUrl,
   validateProxy,
 } from "../../lib/validation";
 import { MemoryEditor, useFormatMb } from "../common/MemoryEditor";
@@ -78,6 +79,7 @@ interface GameDraft {
   javaPath: string;
   memory: MemoryCfg;
   proxy: ProxyDraft;
+  skinServer: string;
 }
 
 const toDraft = (s: Settings): GameDraft => ({
@@ -85,6 +87,7 @@ const toDraft = (s: Settings): GameDraft => ({
   javaPath: s.javaPath ?? "",
   memory: { ...s.defaultMemory },
   proxy: proxyToDraft(s.proxy),
+  skinServer: s.skinServer ?? "",
 });
 
 const sameDraft = (a: GameDraft, b: GameDraft) => JSON.stringify(a) === JSON.stringify(b);
@@ -194,8 +197,9 @@ function GameSection({ settings }: { settings: Settings }) {
     gameDir: validateOptionalPath(draft.gameDir),
     javaPath: validateOptionalPath(draft.javaPath),
   };
+  const serverError = validateOptionalUrl(draft.skinServer);
   const proxyErrors = validateProxy(draft.proxy);
-  const invalid = hasErrors(memErrors) || hasErrors(pathErrors) || hasErrors(proxyErrors);
+  const invalid = hasErrors(memErrors) || hasErrors(pathErrors) || hasErrors(proxyErrors) || serverError !== null;
   const dirty = !sameDraft(draft, base);
 
   const ramHint = system.data
@@ -214,6 +218,7 @@ function GameSection({ settings }: { settings: Settings }) {
       javaPath: pathOrNull(draft.javaPath),
       defaultMemory: draft.memory,
       proxy: draftToProxy(draft.proxy),
+      skinServer: pathOrNull(draft.skinServer)?.replace(/\/+$/, "") ?? null,
     });
   };
 
@@ -259,6 +264,21 @@ function GameSection({ settings }: { settings: Settings }) {
       <Section title={t("settings.proxy.title")}>
         <p className="-mt-2 text-xs text-muted">{t("settings.proxy.hint")}</p>
         <ProxyEditor value={draft.proxy} onChange={(proxy) => setDraft({ ...draft, proxy })} errors={proxyErrors} />
+      </Section>
+
+      <Section title={t("settings.skinServer.title")}>
+        <Field label={t("settings.skinServer.url")} error={serverError} hint={t("settings.skinServer.hint")}>
+          {(id, d, inv) => (
+            <TextInput
+              id={id}
+              aria-describedby={d}
+              invalid={inv}
+              value={draft.skinServer}
+              placeholder={t("settings.skinServer.placeholder")}
+              onChange={(e) => setDraft({ ...draft, skinServer: e.target.value })}
+            />
+          )}
+        </Field>
       </Section>
 
       <div className="sticky bottom-0 -mx-6 flex items-center justify-end gap-2 border-t border-border bg-bg px-6 py-3">

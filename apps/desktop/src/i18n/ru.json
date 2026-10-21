@@ -9,7 +9,8 @@
     "play": "Играть",
     "instances": "Сборки",
     "accounts": "Аккаунты",
-    "settings": "Настройки"
+    "settings": "Настройки",
+    "skins": "Скины"
   },
   "header": {
     "accountHint": "Перейти к аккаунтам",
@@ -24,7 +25,9 @@
     "copy": "Копировать",
     "copied": "Скопировано",
     "soon": "Скоро",
-    "optional": "Необязательно"
+    "optional": "Необязательно",
+    "close": "Закрыть",
+    "copyLink": "Копировать ссылку"
   },
   "play": {
     "play": "Играть",
@@ -79,7 +82,14 @@
     "playtime_other": "{{count}} часа в игре",
     "empty": "Сборок пока нет",
     "deleteTitle": "Удалить сборку?",
-    "deleteMessage": "Сборка «{{name}}» и все её файлы (миры, моды, настройки) будут удалены без возможности восстановления."
+    "deleteMessage": "Сборка «{{name}}» и все её файлы (миры, моды, настройки) будут удалены без возможности восстановления.",
+    "content": "Контент",
+    "export": "Экспорт",
+    "loaderVersion": "Версия загрузчика",
+    "loaderVersionHint": "По умолчанию выбрана рекомендуемая сборка",
+    "noLoaderBuilds": "У этого загрузчика нет сборок для выбранной версии Minecraft",
+    "recommended": "рекомендуется",
+    "unstable": "бета"
   },
   "versionKind": {
     "release": "Релизы",
@@ -131,7 +141,13 @@
       "username": "Логин или e-mail",
       "password": "Пароль",
       "server": "Сервер: {{name}}",
-      "login": "Войти"
+      "login": "Войти",
+      "mode": "Вход или регистрация",
+      "register": "Регистрация",
+      "invite": "Инвайт-код",
+      "inviteHint": "Его выдаёт владелец сервера",
+      "confirm": "Повторите пароль",
+      "noServer": "Сервер не настроен — укажите адрес в настройках"
     }
   },
   "settings": {
@@ -172,6 +188,12 @@
       },
       "username": "Логин",
       "password": "Пароль"
+    },
+    "skinServer": {
+      "title": "Сервер аккаунтов",
+      "url": "Адрес сервера",
+      "hint": "API-адрес вашего сервера скинов и аккаунтов (authlib-injector). Пусто — сервер MineUP по умолчанию.",
+      "placeholder": "https://auth.example.com/api/yggdrasil"
     }
   },
   "tasks": {
@@ -217,7 +239,9 @@
     "mbps": "МБ/с",
     "gbps": "ГБ/с",
     "mb": "{{value}} МБ",
-    "gb": "{{value}} ГБ"
+    "gb": "{{value}} ГБ",
+    "b": "{{value}} Б",
+    "kb": "{{value}} КБ"
   },
   "validation": {
     "required": "Обязательное поле",
@@ -231,7 +255,8 @@
     },
     "path": {
       "chars": "Путь содержит недопустимые символы",
-      "absolute": "Укажите полный путь (например, C:\\Games или /home/user/games)"
+      "absolute": "Укажите полный путь (например, C:\\Games или /home/user/games)",
+      "ext": "Неподдерживаемый тип файла"
     },
     "memory": {
       "minTooLow": "Минимум — 512 МБ",
@@ -247,6 +272,18 @@
       "port": "Порт — число от 1 до 65535",
       "credLength": "Не длиннее 255 символов",
       "usernameRequired": "Укажите логин, если задан пароль"
+    },
+    "url": {
+      "scheme": "Адрес должен начинаться с https:// или http://",
+      "invalid": "Некорректный адрес"
+    },
+    "skinName": {
+      "length": "Не более 32 символов"
+    },
+    "invite": "Некорректный инвайт-код",
+    "password": {
+      "short": "Не меньше 8 символов",
+      "mismatch": "Пароли не совпадают"
     }
   },
   "errors": {
@@ -266,5 +303,192 @@
     "permissionDenied": "Недостаточно прав.",
     "notImplemented": "Пока недоступно.",
     "internal": "Внутренняя ошибка. Подробности — в логах."
+  },
+  "import": {
+    "button": "Импорт",
+    "title": "Импорт сборки",
+    "submit": "Импортировать",
+    "hint": "Поддерживаются .mrpack (Modrinth) и .zip-модпаки CurseForge.",
+    "path": "Файл сборки",
+    "pathHint": "Полный путь к файлу на этом компьютере",
+    "pathPlaceholder": "C:\\Users\\me\\Downloads\\pack.mrpack"
+  },
+  "export": {
+    "title": "Экспорт «{{name}}»",
+    "format": "Формат",
+    "formats": {
+      "mrpack": "Modrinth (.mrpack)",
+      "curseForgeZip": "CurseForge (.zip)",
+      "launcherZip": "Полная копия (.zip)"
+    },
+    "formatHint": {
+      "mrpack": "Список модов со ссылками и конфиги — маленький файл, открывается в любом лаунчере с поддержкой Modrinth.",
+      "curseForgeZip": "Манифест CurseForge с overrides — для приложения CurseForge и совместимых лаунчеров.",
+      "launcherZip": "Вся папка сборки вместе с мирами — для резервной копии и переноса на другой ПК."
+    },
+    "path": "Куда сохранить",
+    "pathHint": "Полный путь вместе с именем файла",
+    "pathPlaceholder": {
+      "mrpack": "C:\\Users\\me\\Desktop\\pack.mrpack",
+      "curseForgeZip": "C:\\Users\\me\\Desktop\\pack.zip",
+      "launcherZip": "C:\\Users\\me\\Desktop\\backup.zip"
+    },
+    "done": "Сохранено: {{path}}"
+  },
+  "preset": {
+    "button": "Оптимизация",
+    "title": "Пресет оптимизации",
+    "hint": "Пресет установит моды производительности и настроит графику и память. Ваши моды останутся.",
+    "apply": "Применить",
+    "current": "Текущий",
+    "optional": "Пресет оптимизации",
+    "none": "Без пресета",
+    "noneHint": "Пресет можно применить позже на странице сборки",
+    "potato": {
+      "title": "Картошка",
+      "description": "Максимум FPS на слабых ПК: малая дальность прорисовки, простая графика, минимум памяти."
+    },
+    "balanced": {
+      "title": "Баланс",
+      "description": "Моды оптимизации при почти ванильной картинке. Подходит большинству компьютеров."
+    },
+    "quality": {
+      "title": "Качество",
+      "description": "Большая дальность и красивая картинка, готово к шейдерам. Нужна хорошая видеокарта."
+    }
+  },
+  "content": {
+    "back": "Все сборки",
+    "install": "Установить",
+    "installed": "Установлено",
+    "by": "автор: {{author}}",
+    "downloads": "{{count}} загрузок",
+    "manualBadge": "Ручная загрузка",
+    "results": "Показано {{shown}} из {{total}}",
+    "noResults": "Ничего не найдено. Измените запрос или отключите фильтр совместимости.",
+    "loadMore": "Загрузить ещё",
+    "end": "Это всё",
+    "vanillaMods": "Это ванильная сборка: для модов нужен загрузчик (Fabric, Quilt, Forge или NeoForge). Создайте сборку с загрузчиком.",
+    "updateAvailable": "Обновление",
+    "updates_one": "Доступно {{count}} обновление",
+    "updates_few": "Доступно {{count}} обновления",
+    "updates_many": "Доступно {{count}} обновлений",
+    "updates_other": "Доступно {{count}} обновления",
+    "updateAll": "Обновить всё",
+    "browse": "Найти ещё",
+    "filterInstalled": "Фильтр по установленным",
+    "enabledCount": "Включено {{enabled}} из {{total}}",
+    "noMatches": "Совпадений нет",
+    "emptyKind": {
+      "mod": "Моды не установлены",
+      "resourcePack": "Ресурспаки не установлены",
+      "shader": "Шейдеры не установлены"
+    },
+    "removeTitle": "Удалить файл?",
+    "removeMessage": "«{{name}}» будет удалён из сборки.",
+    "removeNamed": "Удалить {{name}}",
+    "enable": "Включить {{name}}",
+    "disable": "Выключить {{name}}",
+    "source": {
+      "modrinth": "Modrinth",
+      "curseForge": "CurseForge",
+      "local": "Локальный файл"
+    },
+    "kind": {
+      "mod": "Моды",
+      "resourcePack": "Ресурспаки",
+      "shader": "Шейдеры",
+      "dataPack": "Датапаки",
+      "modpack": "Модпаки"
+    },
+    "sort": {
+      "relevance": "По релевантности",
+      "downloads": "По загрузкам",
+      "updated": "Недавно обновлённые",
+      "newest": "Новые"
+    },
+    "filters": {
+      "source": "Источник",
+      "kind": "Тип контента",
+      "sort": "Сортировка",
+      "search": "Поиск",
+      "searchPlaceholder": "Поиск по названию или описанию",
+      "compatible": "Только совместимые",
+      "compatibleHint": "Minecraft {{mc}}",
+      "compatibleHintLoader": "Minecraft {{mc}} · {{loader}}"
+    },
+    "tabs": {
+      "label": "Контент сборки",
+      "mods": "Моды",
+      "resourcePacks": "Ресурспаки",
+      "shaders": "Шейдеры",
+      "browse": "Каталог"
+    },
+    "versions": {
+      "title": "Версии",
+      "showAll": "Показать все версии",
+      "compatibleHint": "По умолчанию показаны только версии для {{mc}} · {{loader}}",
+      "none": "Нет совместимых версий"
+    },
+    "plan": {
+      "title": "План установки",
+      "resolving": "Разбираем зависимости…",
+      "install_one": "Установить {{count}} файл · {{size}}",
+      "install_few": "Установить {{count}} файла · {{size}}",
+      "install_many": "Установить {{count}} файлов · {{size}}",
+      "install_other": "Установить {{count}} файла · {{size}}",
+      "conflicts": "Конфликты",
+      "conflict": "«{{a}}» несовместим с «{{b}}»",
+      "conflictsHint": "Удалите или отключите конфликтующий мод и попробуйте снова.",
+      "toInstall": "Будет установлено",
+      "dependency": "зависимость",
+      "manual": "Ручная загрузка",
+      "manualHint": "Авторы запретили скачивать эти файлы лаунчерам. Откройте страницу, скачайте файл и положите его в папку сборки.",
+      "openPage": "Открыть страницу загрузки",
+      "already": "Уже установлено: {{list}}",
+      "nothing": "Всё уже установлено."
+    },
+    "shaders": {
+      "hintTitle": "Шейдерам нужен загрузчик шейдеров",
+      "vanillaWarning": "В ванильной сборке шейдеры не работают. Создайте сборку на Fabric/Quilt/NeoForge (Iris) или Forge (Oculus).",
+      "missingLoader": "{{loader}} не установлен — без него шейдерпаки не загрузятся.",
+      "ready": "{{loader}} установлен: включите шейдерпак в настройках графики игры.",
+      "installLoader": "Установить {{loader}}",
+      "optifine": "OptiFine нельзя установить автоматически — лицензия запрещает распространение.",
+      "optifineLink": "Скачать OptiFine вручную",
+      "loaderName": {
+        "iris": "Iris",
+        "oculus": "Oculus"
+      }
+    }
+  },
+  "skins": {
+    "library": "Библиотека скинов",
+    "preview": "Просмотр",
+    "preview3d": "3D-превью скина: тяните, чтобы повернуть",
+    "empty": "Скинов пока нет — добавьте PNG ниже",
+    "path": "PNG-файл",
+    "pathHint": "Текстура скина 64×64 или 64×32; полный путь к файлу",
+    "pathPlaceholder": "C:\\Users\\me\\Pictures\\skin.png",
+    "name": "Название",
+    "namePlaceholder": "Мой скин",
+    "model": "Модель",
+    "models": {
+      "classic": "Классическая (Стив)",
+      "slim": "Тонкая (Алекс)"
+    },
+    "add": "Добавить в библиотеку",
+    "addTitle": "Добавить скин",
+    "localOnly": "Локальный",
+    "cape": "Плащ",
+    "noCape": "Без плаща",
+    "noCapes": "У этого аккаунта нет плащей",
+    "account": "Аккаунт",
+    "apply": "Применить к аккаунту",
+    "applied": "Применён",
+    "noAccounts": "Добавьте аккаунт, чтобы применять скины",
+    "selectHint": "Выберите скин",
+    "removeTitle": "Удалить скин?",
+    "removeMessage": "«{{name}}» будет удалён из библиотеки."
   }
 }

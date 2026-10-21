@@ -53,6 +53,81 @@ export function pathOrNull(path: string): string | null {
   return p.length === 0 ? null : p;
 }
 
+/**
+ * Required absolute path to a file with one of `exts` (lower-case, with dot).
+ * Used for modpack import/export and skin PNGs.
+ */
+export function validateFilePath(path: string, exts: readonly string[]): ValidationKey | null {
+  const p = path.trim();
+  if (p.length === 0) return "validation.required";
+  if (CONTROL_CHARS.test(p)) return "validation.path.chars";
+  if (!ABSOLUTE_PATH.test(p)) return "validation.path.absolute";
+  const base = (p.split(/[\\/]/).pop() ?? "").toLowerCase();
+  if (!exts.some((e) => base.length > e.length && base.endsWith(e))) return "validation.path.ext";
+  return null;
+}
+
+export const IMPORT_EXTS = [".mrpack", ".zip"] as const;
+export const SKIN_EXTS = [".png"] as const;
+
+// ---- URLs -------------------------------------------------------------------
+
+/** Optional http(s) URL (empty = not configured). */
+export function validateOptionalUrl(url: string): ValidationKey | null {
+  const u = url.trim();
+  if (u.length === 0) return null;
+  if (!/^https?:\/\//i.test(u)) return "validation.url.scheme";
+  try {
+    const parsed = new URL(u);
+    if (!parsed.hostname || /\s/.test(u)) return "validation.url.invalid";
+  } catch {
+    return "validation.url.invalid";
+  }
+  return null;
+}
+
+// ---- Skins ------------------------------------------------------------------
+
+export const SKIN_NAME_MAX = 32;
+
+export function validateSkinName(name: string): ValidationKey | null {
+  const n = name.trim();
+  if (n.length === 0) return "validation.required";
+  if (n.length > SKIN_NAME_MAX) return "validation.skinName.length";
+  return null;
+}
+
+/** Default library name from a PNG path: file name without extension. */
+export function skinNameFromPath(path: string): string {
+  const base = path.trim().split(/[\\/]/).pop() ?? "";
+  return base.replace(/\.png$/i, "").slice(0, SKIN_NAME_MAX);
+}
+
+// ---- Account server registration -------------------------------------------
+
+export const PASSWORD_MIN = 8;
+
+export interface RegisterDraft {
+  invite: string;
+  username: string;
+  password: string;
+  confirm: string;
+}
+
+export type RegisterErrors = Partial<Record<keyof RegisterDraft, ValidationKey>>;
+
+export function validateRegister(d: RegisterDraft): RegisterErrors {
+  const errors: RegisterErrors = {};
+  if (d.invite.trim().length === 0) errors.invite = "validation.required";
+  else if (!/^[A-Za-z0-9_-]{4,128}$/.test(d.invite.trim())) errors.invite = "validation.invite";
+  const nick = validateNick(d.username);
+  if (nick) errors.username = nick;
+  if (d.password.length === 0) errors.password = "validation.required";
+  else if (d.password.length < PASSWORD_MIN) errors.password = "validation.password.short";
+  if (d.confirm !== d.password) errors.confirm = "validation.password.mismatch";
+  return errors;
+}
+
 // ---- Memory -----------------------------------------------------------------
 
 export const MEM_MIN_MB = 512;

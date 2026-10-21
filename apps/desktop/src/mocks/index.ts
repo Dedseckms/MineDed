@@ -7,16 +7,30 @@
 import type {
   Account,
   AppError,
+  ContentSourceKind,
+  InstalledContent,
   Instance,
   InstanceId,
+  ResolvePlan,
   RunState,
+  Skin,
   TaskEvent,
   TaskKind,
   TaskSummary,
   commands,
 } from "../bindings";
-import { validateNick } from "../lib/validation";
+import { IMPORT_EXTS, SKIN_EXTS, validateFilePath, validateNick, validateSkinName } from "../lib/validation";
 import { type MockBus, mockBus } from "./bus";
+import {
+  filterVersions,
+  findProject,
+  manualUrl,
+  mockLoaderVersions,
+  projectVersions,
+  searchCatalog,
+  seedInstalled,
+} from "./content";
+import { paletteFromSeed, seedCapes, seedSkins, skinDataUrl } from "./skins";
 
 export { mockBus };
 import {
@@ -78,6 +92,10 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
   let instances = seedInstances();
   let accounts = seedAccounts();
   let settings = defaultSettings();
+  const installed = seedInstalled();
+  let skins = seedSkins();
+  const capes = seedCapes();
+  const activeCape = new Map<string, string | null>();
   const runStates = new Map<InstanceId, RunState>();
   const logTimers = new Map<InstanceId, ReturnType<typeof setInterval>>();
   const tasks = new Map<string, MockTask>();
@@ -218,9 +236,13 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
     instanceCreate: async (spec, ch) => {
       await wait();
       if (spec.name.trim() === "") return fail(appError("invalidInput", "mock: empty name"));
-      if (spec.loader.kind !== "vanilla") return fail(appError("notImplemented", "mock: loaders"));
       const version = VERSIONS.find((v) => v.id === spec.mc);
       if (!version) return notFound(`version ${spec.mc}`);
+      if (spec.loader.kind !== "vanilla") {
+        const known = mockLoaderVersions(spec.loader.kind, spec.mc);
+        if (!spec.loader.version || !known.some((v) => v.version === spec.loader.version))
+          return fail(appError("invalidInput", "mock: unknown loader version"));
+      }
       const id = runTask(
         "instanceCreate",
         "tasks.instanceCreate",
@@ -229,6 +251,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
           { stage: "stages.versionMeta", total: null },
           { stage: "stages.client", total: 24_000_000 },
           { stage: "stages.libraries", total: 48_000_000 },
+          ...(spec.loader.kind !== "vanilla" ? [{ stage: "stages.libraries", total: null }] : []),
           { stage: "stages.assets", total: 96_000_000 },
         ],
         () => {
@@ -426,6 +449,252 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       if (!accounts.some((a) => a.id === id)) return notFound(`account ${id}`);
       accounts = accounts.map((a) => ({ ...a, isDefault: a.id === id }));
       notifyAccounts();
+      return ok(null);
+    },
+
+    accountYggdrasilRegister: async () => {
+      await wait();
+      return fail(appError("notImplemented", "mock: yggdrasil register"));
+    },
+
+    // ---- loaders & content ----
+    loaderVersions: async (loader, mc) => {
+      await wait();
+      return ok(mockLoaderVersions(loader, mc));
+    },
+
+    contentSearch: async (query) => {
+      await wait();
+      if (query.limit < 1 || query.limit > 100 || query.offset < 0)
+        return fail(appError("invalidInput", "mock: bad paging"));
+      return ok(searchCatalog(query));
+    },
+
+    contentVersions: async (source, projectId, filter) => {
+      await wait();
+      const p = findProject(source, projectId);
+      if (!p) return notFound(`project ${projectId}`);
+      return ok(filterVersions(projectVersions(p), p.kind === "mod" ? filter : { ...filter, loader: null }));
+    },
+
+    contentList: async (instanceId) => {
+      await wait();
+      if (!findInstance(instanceId)) return notFound(`instance ${instanceId}`);
+      return ok((installed[instanceId] ?? []).map((c) => ({ ...c })));
+    },
+
+    contentSetEnabled: async (instanceId, fileName, enabled) => {
+      await wait();
+      const list = installed[instanceId];
+      if (!list?.some((c) => c.fileName === fileName)) return notFound(`file ${fileName}`);
+      installed[instanceId] = list.map((c) => (c.fileName === fileName ? { ...c, enabled } : c));
+      return ok(null);
+    },
+
+    contentRemove: async (instanceId, fileName) => {
+      await wait();
+      const list = installed[instanceId];
+      if (!list?.some((c) => c.fileName === fileName)) return notFound(`file ${fileName}`);
+      installed[instanceId] = list.filter((c) => c.fileName !== fileName);
+      return ok(null);
+    },
+
+    contentResolve: async (instanceId, picks) => {
+      await wait();
+      const inst = findInstance(instanceId);
+      if (!inst) return notFound(`instance ${instanceId}`);
+      const have = installed[instanceId] ?? [];
+      const plan: ResolvePlan = { install: [], alreadyInstalled: [], conflicts: [], manual: [] };
+      const seen = new Set<string>();
+      const queue: Array<{ source: ContentSourceKind; projectId: string; versionId: string | null }> = [...picks];
+      while (queue.length > 0) {
+        const pick = queue.shift();
+        if (!pick || seen.has(pick.projectId)) continue;
+        seen.add(pick.projectId);
+        const p = findProject(pick.source, pick.projectId);
+        if (!p) return notFound(`project ${pick.projectId}`);
+        const all = projectVersions(p);
+        const compatible = filterVersions(all, { mc: inst.mc, loader: p.kind === "mod" ? inst.loader.kind : null });
+        const v = pick.versionId ? all.find((x) => x.versionId === pick.versionId) : compatible[0];
+        if (!v) {
+          const e = appError("notFound", `mock: no compatible version of ${p.projectId}`);
+          return fail({ ...e, details: { projectId: p.projectId, title: p.title } });
+        }
+        const current = have.find((c) => c.projectId === p.projectId);
+        if (current && (current.versionId === v.versionId || !picks.some((x) => x.projectId === p.projectId))) {
+          plan.alreadyInstalled.push(p.projectId);
+          continue;
+        }
+        for (const bad of p.incompatible) {
+          const other = have.find((c) => c.projectId === bad) ?? plan.install.find((x) => x.projectId === bad);
+          if (other) plan.conflicts.push({ projectId: p.projectId, withProjectId: bad, reason: "incompatible" });
+        }
+        if (v.manualDownload) {
+          plan.manual.push({ projectId: p.projectId, fileName: v.fileName, url: manualUrl(p, v) });
+        } else {
+          plan.install.push(v);
+        }
+        for (const dep of p.requires) queue.push({ source: p.source, projectId: dep, versionId: null });
+      }
+      return ok(plan);
+    },
+
+    contentInstall: async (instanceId, plan, ch) => {
+      await wait();
+      const inst = findInstance(instanceId);
+      if (!inst) return notFound(`instance ${instanceId}`);
+      if (plan.conflicts.length > 0) return fail(appError("conflict", "mock: plan has conflicts"));
+      const total = plan.install.reduce((s, v) => s + v.size, 0);
+      const id = runTask("contentInstall", "tasks.contentInstall", ch, [{ stage: "stages.download", total: Math.max(total, 1) }], () => {
+        const list = installed[instanceId] ?? [];
+        const added: InstalledContent[] = plan.install.map((v) => {
+          const p = findProject(v.source, v.projectId);
+          return {
+            fileName: v.fileName,
+            kind: p?.kind ?? "mod",
+            enabled: true,
+            source: v.source,
+            projectId: v.projectId,
+            versionId: v.versionId,
+            title: p?.title ?? v.name,
+            versionNumber: v.versionNumber,
+            updateAvailable: false,
+          };
+        });
+        const ids = new Set(added.map((a) => a.projectId));
+        installed[instanceId] = [...list.filter((c) => !c.projectId || !ids.has(c.projectId)), ...added];
+        return null;
+      });
+      return ok(id);
+    },
+
+    contentUpdateAll: async (instanceId, ch) => {
+      await wait();
+      if (!findInstance(instanceId)) return notFound(`instance ${instanceId}`);
+      const count = (installed[instanceId] ?? []).filter((c) => c.updateAvailable).length;
+      const id = runTask("contentUpdate", "tasks.contentUpdate", ch, [{ stage: "stages.download", total: Math.max(1, count) * 2_000_000 }], () => {
+        installed[instanceId] = (installed[instanceId] ?? []).map((c) =>
+          c.updateAvailable ? { ...c, updateAvailable: false, versionNumber: `${c.versionNumber ?? "1.0"}.1` } : c,
+        );
+        return null;
+      });
+      return ok(id);
+    },
+
+    presetApply: async (instanceId, preset, ch) => {
+      await wait();
+      if (!findInstance(instanceId)) return notFound(`instance ${instanceId}`);
+      const id = runTask("presetApply", "tasks.presetApply", ch, [{ stage: "stages.download", total: null }], () => {
+        instances = instances.map((i) => (i.id === instanceId ? { ...i, preset } : i));
+        return null;
+      });
+      return ok(id);
+    },
+
+    instanceImport: async (path, ch) => {
+      await wait();
+      if (validateFilePath(path, IMPORT_EXTS) !== null) return fail(appError("invalidInput", "mock: bad pack path"));
+      if (/missing/i.test(path)) return fail({ ...appError("notFound", "mock: file not found"), details: { path } });
+      const mrpack = path.toLowerCase().endsWith(".mrpack");
+      const name = (path.split(/[\\/]/).pop() ?? "Pack").replace(/\.(mrpack|zip)$/i, "");
+      const id = runTask(
+        "instanceImport",
+        "tasks.instanceImport",
+        ch,
+        [
+          { stage: "stages.copy", total: null },
+          { stage: "stages.download", total: 64_000_000 },
+          { stage: "stages.libraries", total: null },
+        ],
+        () => {
+          const instId = `inst-${slug(name)}-${seq}`;
+          instances = [
+            ...instances,
+            {
+              id: instId,
+              name: name.slice(0, 64),
+              mc: mrpack ? "1.21.1" : "1.20.1",
+              loader: mrpack ? { kind: "fabric", version: "0.16.14" } : { kind: "forge", version: "1.20.1-47.4.0" },
+              java: { path: null, major: mrpack ? 21 : 17 },
+              memory: { ...settings.defaultMemory },
+              jvmArgs: [],
+              preset: null,
+              icon: null,
+              createdAt: new Date().toISOString(),
+              lastPlayed: null,
+              playtimeSec: 0,
+            },
+          ];
+          installed[instId] = [];
+          return null;
+        },
+      );
+      return ok(id);
+    },
+
+    instanceExport: async (instanceId, format, path, ch) => {
+      await wait();
+      if (!findInstance(instanceId)) return notFound(`instance ${instanceId}`);
+      const ext = format === "mrpack" ? [".mrpack"] : [".zip"];
+      if (validateFilePath(path, ext) !== null) return fail(appError("invalidInput", "mock: bad export path"));
+      const id = runTask("instanceExport", "tasks.instanceExport", ch, [{ stage: "stages.copy", total: 40_000_000 }], () => null);
+      return ok(id);
+    },
+
+    // ---- skins ----
+    skinLibrary: async () => {
+      await wait();
+      return ok(skins.map((s) => ({ ...s })));
+    },
+
+    skinAdd: async (pngPath, name, model) => {
+      await wait();
+      if (validateFilePath(pngPath, SKIN_EXTS) !== null || validateSkinName(name) !== null)
+        return fail(appError("invalidInput", "mock: bad skin"));
+      if (/missing/i.test(pngPath)) return fail({ ...appError("notFound", "mock: file not found"), details: { path: pngPath } });
+      seq += 1;
+      const skin: Skin = {
+        id: `skin-${seq}`,
+        name: name.trim(),
+        model,
+        hash: `${seq}`.padStart(64, "0"),
+        url: skinDataUrl(paletteFromSeed(`${pngPath}:${name}`), model),
+        localPath: pngPath.trim(),
+        localOnly: true,
+      };
+      skins = [...skins, skin];
+      return ok({ ...skin });
+    },
+
+    skinRemove: async (id) => {
+      await wait();
+      if (!skins.some((s) => s.id === id)) return notFound(`skin ${id}`);
+      skins = skins.filter((s) => s.id !== id);
+      return ok(null);
+    },
+
+    skinApply: async (accountId, skinId) => {
+      await wait();
+      const skin = skins.find((s) => s.id === skinId);
+      if (!skin) return notFound(`skin ${skinId}`);
+      if (!accounts.some((a) => a.id === accountId)) return notFound(`account ${accountId}`);
+      accounts = accounts.map((a) => (a.id === accountId ? { ...a, skinUrl: skin.url } : a));
+      notifyAccounts();
+      return ok(null);
+    },
+
+    capeList: async (accountId) => {
+      await wait();
+      if (!accounts.some((a) => a.id === accountId)) return notFound(`account ${accountId}`);
+      const active = activeCape.get(accountId) ?? null;
+      return ok(capes.map((c) => ({ ...c, active: c.id === active })));
+    },
+
+    capeSet: async (accountId, capeId) => {
+      await wait();
+      if (!accounts.some((a) => a.id === accountId)) return notFound(`account ${accountId}`);
+      if (capeId !== null && !capes.some((c) => c.id === capeId)) return notFound(`cape ${capeId}`);
+      activeCape.set(accountId, capeId);
       return ok(null);
     },
 
