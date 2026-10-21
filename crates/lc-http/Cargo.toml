@@ -9,11 +9,17 @@ license.workspace = true
 lc-types.workspace = true
 lc-runtime.workspace = true
 async-trait.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["socks", "stream"] }
 url.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+futures-util = "0.3.34"
+sha1 = "0.10.7"
+hex = "0.4.3"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["net"] }
+axum.workspace = true
 
 [lints]
 workspace = true
