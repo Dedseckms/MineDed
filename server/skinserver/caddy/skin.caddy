@@ -1,0 +1,21 @@
+# Site block for the owner's host Caddy (2.6.2). Not active until the owner adds
+#   import /opt/skinserver/caddy/*.caddy
+# to /etc/caddy/Caddyfile, validates and reloads (see DEPLOY.md, "Requests").
+# Requires DNS A record skins.dedseckms.ru -> the owner's external IP.
+skins.dedseckms.ru {
+	encode gzip
+
+	# Skins/capes are tiny; Drasl also enforces BodyLimit 1024 KiB.
+	request_body {
+		max_size 2MB
+	}
+
+	reverse_proxy 127.0.0.1:25585 {
+		# Drasl rate-limits unauthenticated calls by client IP taken from these
+		# headers: overwrite them so clients cannot spoof their IP.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+		# authlib-injector API discovery: users can type just the domain.
+		header_down X-Authlib-Injector-API-Location "https://skins.dedseckms.ru/authlib-injector"
+	}
+}
