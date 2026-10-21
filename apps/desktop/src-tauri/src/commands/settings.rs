@@ -15,5 +15,7 @@ pub async fn settings_get(state: State<'_, AppState>) -> AppResult<Settings> {
 #[tauri::command]
 #[specta::specta]
 pub async fn settings_set(state: State<'_, AppState>, settings: Settings) -> AppResult<()> {
+    // Proxy applies immediately; game dir / parallelism take effect on restart.
+    state.downloader.set_manual_proxy(settings.proxy.clone());
     state.settings.set(settings).await
 }

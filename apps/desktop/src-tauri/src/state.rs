@@ -3,14 +3,22 @@
 
 use std::sync::Arc;
 
-use lc_accounts::{AccountService, AuthProvider, SkinService, StubAccounts, StubSkins};
+use lc_accounts::{
+    AccountService, AccountsService, AuthProvider, KeyringTokenStore, SkinService, StubAccounts,
+    StubSkins, TokenStore,
+};
 use lc_content::{ContentService, PackIo, PresetService, StubContent};
-use lc_core::{GameLauncher, InstanceService, JavaManager, StubCore, SystemProbe, VersionService};
-use lc_http::{Downloader, StubDownloader};
+use lc_core::{
+    CoreServices, GameLauncher, GameObserver, InstanceService, JavaManager, StubCore, SystemProbe,
+    VersionService,
+};
+use lc_http::{Downloader, DownloaderConfig, HttpDownloader, StubDownloader};
 use lc_loaders::{LoaderRegistry, StubLoader};
 use lc_p2p::{DatagramTransport, RoomService, StubRooms};
-use lc_runtime::{MemorySettingsStore, SettingsStore};
+use lc_runtime::{MemorySettingsStore, Paths, SettingsStore};
+use lc_types::settings::Settings;
 use lc_types::version::LoaderKind;
+use lc_types::AppResult;
 use lc_voice::{StubVoice, VoiceEngine};
 use lc_vpn::{StubVpn, VpnController};
 
@@ -44,6 +52,65 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Real services where implemented (wave 1: core, http, accounts, settings);
+    /// everything else stays a stub.
+    pub fn real(
+        paths: Paths,
+        settings: Arc<dyn SettingsStore>,
+        initial: &Settings,
+        observer: Arc<dyn GameObserver>,
+    ) -> AppResult<Self> {
+        let downloader: Arc<dyn Downloader> = Arc::new(HttpDownloader::new(
+            DownloaderConfig::from_settings(initial),
+        )?);
+        let tokens: Arc<dyn TokenStore> = Arc::new(KeyringTokenStore::new(&paths));
+        let accounts = Arc::new(AccountsService::new(&paths, downloader.clone(), tokens));
+
+        let mut loaders = LoaderRegistry::default();
+        for kind in [
+            LoaderKind::Fabric,
+            LoaderKind::Quilt,
+            LoaderKind::Forge,
+            LoaderKind::NeoForge,
+        ] {
+            loaders.register(Arc::new(StubLoader(kind)));
+        }
+        let loaders = Arc::new(loaders);
+
+        let core = Arc::new(CoreServices::new(
+            paths,
+            downloader.clone(),
+            accounts.clone(),
+            loaders.clone(),
+            observer,
+            Vec::new(),
+        ));
+        let content = Arc::new(StubContent);
+        let rooms = Arc::new(StubRooms);
+
+        Ok(Self {
+            tasks: Arc::new(TaskRegistry::default()),
+            settings,
+            downloader,
+            versions: core.clone(),
+            java: core.clone(),
+            instances: core.clone(),
+            launcher: core.clone(),
+            system: core,
+            loaders,
+            content: content.clone(),
+            packs: content.clone(),
+            presets: content,
+            accounts: accounts.clone(),
+            auth: accounts,
+            skins: Arc::new(StubSkins),
+            vpn: Arc::new(StubVpn),
+            rooms: rooms.clone(),
+            datagrams: rooms,
+            voice: Arc::new(StubVoice),
+        })
+    }
+
     /// Every service is a stub that returns `notImplemented`.
     pub fn stubs() -> Self {
         let core = Arc::new(StubCore);

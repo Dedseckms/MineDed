@@ -2,6 +2,11 @@
 //! `observers.rs`, `bindings.rs`) is owned by the lead; each `commands/<domain>.rs`
 //! is owned by the role listed at its top.
 
+use std::sync::Arc;
+
+use lc_runtime::{JsonSettingsStore, Paths, SettingsStore};
+use tauri::Manager;
+
 pub mod bindings;
 pub mod commands;
 pub mod events;
@@ -9,14 +14,38 @@ pub mod observers;
 pub mod state;
 pub mod tasks;
 
+/// Builds the real service container: settings in the config dir, game data
+/// in `settings.gameDir` or the app data dir.
+fn build_state(app: &tauri::AppHandle) -> Result<state::AppState, Box<dyn std::error::Error>> {
+    let config_dir = app.path().app_config_dir()?;
+    let data_dir = app.path().app_data_dir()?;
+    let settings_store: Arc<dyn SettingsStore> =
+        Arc::new(JsonSettingsStore::new(config_dir.join("settings.json")));
+    let settings = tauri::async_runtime::block_on(settings_store.get())?;
+    let root = settings
+        .game_dir
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or(data_dir);
+    let observer = Arc::new(observers::EventObserver::new(app.clone()));
+    Ok(state::AppState::real(
+        Paths::new(root),
+        settings_store,
+        &settings,
+        observer,
+    )?)
+}
+
 pub fn run() {
     let builder = bindings::specta_builder();
 
     let result = tauri::Builder::default()
-        .manage(state::AppState::stubs())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
+            let state = build_state(app.handle())?;
+            app.manage(state);
             Ok(())
         })
         .run(tauri::generate_context!());
