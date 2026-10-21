@@ -1,0 +1,81 @@
+{
+  "_comment": "Trimmed copy of Forge 1.20.1-47.3.0 install_profile.json",
+  "spec": 1,
+  "profile": "forge",
+  "version": "1.20.1-forge-47.3.0",
+  "path": null,
+  "minecraft": "1.20.1",
+  "serverJarPath": "{LIBRARY_DIR}/net/minecraft/server/{MINECRAFT_VERSION}/server-{MINECRAFT_VERSION}.jar",
+  "data": {
+    "MAPPINGS": {
+      "client": "[de.oceanlabs.mcp:mcp_config:1.20.1-20230612.114412:mappings@txt]",
+      "server": "[de.oceanlabs.mcp:mcp_config:1.20.1-20230612.114412:mappings@txt]"
+    },
+    "MOJMAPS": {
+      "client": "[net.minecraft:client:1.20.1-20230612.114412:mappings@txt]",
+      "server": "[net.minecraft:server:1.20.1-20230612.114412:mappings@txt]"
+    },
+    "BINPATCH": {
+      "client": "/data/client.lzma",
+      "server": "/data/server.lzma"
+    },
+    "MC_SLIM_SHA": {
+      "client": "'51bc8a1ab4a51d4bdcd2d81b2bd5b9a6c1e5e4b8'",
+      "server": "'aaa'"
+    },
+    "PATCHED": {
+      "client": "[net.minecraftforge:forge:1.20.1-47.3.0:client]",
+      "server": "[net.minecraftforge:forge:1.20.1-47.3.0:server]"
+    }
+  },
+  "processors": [
+    {
+      "sides": ["server"],
+      "jar": "net.minecraftforge:installertools:1.4.1",
+      "classpath": [],
+      "args": ["--task", "EXTRACT_FILES"]
+    },
+    {
+      "jar": "net.minecraftforge:installertools:1.4.1",
+      "classpath": ["net.sf.jopt-simple:jopt-simple:5.0.4"],
+      "args": ["--task", "DOWNLOAD_MOJMAPS", "--version", "{MINECRAFT_VERSION}", "--side", "{SIDE}", "--output", "{MOJMAPS}"]
+    },
+    {
+      "jar": "net.minecraftforge:binarypatcher:1.1.1",
+      "classpath": ["net.sf.jopt-simple:jopt-simple:5.0.4"],
+      "args": ["--clean", "{MINECRAFT_JAR}", "--output", "{PATCHED}", "--apply", "{BINPATCH}"],
+      "outputs": {
+        "{PATCHED}": "{MC_SLIM_SHA}"
+      }
+    }
+  ],
+  "libraries": [
+    {
+      "name": "net.minecraftforge:installertools:1.4.1",
+      "downloads": {
+        "artifact": {
+          "path": "net/minecraftforge/installertools/1.4.1/installertools-1.4.1.jar",
+          "url": "https://maven.minecraftforge.net/net/minecraftforge/installertools/1.4.1/installertools-1.4.1.jar",
+          "sha1": "6f4dd8e0b4b1a7c3e4cf8c5c2b0b9d8f2f1e0a11",
+          "size": 1000
+        }
+      }
+    },
+    {
+      "name": "net.minecraftforge:forge:1.20.1-47.3.0:universal",
+      "downloads": {
+        "artifact": {
+          "path": "net/minecraftforge/forge/1.20.1-47.3.0/forge-1.20.1-47.3.0-universal.jar",
+          "url": "https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.3.0/forge-1.20.1-47.3.0-universal.jar",
+          "sha1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 10
+        }
+      }
+    }
+  ],
+  "icon": "data:image/png;base64,",
+  "json": "/version.json",
+  "logo": "/big_logo.png",
+  "mirrorList": "https://files.minecraftforge.net/mirrors-2.0.json",
+  "welcome": "Welcome to the simple Forge installer."
+}

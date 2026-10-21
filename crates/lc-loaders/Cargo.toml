@@ -10,9 +10,19 @@ lc-types.workspace = true
 lc-runtime.workspace = true
 lc-http.workspace = true
 async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "io-util"] }
+sha1 = "0.10.7"
+hex = "0.4.3"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tokio.workspace = true
+tempfile = "3.20"
+# Only to name `reqwest::Client` in the mock `Downloader`.
+reqwest.workspace = true
 
 [lints]
 workspace = true
