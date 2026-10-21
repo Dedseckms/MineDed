@@ -87,6 +87,13 @@ pub(crate) fn from_status(
     }
 }
 
+/// Built by [`from_status`]: the server answered, the transport worked.
+pub(crate) fn is_http_status(err: &AppError) -> bool {
+    err.details
+        .as_ref()
+        .is_some_and(|d| d.contains_key("status"))
+}
+
 fn chain_message(e: &(dyn StdError + 'static)) -> String {
     let mut msg = e.to_string();
     let mut cur = e.source();

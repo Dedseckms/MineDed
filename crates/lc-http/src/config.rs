@@ -38,6 +38,9 @@ pub struct DownloaderConfig {
     pub proxy: Option<ProxyCfg>,
     /// Maximum body size accepted by `get_bytes` (default 32 MiB).
     pub max_body_bytes: u64,
+    /// How long a host stays "proxy first" after `Route::Auto` needed the
+    /// proxy for it (default 30 min).
+    pub proxy_first_ttl: Duration,
 }
 
 impl Default for DownloaderConfig {
@@ -55,6 +58,7 @@ impl Default for DownloaderConfig {
             use_bmclapi: true,
             proxy: None,
             max_body_bytes: 32 * 1024 * 1024,
+            proxy_first_ttl: Duration::from_secs(30 * 60),
         }
     }
 }
@@ -91,6 +95,7 @@ impl fmt::Debug for DownloaderConfig {
             .field("use_bmclapi", &self.use_bmclapi)
             .field("proxy", &self.proxy.as_ref().map(redacted_proxy))
             .field("max_body_bytes", &self.max_body_bytes)
+            .field("proxy_first_ttl", &self.proxy_first_ttl)
             .finish()
     }
 }
