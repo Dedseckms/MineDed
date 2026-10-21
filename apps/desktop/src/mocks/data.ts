@@ -171,6 +171,7 @@ export function defaultSettings(): Settings {
     closeOnLaunch: false,
     autoUpdate: true,
     hubUrl: "",
+    skinServer: null,
   };
 }
 

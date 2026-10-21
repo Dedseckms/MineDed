@@ -36,6 +36,18 @@ impl AccountService for StubAccounts {
         Err(AppError::not_implemented("AccountService::yggdrasil_login"))
     }
 
+    async fn yggdrasil_register(
+        &self,
+        _api_root: &Url,
+        _invite: &str,
+        _username: &str,
+        _password: &str,
+    ) -> AppResult<Account> {
+        Err(AppError::not_implemented(
+            "AccountService::yggdrasil_register",
+        ))
+    }
+
     async fn yggdrasil_servers(&self) -> AppResult<Vec<YggdrasilServer>> {
         Ok(Vec::new())
     }

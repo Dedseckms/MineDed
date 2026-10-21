@@ -92,6 +92,8 @@ pub struct Settings {
     pub auto_update: bool,
     /// Hub API root, e.g. `https://mc.example.ru/api/v1`.
     pub hub_url: String,
+    /// API root of the owner's skin/account server (authlib-injector), `None` = not configured.
+    pub skin_server: Option<String>,
 }
 
 impl Default for Settings {
@@ -115,6 +117,7 @@ impl Default for Settings {
             close_on_launch: false,
             auto_update: true,
             hub_url: String::new(),
+            skin_server: None,
         }
     }
 }

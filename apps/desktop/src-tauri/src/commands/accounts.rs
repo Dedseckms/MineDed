@@ -37,6 +37,23 @@ pub async fn account_yggdrasil_login(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn account_yggdrasil_register(
+    state: State<'_, AppState>,
+    api_root: String,
+    invite: String,
+    username: String,
+    password: String,
+) -> AppResult<Account> {
+    let api_root = Url::parse(&api_root)
+        .map_err(|e| AppError::new(ErrorCode::InvalidInput, format!("api_root: {e}")))?;
+    state
+        .accounts
+        .yggdrasil_register(&api_root, &invite, &username, &password)
+        .await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn account_yggdrasil_servers(
     state: State<'_, AppState>,
 ) -> AppResult<Vec<YggdrasilServer>> {

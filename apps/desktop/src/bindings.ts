@@ -40,6 +40,7 @@ export const commands = {
 	accountList: () => typedError<Account[], AppError>(__TAURI_INVOKE("account_list")),
 	accountOfflineAdd: (name: string) => typedError<Account, AppError>(__TAURI_INVOKE("account_offline_add", { name })),
 	accountYggdrasilLogin: (apiRoot: string, username: string, password: string) => typedError<Account, AppError>(__TAURI_INVOKE("account_yggdrasil_login", { apiRoot, username, password })),
+	accountYggdrasilRegister: (apiRoot: string, invite: string, username: string, password: string) => typedError<Account, AppError>(__TAURI_INVOKE("account_yggdrasil_register", { apiRoot, invite, username, password })),
 	accountYggdrasilServers: () => typedError<YggdrasilServer[], AppError>(__TAURI_INVOKE("account_yggdrasil_servers")),
 	accountRemove: (id: AccountId) => typedError<null, AppError>(__TAURI_INVOKE("account_remove", { id })),
 	accountSetDefault: (id: AccountId) => typedError<null, AppError>(__TAURI_INVOKE("account_set_default", { id })),
@@ -523,6 +524,8 @@ export type Settings = {
 	autoUpdate: boolean,
 	/**  Hub API root, e.g. `https://mc.example.ru/api/v1`. */
 	hubUrl: string,
+	/**  API root of the owner's skin/account server (authlib-injector), `None` = not configured. */
+	skinServer: string | null,
 };
 
 export type Skin = {

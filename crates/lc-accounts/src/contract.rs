@@ -74,6 +74,14 @@ pub trait AccountService: Send + Sync {
         username: &str,
         password: &str,
     ) -> AppResult<Account>;
+    /// Registers on an invite-only server, then logs in.
+    async fn yggdrasil_register(
+        &self,
+        api_root: &Url,
+        invite: &str,
+        username: &str,
+        password: &str,
+    ) -> AppResult<Account>;
     async fn yggdrasil_servers(&self) -> AppResult<Vec<YggdrasilServer>>;
     async fn remove(&self, id: AccountId) -> AppResult<()>;
     async fn set_default(&self, id: AccountId) -> AppResult<()>;

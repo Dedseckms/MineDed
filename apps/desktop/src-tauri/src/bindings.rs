@@ -50,6 +50,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             accounts::account_list,
             accounts::account_offline_add,
             accounts::account_yggdrasil_login,
+            accounts::account_yggdrasil_register,
             accounts::account_yggdrasil_servers,
             accounts::account_remove,
             accounts::account_set_default,

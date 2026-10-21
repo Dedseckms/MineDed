@@ -14,7 +14,10 @@ pub enum Route {
     Direct,
     /// Through mihomo's local mixed-port (VPN mode `launcherOnly` or higher).
     Proxied,
-    /// Direct first, switch to proxy for this host after `Blocked`-like errors.
+    /// Direct first; on timeout / network error / `Blocked` / hash mismatch /
+    /// spoofed response (HTML block page instead of expected data) retry via the
+    /// proxy (manual proxy from settings, later the built-in VPN). The host is
+    /// then remembered as "proxy first" for a while.
     Auto,
 }
 
