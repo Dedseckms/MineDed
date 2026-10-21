@@ -8,10 +8,16 @@ not by `hub`. The launcher talks to it through authlib-injector conventions.
 - Drasl: https://github.com/unmojang/drasl — verify the exact endpoint list against the
   deployed version during wave 0.
 
+## Deployed instance (Drasl 4.0.1)
+
+- Public: `https://skins.dedseckms.ru` (after DNS + Caddy import); on the host: `127.0.0.1:25585`.
+- Passwords: scrypt (Drasl has no argon2) — accepted by lead. Registration: invite-only.
+- Admin API: `/drasl/api/v3` (v2 removed in Drasl 4).
+
 ## API root and discovery
 
-- API root: `https://<domain>/` (Drasl serves the authlib-injector metadata at its root).
-- The site root sends `X-Authlib-Injector-API-Location`, so users can type just the domain.
+- API root: `https://<domain>/authlib-injector` — all Yggdrasil paths below are relative to it.
+- Drasl sends `X-Authlib-Injector-API-Location`, so users can type just the domain (ALI discovery).
 - Launch: `-javaagent:authlib-injector.jar=<api root>` plus
   `-Dauthlibinjector.yggdrasil.prefetched=<base64 of GET <api root>>`.
 
