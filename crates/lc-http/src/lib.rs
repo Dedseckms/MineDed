@@ -7,6 +7,7 @@ mod downloader;
 mod errors;
 pub mod mirrors;
 mod progress;
+mod route;
 mod stub;
 
 pub use config::{default_user_agent, DownloaderConfig};

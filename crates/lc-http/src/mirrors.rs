@@ -92,6 +92,17 @@ mod tests {
             assert_eq!(bmclapi_for(&u(from)).unwrap().as_str(), to, "{from}");
         }
         assert!(bmclapi_for(&u("https://api.modrinth.com/v2/project/x")).is_none());
+        // Modrinth/CurseForge have no mirrors: only `Route::Auto` applies.
+        for host in [
+            "api.modrinth.com",
+            "cdn.modrinth.com",
+            "api.curseforge.com",
+            "edge.forgecdn.net",
+            "mediafilez.forgecdn.net",
+        ] {
+            let orig = u(&format!("https://{host}/a/b.jar"));
+            assert_eq!(candidates(&orig, true, true), vec![orig.clone()], "{host}");
+        }
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! Real `Downloader`: parallel, resumable, hash-checked, with mirrors.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,7 +12,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use lc_runtime::{CancelToken, ProgressSink};
 use lc_types::settings::{ProxyCfg, ProxyKind};
 use lc_types::{AppError, AppResult, ErrorCode};
-use reqwest::header::{CONTENT_RANGE, RANGE};
+use reqwest::header::{CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use reqwest::StatusCode;
 use sha1::{Digest, Sha1};
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -23,23 +24,48 @@ use crate::contract::{DownloadReq, Downloader, ResourceKind, Route};
 use crate::errors::{self, AttemptError};
 use crate::mirrors;
 use crate::progress::Progress;
+use crate::route::{self, HostMemory};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(8);
 const HASH_BUF: usize = 64 * 1024;
+/// Target of the client handed out for `Route::Proxied` while no proxy is
+/// configured: the discard port on loopback, so every request fails fast.
+const UNCONFIGURED_PROXY: &str = "http://127.0.0.1:9";
 
 /// Production implementation of [`Downloader`].
 ///
 /// Cheap to share behind `Arc`; all methods take `&self`.
 pub struct HttpDownloader {
     cfg: DownloaderConfig,
-    /// Current client for `Route::Direct` (carries the manual proxy, if any).
-    direct: RwLock<reqwest::Client>,
+    /// Never uses a proxy (system/env proxies ignored too).
+    direct: reqwest::Client,
+    /// Clients that depend on the manual proxy; swapped by `set_manual_proxy`.
+    routed: RwLock<Routed>,
+    /// Hosts that `Route::Auto` currently sends to the proxy first.
+    memory: Arc<HostMemory>,
+    /// `client(Route::Proxied)` without a proxy: every request fails.
+    unconfigured: reqwest::Client,
     prefer_mirrors: AtomicBool,
     global: Arc<Semaphore>,
     per_host: Mutex<HashMap<String, Arc<Semaphore>>>,
     /// One writer per destination across concurrent `fetch_many` calls.
     path_locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
-    route_warned: AtomicBool,
+    proxied_warned: AtomicBool,
+}
+
+#[derive(Clone)]
+struct Routed {
+    /// Every request through the manual proxy; `None` when none is set.
+    proxy: Option<reqwest::Client>,
+    /// Direct, except hosts remembered as "proxy first".
+    auto: reqwest::Client,
+}
+
+/// Which way one attempt goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Leg {
+    Direct,
+    Proxy,
 }
 
 impl std::fmt::Debug for HttpDownloader {
@@ -58,14 +84,26 @@ impl HttpDownloader {
         cfg.max_per_host = cfg.max_per_host.clamp(1, cfg.max_parallel);
         cfg.attempts_per_url = cfg.attempts_per_url.max(1);
         let proxy = cfg.proxy.take();
-        let client = build_client(&cfg, proxy.as_ref())?;
+        let memory = Arc::new(HostMemory::new(cfg.proxy_first_ttl));
+        let direct = build_client(&cfg, None)?;
+        let routed = build_routed(&cfg, proxy.as_ref(), &memory, &direct)?;
+        let unconfigured = build_client(
+            &cfg,
+            Some(
+                reqwest::Proxy::all(UNCONFIGURED_PROXY)
+                    .map_err(|e| AppError::internal(format!("cannot build proxy: {e}")))?,
+            ),
+        )?;
         Ok(Self {
             prefer_mirrors: AtomicBool::new(cfg.prefer_mirrors),
             global: Arc::new(Semaphore::new(cfg.max_parallel)),
             per_host: Mutex::new(HashMap::new()),
             path_locks: Mutex::new(HashMap::new()),
-            route_warned: AtomicBool::new(false),
-            direct: RwLock::new(client),
+            proxied_warned: AtomicBool::new(false),
+            direct,
+            routed: RwLock::new(routed),
+            memory,
+            unconfigured,
             cfg,
         })
     }
@@ -75,11 +113,124 @@ impl HttpDownloader {
         self.prefer_mirrors.store(prefer, Ordering::Relaxed);
     }
 
-    fn current_client(&self) -> reqwest::Client {
-        self.direct
+    /// `get_bytes` with an explicit route. `Route::Proxied` fails with
+    /// `Network` when no proxy is configured; `Route::Auto` without a proxy
+    /// behaves like `Route::Direct`.
+    pub async fn get_bytes_via(
+        &self,
+        url: &Url,
+        kind: ResourceKind,
+        route: Route,
+    ) -> AppResult<Vec<u8>> {
+        // Fails early when the route is unavailable (no proxy for `Proxied`).
+        self.legs(url, route)
+            .map_err(|e| e.detail("url", url.as_str()))?;
+        let mut last_err = None;
+        // No hash to verify against: mirrors only after the original.
+        for candidate in self.candidates(std::slice::from_ref(url), false) {
+            let res = self
+                .run_routed(&candidate, route, None, |client| {
+                    let candidate = &candidate;
+                    async move { self.get_once(&client, candidate, kind).await }
+                })
+                .await;
+            match res {
+                Ok(body) => return Ok(body),
+                Err(fail) if fail.is_terminal() => return Err(fail.err),
+                Err(fail) => last_err = Some(fail.err),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            AppError::new(ErrorCode::InvalidInput, "no URL candidates").detail("url", url.as_str())
+        }))
+    }
+
+    fn routed(&self) -> Routed {
+        self.routed
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Ordered `(leg, client)` pairs a request to `url` goes through.
+    fn legs(&self, url: &Url, route: Route) -> AppResult<Vec<(Leg, reqwest::Client)>> {
+        let proxy = self.routed().proxy;
+        let direct = (Leg::Direct, self.direct.clone());
+        Ok(match (route, proxy) {
+            (Route::Direct, _) | (Route::Auto, None) => vec![direct],
+            (Route::Proxied, Some(p)) => vec![(Leg::Proxy, p)],
+            (Route::Proxied, None) => return Err(route::no_proxy_configured()),
+            (Route::Auto, Some(p)) if self.memory.is_proxy_first(url) => {
+                vec![(Leg::Proxy, p), direct]
+            }
+            (Route::Auto, Some(p)) => vec![direct, (Leg::Proxy, p)],
+        })
+    }
+
+    /// Runs `op` against `url` over the legs of `route`, with retries per leg.
+    /// A leg failing with a network error, `Blocked`, a hash mismatch or a
+    /// spoofed response hands over to the next leg; transport-level failures
+    /// skip the same-leg retries when another leg is available. Success via
+    /// the proxy after a failed direct attempt marks the host "proxy first".
+    async fn run_routed<T, F, Fut>(
+        &self,
+        url: &Url,
+        route: Route,
+        cancel: Option<&CancelToken>,
+        mut op: F,
+    ) -> Result<T, AttemptError>
+    where
+        F: FnMut(reqwest::Client) -> Fut,
+        Fut: Future<Output = Result<T, AttemptError>>,
+    {
+        let legs = self.legs(url, route).map_err(AttemptError::fatal)?;
+        let n = legs.len();
+        let mut last: Option<AttemptError> = None;
+        for (i, (leg, client)) in legs.into_iter().enumerate() {
+            let has_next = i + 1 < n;
+            for attempt in 0..self.cfg.attempts_per_url {
+                if cancel.is_some_and(CancelToken::is_cancelled) {
+                    return Err(AttemptError::fatal(errors::cancelled()));
+                }
+                let fail = match op(client.clone()).await {
+                    Ok(v) => {
+                        if i > 0 {
+                            match leg {
+                                Leg::Proxy => self.memory.remember(url),
+                                Leg::Direct => self.memory.forget(url),
+                            }
+                        }
+                        return Ok(v);
+                    }
+                    Err(fail) => fail,
+                };
+                if fail.is_terminal() {
+                    return Err(fail);
+                }
+                tracing::debug!(url = %url, ?leg, attempt, error = %fail.err, "attempt failed");
+                let escalate_now =
+                    has_next && route::worth_proxy(&fail.err) && !errors::is_http_status(&fail.err);
+                let retry = fail.retry && !escalate_now && attempt + 1 < self.cfg.attempts_per_url;
+                let delay = self.backoff(attempt, fail.retry_after);
+                last = Some(fail);
+                if !retry {
+                    break;
+                }
+                match cancel {
+                    Some(c) => sleep_or_cancel(delay, c)
+                        .await
+                        .map_err(AttemptError::fatal)?,
+                    None => tokio::time::sleep(delay).await,
+                }
+            }
+            let Some(fail) = &last else { break };
+            if !has_next || !route::worth_proxy(&fail.err) {
+                break;
+            }
+            tracing::info!(url = %url, from = ?leg, error = %fail.err, "route failed; trying the other route");
+        }
+        Err(last
+            .unwrap_or_else(|| AttemptError::fatal(AppError::internal("no download attempt made"))))
     }
 
     fn host_semaphore(&self, url: &Url) -> Arc<Semaphore> {
@@ -210,56 +361,50 @@ impl HttpDownloader {
 
         let part = part_path(&req.dest);
         // Bytes of this request currently counted in `prog`.
-        let mut counted = 0u64;
+        let counted = AtomicU64::new(0);
         let mut last_err: Option<AppError> = None;
 
+        let (req_ref, part_ref, counted_ref) = (&req, part.as_path(), &counted);
         for url in &candidates {
-            for attempt in 0..self.cfg.attempts_per_url {
-                sink.check_cancelled()?;
-                let host = self.host_semaphore(url);
-                let res = {
-                    let _host = host
-                        .acquire()
+            sink.check_cancelled()?;
+            let res = self
+                .run_routed(url, Route::Auto, Some(cancel), move |client| async move {
+                    let host = self.host_semaphore(url);
+                    let _host = host.acquire().await.map_err(|_| {
+                        AttemptError::fatal(AppError::internal("host semaphore closed"))
+                    })?;
+                    self.attempt(&client, url, req_ref, part_ref, prog, counted_ref, cancel)
                         .await
-                        .map_err(|_| AppError::internal("host semaphore closed"))?;
-                    self.attempt(url, &req, &part, prog, &mut counted, cancel)
-                        .await
-                };
-                let fail = match res {
-                    Ok(()) => return Ok(()),
-                    Err(fail) => fail,
-                };
-                if fail.is_terminal() {
-                    return Err(fail.err);
-                }
-                tracing::debug!(url = %url, attempt, error = %fail.err, "download attempt failed");
-                let retry = fail.retry && attempt + 1 < self.cfg.attempts_per_url;
-                let delay = self.backoff(attempt, fail.retry_after);
-                last_err = Some(fail.err);
-                if !retry {
-                    break;
-                }
-                sleep_or_cancel(delay, cancel).await?;
+                })
+                .await;
+            match res {
+                Ok(()) => return Ok(()),
+                Err(fail) if fail.is_terminal() => return Err(fail.err),
+                Err(fail) => last_err = Some(fail.err),
             }
         }
-        prog.rollback(counted);
+        prog.rollback(counted.swap(0, Ordering::Relaxed));
         let err = last_err.unwrap_or_else(|| AppError::internal("no download attempt made"));
         tracing::warn!(dest = %req.dest.display(), error = %err, "download failed");
         Err(err.detail("path", req.dest.display().to_string()))
     }
 
     /// Single HTTP attempt: optional resume, stream to `.part`, verify, rename.
+    #[allow(clippy::too_many_arguments)]
     async fn attempt(
         &self,
+        client: &reqwest::Client,
         url: &Url,
         req: &DownloadReq,
         part: &Path,
         prog: &Progress<'_>,
-        counted: &mut u64,
+        counted: &AtomicU64,
         cancel: &CancelToken,
     ) -> Result<(), AttemptError> {
         // Every attempt re-derives progress from what is on disk.
-        prog.rollback(std::mem::take(counted));
+        prog.rollback(counted.swap(0, Ordering::Relaxed));
+        // Without a hash, an HTML block page would be saved as the file.
+        let sniff = req.sha1.is_none() && route::expects_data(req.kind);
         let fatal_io = |e: std::io::Error| AttemptError::fatal(errors::io_err(e, part));
 
         let mut part_len = match tokio::fs::metadata(part).await {
@@ -279,7 +424,7 @@ impl HttpDownloader {
                 // A complete part left over from an interrupted rename.
                 if hash_matches(part, req.sha1.as_deref()).await? {
                     finish(part, &req.dest).await?;
-                    *counted = size;
+                    counted.store(size, Ordering::Relaxed);
                     prog.reused(size);
                     return Ok(());
                 }
@@ -288,7 +433,7 @@ impl HttpDownloader {
             }
         }
 
-        let mut rb = self.current_client().get(url.clone());
+        let mut rb = client.get(url.clone());
         if part_len > 0 {
             rb = rb.header(RANGE, format!("bytes={part_len}-"));
         }
@@ -319,10 +464,13 @@ impl HttpDownloader {
                 .open(part)
                 .await
                 .map_err(fatal_io)?;
-            *counted = part_len;
+            counted.store(part_len, Ordering::Relaxed);
             prog.reused(part_len);
             (hasher, file)
         } else if status.is_success() {
+            if sniff && route::looks_like_block_page(content_type(&resp), b"") {
+                return Err(AttemptError::fatal(route::spoofed(url)));
+            }
             // 200 (server ignored Range or no part): start from scratch.
             part_len = 0;
             let file = tokio::fs::File::create(part).await.map_err(fatal_io)?;
@@ -359,11 +507,16 @@ impl HttpDownloader {
                     return Err(AttemptError::retryable(errors::from_reqwest(&e, url)));
                 }
             };
+            if sniff && written == 0 && route::looks_like_block_page(None, &chunk) {
+                drop(out);
+                remove_quiet(part).await;
+                return Err(AttemptError::fatal(route::spoofed(url)));
+            }
             out.write_all(&chunk).await.map_err(fatal_io)?;
             hasher.update(&chunk);
             let n = chunk.len() as u64;
             written += n;
-            *counted += n;
+            counted.fetch_add(n, Ordering::Relaxed);
             prog.received(n);
             if req.size.is_some_and(|s| written > s) {
                 break;
@@ -399,9 +552,13 @@ impl HttpDownloader {
         finish(part, &req.dest).await
     }
 
-    async fn get_once(&self, url: &Url) -> Result<Vec<u8>, AttemptError> {
-        let resp = self
-            .current_client()
+    async fn get_once(
+        &self,
+        client: &reqwest::Client,
+        url: &Url,
+        kind: ResourceKind,
+    ) -> Result<Vec<u8>, AttemptError> {
+        let resp = client
             .get(url.clone())
             .timeout(self.cfg.request_timeout)
             .send()
@@ -420,6 +577,10 @@ impl HttpDownloader {
                     .detail("limit", limit.to_string()),
             )
         };
+        let sniff = route::expects_data(kind);
+        if sniff && route::looks_like_block_page(content_type(&resp), b"") {
+            return Err(AttemptError::fatal(route::spoofed(url)));
+        }
         if resp.content_length().is_some_and(|len| len > limit) {
             return Err(too_big());
         }
@@ -433,8 +594,17 @@ impl HttpDownloader {
             }
             body.extend_from_slice(&chunk);
         }
+        if sniff && route::looks_like_block_page(None, &body) {
+            return Err(AttemptError::fatal(route::spoofed(url)));
+        }
         Ok(body)
     }
+}
+
+fn content_type(resp: &reqwest::Response) -> Option<&str> {
+    resp.headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
 }
 
 #[async_trait]
@@ -456,44 +626,30 @@ impl Downloader for HttpDownloader {
         Ok(())
     }
 
-    async fn get_bytes(&self, url: &Url, _kind: ResourceKind) -> AppResult<Vec<u8>> {
-        let mut last_err = None;
-        // No hash to verify against: mirrors only after the original.
-        for candidate in self.candidates(std::slice::from_ref(url), false) {
-            for attempt in 0..self.cfg.attempts_per_url {
-                match self.get_once(&candidate).await {
-                    Ok(body) => return Ok(body),
-                    Err(fail) => {
-                        let retry = fail.retry && attempt + 1 < self.cfg.attempts_per_url;
-                        let delay = self.backoff(attempt, fail.retry_after);
-                        last_err = Some(fail.err);
-                        if !retry {
-                            break;
-                        }
-                        tokio::time::sleep(delay).await;
-                    }
-                }
-            }
-        }
-        Err(last_err.unwrap_or_else(|| {
-            AppError::new(ErrorCode::InvalidInput, "no URL candidates").detail("url", url.as_str())
-        }))
+    /// Uses `Route::Auto` (see [`HttpDownloader::get_bytes_via`]). For kinds
+    /// other than `Other`, an HTML response counts as a spoofed block page.
+    async fn get_bytes(&self, url: &Url, kind: ResourceKind) -> AppResult<Vec<u8>> {
+        self.get_bytes_via(url, kind, Route::Auto).await
     }
 
+    /// `Direct` never uses a proxy. `Auto` is direct except for hosts
+    /// currently remembered as "proxy first". `Proxied` goes through the
+    /// manual proxy; without one, every request of the returned client fails.
     fn client(&self, route: Route) -> reqwest::Client {
         match route {
-            Route::Direct => self.current_client(),
-            // TODO(net): Proxied → mihomo mixed-port client from lc-vpn;
-            // Auto → direct with per-host switch to proxy after `Blocked`.
-            Route::Proxied | Route::Auto => {
-                if !self.route_warned.swap(true, Ordering::Relaxed) {
-                    tracing::warn!(
-                        ?route,
-                        "VPN route is not wired yet; falling back to the direct client"
-                    );
+            Route::Direct => self.direct.clone(),
+            Route::Auto => self.routed().auto,
+            Route::Proxied => match self.routed().proxy {
+                Some(p) => p,
+                None => {
+                    if !self.proxied_warned.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(
+                            "proxied client requested but no proxy is configured; requests will fail"
+                        );
+                    }
+                    self.unconfigured.clone()
                 }
-                self.current_client()
-            }
+            },
         }
     }
 
@@ -509,9 +665,9 @@ impl Downloader for HttpDownloader {
     }
 
     fn set_manual_proxy(&self, proxy: Option<ProxyCfg>) {
-        match build_client(&self.cfg, proxy.as_ref()) {
-            Ok(client) => {
-                *self.direct.write().unwrap_or_else(PoisonError::into_inner) = client;
+        match build_routed(&self.cfg, proxy.as_ref(), &self.memory, &self.direct) {
+            Ok(routed) => {
+                *self.routed.write().unwrap_or_else(PoisonError::into_inner) = routed;
                 match &proxy {
                     Some(p) => tracing::info!(proxy = %redacted_proxy(p), "manual proxy applied"),
                     None => tracing::info!("manual proxy cleared"),
@@ -524,13 +680,16 @@ impl Downloader for HttpDownloader {
     }
 }
 
-fn build_client(cfg: &DownloaderConfig, proxy: Option<&ProxyCfg>) -> AppResult<reqwest::Client> {
+fn build_client(
+    cfg: &DownloaderConfig,
+    proxy: Option<reqwest::Proxy>,
+) -> AppResult<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .user_agent(cfg.user_agent.clone())
         .connect_timeout(cfg.connect_timeout)
         .read_timeout(cfg.read_timeout);
     b = match proxy {
-        Some(p) => b.proxy(build_proxy(p)?),
+        Some(p) => b.proxy(p),
         // `None` means direct: ignore HTTP(S)_PROXY / system proxy settings.
         None => b.no_proxy(),
     };
@@ -538,14 +697,63 @@ fn build_client(cfg: &DownloaderConfig, proxy: Option<&ProxyCfg>) -> AppResult<r
         .map_err(|e| AppError::internal(format!("cannot build HTTP client: {e}")))
 }
 
+/// Proxy-dependent clients for the given manual proxy.
+fn build_routed(
+    cfg: &DownloaderConfig,
+    proxy: Option<&ProxyCfg>,
+    memory: &Arc<HostMemory>,
+    direct: &reqwest::Client,
+) -> AppResult<Routed> {
+    let Some(p) = proxy else {
+        return Ok(Routed {
+            proxy: None,
+            auto: direct.clone(),
+        });
+    };
+    let target = proxy_target(p)?;
+    let all = reqwest::Proxy::all(target.url.as_str()).map_err(|_| invalid_proxy(p))?;
+    let memory = memory.clone();
+    let url = target.url.clone();
+    let auto = reqwest::Proxy::custom(move |dest| memory.is_proxy_first(dest).then(|| url.clone()));
+    Ok(Routed {
+        proxy: Some(build_client(cfg, Some(target.apply(all)))?),
+        auto: build_client(cfg, Some(target.apply(auto)))?,
+    })
+}
+
+/// Proxy URL (SOCKS credentials embedded) plus HTTP basic auth, if any.
+/// Deliberately not `Debug`: it holds the password.
+struct ProxyTarget {
+    url: Url,
+    http_auth: Option<(String, String)>,
+}
+
+impl ProxyTarget {
+    fn apply(&self, proxy: reqwest::Proxy) -> reqwest::Proxy {
+        match &self.http_auth {
+            Some((user, pass)) => proxy.basic_auth(user, pass),
+            None => proxy,
+        }
+    }
+}
+
+fn invalid_proxy(p: &ProxyCfg) -> AppError {
+    AppError::new(ErrorCode::InvalidInput, "invalid proxy configuration")
+        .detail("host", p.host.clone())
+        .detail("port", p.port.to_string())
+}
+
 /// HTTP or SOCKS5 (`socks5h`, DNS resolved by the proxy) with optional auth.
 /// Errors never include the password.
+#[cfg(test)]
 pub(crate) fn build_proxy(p: &ProxyCfg) -> AppResult<reqwest::Proxy> {
-    let invalid = || {
-        AppError::new(ErrorCode::InvalidInput, "invalid proxy configuration")
-            .detail("host", p.host.clone())
-            .detail("port", p.port.to_string())
-    };
+    let target = proxy_target(p)?;
+    let proxy = reqwest::Proxy::all(target.url.as_str()).map_err(|_| invalid_proxy(p))?;
+    Ok(target.apply(proxy))
+}
+
+fn proxy_target(p: &ProxyCfg) -> AppResult<ProxyTarget> {
+    let invalid = || invalid_proxy(p);
     let host = if p.host.contains(':') && !p.host.starts_with('[') {
         format!("[{}]", p.host)
     } else {
@@ -567,13 +775,15 @@ pub(crate) fn build_proxy(p: &ProxyCfg) -> AppResult<reqwest::Proxy> {
                 .map_err(|()| invalid())?;
         }
     }
-    let mut proxy = reqwest::Proxy::all(url.as_str()).map_err(|_| invalid())?;
-    if p.kind == ProxyKind::Http {
-        if let Some(user) = username {
-            proxy = proxy.basic_auth(user, p.password.as_deref().unwrap_or_default());
+    // Validate once here so the infallible `Proxy::custom` path is safe too.
+    reqwest::Proxy::all(url.as_str()).map_err(|_| invalid())?;
+    let http_auth = match (p.kind, username) {
+        (ProxyKind::Http, Some(user)) => {
+            Some((user.to_owned(), p.password.clone().unwrap_or_default()))
         }
-    }
-    Ok(proxy)
+        _ => None,
+    };
+    Ok(ProxyTarget { url, http_auth })
 }
 
 /// Keeps the first request per destination so one batch never races on a file.
@@ -753,5 +963,34 @@ mod tests {
         d.set_manual_proxy(Some(proxy(ProxyKind::Http, "bad host/")));
         d.set_manual_proxy(None);
         let _ = d.client(Route::Auto);
+        let _ = d.client(Route::Proxied);
+    }
+
+    #[test]
+    fn auto_without_proxy_is_direct_only() {
+        let d = HttpDownloader::new(DownloaderConfig::default()).unwrap();
+        let u = Url::parse("https://api.modrinth.com/v2/x").unwrap();
+        let legs: Vec<Leg> = d
+            .legs(&u, Route::Auto)
+            .unwrap()
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(legs, vec![Leg::Direct]);
+        assert_eq!(
+            d.legs(&u, Route::Proxied).unwrap_err().code,
+            ErrorCode::Network
+        );
+        d.set_manual_proxy(Some(proxy(ProxyKind::Http, "127.0.0.1")));
+        let order = |d: &HttpDownloader| -> Vec<Leg> {
+            d.legs(&u, Route::Auto)
+                .unwrap()
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect()
+        };
+        assert_eq!(order(&d), vec![Leg::Direct, Leg::Proxy]);
+        d.memory.remember(&u);
+        assert_eq!(order(&d), vec![Leg::Proxy, Leg::Direct]);
     }
 }
