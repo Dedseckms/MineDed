@@ -4,10 +4,10 @@
 use std::sync::Arc;
 
 use lc_accounts::{
-    AccountService, AccountsService, AuthProvider, KeyringTokenStore, SkinService, StubAccounts,
-    StubSkins, TokenStore,
+    AccountService, AccountsService, AuthProvider, KeyringTokenStore, SkinService, SkinsService,
+    StubAccounts, StubSkins, TokenStore,
 };
-use lc_content::{ContentService, PackIo, PresetService, StubContent};
+use lc_content::{ContentService, ContentServices, PackIo, PresetService, StubContent};
 use lc_core::{
     CoreServices, GameLauncher, GameObserver, InstanceService, JavaManager, StubCore, SystemProbe,
     VersionService,
@@ -52,7 +52,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Real services where implemented (wave 1: core, http, accounts, settings);
+    /// Real services where implemented (core, http, accounts, skins, loaders,
+    /// content, settings);
     /// everything else stays a stub.
     pub fn real(
         paths: Paths,
@@ -64,28 +65,27 @@ impl AppState {
             DownloaderConfig::from_settings(initial),
         )?);
         let tokens: Arc<dyn TokenStore> = Arc::new(KeyringTokenStore::new(&paths));
-        let accounts = Arc::new(AccountsService::new(&paths, downloader.clone(), tokens));
-
-        let mut loaders = LoaderRegistry::default();
-        for kind in [
-            LoaderKind::Fabric,
-            LoaderKind::Quilt,
-            LoaderKind::Forge,
-            LoaderKind::NeoForge,
-        ] {
-            loaders.register(Arc::new(StubLoader(kind)));
-        }
-        let loaders = Arc::new(loaders);
+        let accounts = Arc::new(
+            AccountsService::new(&paths, downloader.clone(), tokens)
+                .with_settings(settings.clone()),
+        );
+        let skins = Arc::new(SkinsService::new(&paths, accounts.clone()));
+        let loaders = Arc::new(lc_loaders::default_registry(downloader.clone()));
 
         let core = Arc::new(CoreServices::new(
-            paths,
+            paths.clone(),
             downloader.clone(),
             accounts.clone(),
             loaders.clone(),
             observer,
             Vec::new(),
         ));
-        let content = Arc::new(StubContent);
+        let content = Arc::new(ContentServices::new(
+            paths,
+            downloader.clone(),
+            core.clone(),
+            core.clone(),
+        ));
         let rooms = Arc::new(StubRooms);
 
         Ok(Self {
@@ -103,7 +103,7 @@ impl AppState {
             presets: content,
             accounts: accounts.clone(),
             auth: accounts,
-            skins: Arc::new(StubSkins),
+            skins,
             vpn: Arc::new(StubVpn),
             rooms: rooms.clone(),
             datagrams: rooms,
