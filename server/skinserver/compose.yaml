@@ -1,0 +1,59 @@
+# MineUP skin server (Drasl, authlib-injector compatible).
+# Project name is fixed: always run as `docker compose -p mineup-skin ...` (see start.sh).
+name: mineup-skin
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  drasl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mineup/drasl:4.0.1-hc
+    container_name: mineup-skin-drasl
+    restart: unless-stopped
+    # Image has no USER; it runs as uid 0 but with every capability dropped,
+    # read-only rootfs and no-new-privileges (writes only to the state volume).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      # scrypt (N=32768, r=8) needs ~32 MiB per concurrent password hash.
+      GOMEMLIMIT: "140MiB"
+      GOMAXPROCS: "1"
+    volumes:
+      - ./config:/etc/drasl:ro
+      - drasl_state:/var/lib/drasl
+    ports:
+      - "127.0.0.1:${DRASL_PORT:?set DRASL_PORT in .env}:25585"
+    networks: [skin_net]
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:25585/authlib-injector"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Budget: <= 512 MiB and <= 1 CPU for the whole project; cpu_shares below
+    # the owner's containers (they run with the default 1024).
+    mem_limit: 192m
+    memswap_limit: 192m
+    cpus: 0.5
+    cpu_shares: 256
+    pids_limit: 128
+    logging: *logging
+
+volumes:
+  drasl_state: {}
+
+networks:
+  skin_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${SKIN_SUBNET:-172.30.42.0/24}

@@ -1,0 +1,46 @@
+# Drasl 4.0.1 config. Reference: https://github.com/unmojang/drasl/blob/v4.0.1/doc/configuration.md
+# No secrets in this file.
+Domain = "skins.dedseckms.ru"
+BaseURL = "https://skins.dedseckms.ru"
+ListenAddress = "0.0.0.0:25585"
+InstanceName = "MineUP Skins"
+ApplicationOwner = "MineUP"
+StateDirectory = "/var/lib/drasl"
+DefaultAdmins = ["mu_admin"]
+
+EnableWebFrontEnd = true
+AllowPasswordLogin = true
+MinPasswordLength = 10
+AllowSkins = true
+AllowCapes = true
+AllowTextureFromURL = false
+AllowChangingPlayerName = false
+SkinSizeLimit = 64
+DefaultMaxPlayerCount = 1
+PlayerUUIDGeneration = "random"
+LogRequests = true
+
+# No FallbackAPIServers: the launcher has no Microsoft accounts.
+
+[BodyLimit]
+Enable = true
+SizeLimitKiB = 1024
+
+# Built-in limiter (per user, or per real client IP for unauthenticated calls):
+# /authenticate, /signout, /web/login, /web/register, /drasl/api/v2/login,
+# /drasl/api/v2/users and other name-taking routes. Admins are exempt.
+[RateLimit]
+Enable = true
+RequestsPerSecond = 2.0
+Burst = 20
+
+# Invite-only registration: username (= player name) + password.
+[RegistrationUsernamePassword.CreateNewPlayer]
+Allow = true
+RequireInvite = true
+AllowChoosingUUID = false
+
+# Registered users cannot create extra players.
+[CreateNewPlayer]
+Allow = false
+AllowChoosingUUID = false
