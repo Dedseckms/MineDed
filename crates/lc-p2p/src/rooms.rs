@@ -1052,7 +1052,9 @@ impl P2pRooms {
                 } => {
                     self.on_chat(&s, &from, (orig, from_name), id, text, sent_at);
                 }
-                ControlMsg::VoiceState { speaking, muted } => {
+                ControlMsg::VoiceState {
+                    speaking, muted, ..
+                } => {
                     if let Some(e) = s.peers().map.get_mut(&from) {
                         e.peer.speaking = speaking;
                         e.peer.muted = muted;

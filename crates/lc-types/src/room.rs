@@ -61,6 +61,7 @@ pub struct Peer {
     pub path: PathKind,
     pub rtt_ms: Option<u32>,
     pub speaking: bool,
+    /// The peer muted their own microphone (local per-peer mutes are UI state).
     pub muted: bool,
 }
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use lc_p2p::DatagramTransport;
 use lc_types::events::VoiceSpeakingPayload;
-use lc_types::voice::{AudioDevice, VoiceSettings};
+use lc_types::voice::{AudioDevice, VoiceSettings, VoiceStatus};
 use lc_types::AppResult;
 
 #[async_trait]
@@ -25,9 +25,12 @@ pub trait VoiceEngine: Send + Sync {
     async fn set_self_muted(&self, muted: bool) -> AppResult<()>;
     /// Plays the microphone back locally (settings screen).
     async fn mic_test(&self, enabled: bool) -> AppResult<()>;
+    async fn status(&self) -> AppResult<VoiceStatus>;
 }
 
-/// Implemented in `src-tauri` (emits `voice://speaking`, throttled).
+/// Implemented in `src-tauri` (emits `voice://speaking` throttled, `voice://status`).
 pub trait VoiceObserver: Send + Sync {
     fn on_speaking(&self, payload: VoiceSpeakingPayload);
+    /// On start/stop, self-mute, mode fallback, mic test toggle.
+    fn on_status(&self, _status: VoiceStatus) {}
 }

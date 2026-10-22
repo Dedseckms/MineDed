@@ -84,6 +84,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             voice::voice_stop,
             voice::voice_set_peer_muted,
             voice::voice_set_peer_volume,
+            voice::voice_status,
             voice::voice_set_self_muted,
             voice::voice_mic_test,
             // lead
@@ -107,6 +108,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             RoomPeerEvent,
             ChatMessageEvent,
             VoiceSpeakingEvent,
+            VoiceStatusEvent,
             UpdateAvailableEvent,
         ])
         // Byte counts and sizes stay far below 2^53.

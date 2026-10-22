@@ -90,6 +90,7 @@ export const commands = {
 	voiceStop: () => typedError<null, AppError>(__TAURI_INVOKE("voice_stop")),
 	voiceSetPeerMuted: (peerId: string, muted: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_peer_muted", { peerId, muted })),
 	voiceSetPeerVolume: (peerId: string, volume: number | null) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_peer_volume", { peerId, volume })),
+	voiceStatus: () => typedError<VoiceStatus, AppError>(__TAURI_INVOKE("voice_status")),
 	voiceSetSelfMuted: (muted: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_self_muted", { muted })),
 	voiceMicTest: (enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_mic_test", { enabled })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
@@ -119,6 +120,7 @@ export const events = {
 	tasksChanged: makeEvent<TasksChangedEvent>("tasks://changed"),
 	updateAvailable: makeEvent<UpdateAvailableEvent>("update://available"),
 	voiceSpeaking: makeEvent<VoiceSpeakingEvent>("voice://speaking"),
+	voiceStatus: makeEvent<VoiceStatusEvent>("voice://status"),
 	vpnState: makeEvent<VpnStateEvent>("vpn://state"),
 };
 
@@ -423,6 +425,7 @@ export type Peer = {
 	path: PathKind,
 	rttMs: number | null,
 	speaking: boolean,
+	/**  The peer muted their own microphone (local per-peer mutes are UI state). */
 	muted: boolean,
 };
 
@@ -670,8 +673,8 @@ export type VoiceSettings = {
 	outputVolume: number | null,
 	noiseSuppression: boolean,
 	/**
-	 *  Per-participant playback volume 0.0..=2.0, keyed by profile UUID (or
-	 *  display name for offline players). Missing = 1.0.
+	 *  Per-participant playback volume 0.0..=2.0, keyed by room peer id.
+	 *  Missing = 1.0.
 	 */
 	peerVolumes: { [key in string]: number | null },
 };
@@ -679,11 +682,24 @@ export type VoiceSettings = {
 export type VoiceSpeakingEvent = VoiceSpeakingPayload;
 
 export type VoiceSpeakingPayload = {
+	/**  Room peer id, or `"self"` for the local microphone (also during mic test). */
 	peerId: string,
 	speaking: boolean,
 	/**  0.0..=1.0 */
 	level: number | null,
 };
+
+/**  Live voice session state (`voice_status`, `voice://status`). */
+export type VoiceStatus = {
+	/**  Capture/playback running in a room. */
+	active: boolean,
+	selfMuted: boolean,
+	/**  Effective mode (PTT may fall back to VAD, e.g. on Wayland). */
+	mode: VoiceMode,
+	micTest: boolean,
+};
+
+export type VoiceStatusEvent = VoiceStatus;
 
 export type VpnMode = "off" | 
 /**  mihomo mixed-port; only launcher HTTP goes through it. No admin rights. */
