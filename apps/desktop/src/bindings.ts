@@ -534,6 +534,8 @@ export type SearchQuery = {
 export type Settings = {
 	language: Language,
 	theme: Theme,
+	/**  Accent colour as #rrggbb; None = theme default. */
+	accentColor: string | null,
 	/**  No blur, reduced motion, fewer previews. Auto-enabled on weak hardware. */
 	lightMode: boolean,
 	reduceMotion: boolean,

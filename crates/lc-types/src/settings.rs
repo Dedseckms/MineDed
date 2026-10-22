@@ -74,6 +74,8 @@ mod tests {
 pub struct Settings {
     pub language: Language,
     pub theme: Theme,
+    /// Accent colour as #rrggbb; None = theme default.
+    pub accent_color: Option<String>,
     /// No blur, reduced motion, fewer previews. Auto-enabled on weak hardware.
     pub light_mode: bool,
     pub reduce_motion: bool,
@@ -101,6 +103,7 @@ impl Default for Settings {
         Self {
             language: Language::Ru,
             theme: Theme::System,
+            accent_color: None,
             light_mode: false,
             reduce_motion: false,
             game_dir: None,
