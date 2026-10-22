@@ -54,4 +54,8 @@ impl VoiceObserver for EventObserver {
     fn on_speaking(&self, payload: VoiceSpeakingPayload) {
         let _ = VoiceSpeakingEvent(payload).emit(&self.app);
     }
+
+    fn on_status(&self, status: lc_types::voice::VoiceStatus) {
+        let _ = crate::events::VoiceStatusEvent(status).emit(&self.app);
+    }
 }

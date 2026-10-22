@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core IPC (commands, events, channels).",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Main window and voice overlay: core IPC (commands, events, channels), overlay window control.",
+  "windows": ["main", "voice-overlay"],
+  "permissions": [
+    "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:webview:allow-get-all-webviews",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-always-on-top"
+  ]
 }

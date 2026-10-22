@@ -59,5 +59,9 @@ pub struct ChatMessageEvent(pub ChatMessage);
 pub struct VoiceSpeakingEvent(pub VoiceSpeakingPayload);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+#[tauri_specta(event_name = "voice://status")]
+pub struct VoiceStatusEvent(pub lc_types::voice::VoiceStatus);
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[tauri_specta(event_name = "update://available")]
 pub struct UpdateAvailableEvent(pub UpdateInfo);

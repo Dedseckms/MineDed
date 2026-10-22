@@ -37,6 +37,7 @@ pub struct NetBlockedPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceSpeakingPayload {
+    /// Room peer id, or `"self"` for the local microphone (also during mic test).
     pub peer_id: String,
     pub speaking: bool,
     /// 0.0..=1.0

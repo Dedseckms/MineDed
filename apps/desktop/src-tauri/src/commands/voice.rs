@@ -52,6 +52,12 @@ pub async fn voice_set_peer_muted(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn voice_status(state: State<'_, AppState>) -> AppResult<lc_types::voice::VoiceStatus> {
+    state.voice.status().await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn voice_set_peer_volume(
     state: State<'_, AppState>,
     peer_id: String,

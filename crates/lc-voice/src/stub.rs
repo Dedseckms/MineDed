@@ -46,6 +46,15 @@ impl VoiceEngine for StubVoice {
         Err(AppError::not_implemented("VoiceEngine::set_peer_muted"))
     }
 
+    async fn status(&self) -> AppResult<lc_types::voice::VoiceStatus> {
+        Ok(lc_types::voice::VoiceStatus {
+            active: false,
+            self_muted: false,
+            mode: VoiceMode::Off,
+            mic_test: false,
+        })
+    }
+
     async fn set_peer_volume(&self, _peer_id: &str, _volume: f32) -> AppResult<()> {
         Err(AppError::not_implemented("VoiceEngine::set_peer_volume"))
     }
