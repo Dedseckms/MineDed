@@ -7,11 +7,22 @@ license.workspace = true
 
 [dependencies]
 lc-types.workspace = true
+lc-runtime.workspace = true
 lc-p2p.workspace = true
 async-trait.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "fs"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# Pure-Rust, bit-exact port of libopus: no C toolchain / system libopus needed.
+ropus = "0.12.18"
+# RNNoise port (pure Rust); default features pull a CLI, so they are off.
+nnnoiseless = { version = "0.5.2", default-features = false }
+cpal = "0.18.2"
+# Polls key state (GetAsyncKeyState / XQueryKeymap): never swallows the key from the game.
+device_query = "4.0.1"
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
 
 [lints]
 workspace = true
