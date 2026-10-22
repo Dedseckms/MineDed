@@ -518,4 +518,11 @@ async fn proxy_priority_vpn_then_manual_then_system() {
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::Blocked);
     assert_eq!(local_hits.get(), 1);
+    // ...and `Proxied` to such a target goes direct instead of failing.
+    let body = d
+        .get_bytes_via(&url(local, "/page"), ResourceKind::Other, Route::Proxied)
+        .await
+        .unwrap();
+    assert_eq!(body, BLOCK_PAGE.as_bytes());
+    assert_eq!(local_hits.get(), 2);
 }

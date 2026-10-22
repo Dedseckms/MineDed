@@ -44,11 +44,8 @@ async fn start_select_stop() {
 
     // Crash → supervisor restarts it (new ports allowed).
     let pid_file = root.join("sidecars").join("mihomo").join("mihomo.pid");
-    let pid: u32 = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let pid_text = std::fs::read_to_string(&pid_file).unwrap();
+    let pid: u32 = pid_text.lines().next().unwrap().trim().parse().unwrap();
     let mut sys = sysinfo::System::new();
     let spid = sysinfo::Pid::from_u32(pid);
     sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[spid]), true);
@@ -58,7 +55,7 @@ async fn start_select_stop() {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let st = vpn.state().await.unwrap();
         let new_pid = std::fs::read_to_string(&pid_file).unwrap_or_default();
-        if st.running && new_pid.trim() != pid.to_string() {
+        if st.running && new_pid.lines().next() != Some(pid.to_string().as_str()) {
             restarted = true;
             break;
         }
