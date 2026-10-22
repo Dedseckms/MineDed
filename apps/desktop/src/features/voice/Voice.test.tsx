@@ -53,7 +53,8 @@ describe("voice room (mocks)", () => {
 
     const volume = await screen.findByRole("slider", { name: "Volume of AlexBuilder" });
     fireEvent.change(volume, { target: { value: "150" } });
-    await waitFor(async () => expect(unwrap(await api.voiceSettings()).peerVolumes).toEqual({ AlexBuilder: 1.5 }), { timeout: 2000 });
+    const alexId = unwrap(await api.roomState())?.peers.find((p) => p.name === "AlexBuilder")?.peerId ?? "";
+    await waitFor(async () => expect(unwrap(await api.voiceSettings()).peerVolumes).toEqual({ [alexId]: 1.5 }), { timeout: 2000 });
 
     fireEvent.click(screen.getByRole("button", { name: "Mute AlexBuilder" }));
     expect(await screen.findByRole("button", { name: "Unmute AlexBuilder" })).toBeTruthy();
@@ -65,8 +66,13 @@ describe("voice room (mocks)", () => {
     fireEvent.click(muteButtons[0] as HTMLElement);
     await waitFor(() => expect(screen.getByTestId("voice-status").textContent).toBe("Microphone muted"));
 
+    fireEvent.click(screen.getAllByRole("button", { name: "Unmute microphone", pressed: true })[1] as HTMLElement); // header
+    await waitFor(() => expect(screen.getByTestId("voice-status").textContent).toBe("Push to talk: V"));
+
     fireEvent.click(screen.getByRole("button", { name: "Leave voice" }));
-    await waitFor(() => expect(useVoiceStore.getState().active).toBe(false));
+    await waitFor(() => expect(screen.getByTestId("voice-status").textContent).toBe("Voice is off"));
+    expect(unwrap(await api.voiceStatus()).active).toBe(false);
+    expect(useVoiceStore.getState().speaking).toEqual({});
 
     fireEvent.click(screen.getByRole("button", { name: "Close room" }));
     const dialog = await screen.findByRole("dialog", { name: "Close the room?" });
@@ -112,7 +118,8 @@ describe("voice settings (mocks)", () => {
     const meter = screen.getByRole("meter", { name: "Microphone level" });
     await waitFor(() => expect(Number(meter.getAttribute("aria-valuenow"))).toBeGreaterThan(0), { timeout: 3000 });
     fireEvent.click(screen.getByRole("button", { name: "Stop check" }));
-    await waitFor(() => expect(useVoiceStore.getState().micTest).toBe(false));
+    await waitFor(async () => expect(unwrap(await api.voiceStatus()).micTest).toBe(false));
+    expect(await screen.findByRole("button", { name: "Check microphone" })).toBeTruthy();
   }, 10_000);
 });
 

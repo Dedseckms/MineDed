@@ -72,13 +72,12 @@ describe("gains and peer volumes", () => {
     expect(fromPercent(150)).toBe(1.5);
   });
 
-  it("peerVolumes keyed by uuid, else name; 1.0 removes the entry", () => {
-    expect(peerVolumeKey(peer({ uuid: "u-1" }))).toBe("u-1");
-    expect(peerVolumeKey(peer())).toBe("Alex");
+  it("peerVolumes keyed by room peer id; 1.0 removes the entry", () => {
+    expect(peerVolumeKey(peer({ uuid: "u-1" }))).toBe("p1");
     const s = withPeerVolume(settings(), peer(), 1.5);
-    expect(s.peerVolumes).toEqual({ Alex: 1.5 });
+    expect(s.peerVolumes).toEqual({ p1: 1.5 });
     expect(peerVolume(s, peer())).toBe(1.5);
-    expect(peerVolume(s, peer({ name: "Other" }))).toBe(1);
+    expect(peerVolume(s, peer({ peerId: "p2" }))).toBe(1);
     expect(withPeerVolume(s, peer(), 1).peerVolumes).toEqual({});
     expect(peerVolume(undefined, peer())).toBe(1);
   });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ChatMessage, RoomPeerEvent, RoomStateEvent, TaskEvent, VoiceSpeakingEvent, VpnState } from "../bindings";
+import type { ChatMessage, RoomPeerEvent, RoomStateEvent, TaskEvent, VoiceSpeakingEvent, VoiceStatus, VpnState } from "../bindings";
 import { unwrap } from "../api/client";
 import { createMockBus } from "./bus";
 import { createMockCommands } from "./index";
@@ -185,7 +185,7 @@ describe("mock voice", () => {
     const room = unwrap(await api.roomJoin("VOXA-0001", null, null));
     const host = room.peers[0];
     unwrap(await api.voiceSetPeerVolume(host?.peerId ?? "", 1.5));
-    expect(unwrap(await api.voiceSettings()).peerVolumes).toEqual({ Steve_Host: 1.5 });
+    expect(unwrap(await api.voiceSettings()).peerVolumes).toEqual({ [host?.peerId ?? ""]: 1.5 });
     expect((await api.voiceSetPeerVolume(host?.peerId ?? "", 5)).status).toBe("error");
     expect((await api.voiceSetPeerMuted("ghost", true)).status).toBe("error");
     unwrap(await api.voiceSetPeerMuted(host?.peerId ?? "", true));
@@ -195,21 +195,30 @@ describe("mock voice", () => {
   it("voice start emits speaking events; mic test emits self levels", async () => {
     const bus = createMockBus();
     const events: VoiceSpeakingEvent[] = [];
+    const statuses: VoiceStatus[] = [];
     bus.on("voiceSpeaking", (e) => events.push(e));
+    bus.on("voiceStatus", (s) => statuses.push(s));
     const api = createMockCommands({}, { bus, tickMs: 10 });
+    expect(unwrap(await api.voiceStatus())).toMatchObject({ active: false, selfMuted: false, micTest: false });
     unwrap(await api.roomJoin("VOXA-0002", null, null));
     unwrap(await api.voiceStart());
+    expect(statuses.at(-1)).toMatchObject({ active: true, mode: "pushToTalk" });
+    unwrap(await api.voiceSetSelfMuted(true));
+    expect(unwrap(await api.voiceStatus())).toMatchObject({ active: true, selfMuted: true });
+    unwrap(await api.voiceSetSelfMuted(false));
     await vi.advanceTimersByTimeAsync(300);
     expect(events.some((e) => e.peerId !== "self" && e.speaking)).toBe(true);
-    unwrap(await api.voiceStop());
     unwrap(await api.roomLeave());
+    expect(statuses.at(-1)?.active).toBe(false);
 
     events.length = 0;
     unwrap(await api.voiceMicTest(true));
     await vi.advanceTimersByTimeAsync(100);
     expect(events.length).toBeGreaterThan(3);
     expect(events.every((e) => e.peerId === "self")).toBe(true);
+    expect(statuses.at(-1)?.micTest).toBe(true);
     unwrap(await api.voiceMicTest(false));
+    expect(statuses.at(-1)?.micTest).toBe(false);
     const n = events.length;
     await vi.advanceTimersByTimeAsync(100);
     expect(events.length).toBe(n);

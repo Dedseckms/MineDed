@@ -1,9 +1,13 @@
-import { useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { VoiceMode, VoiceSettings } from "../../bindings";
+import { api } from "../../api/client";
 import {
+  qk,
   useMicTest,
+  useVoiceStatus,
   useSaveVoiceSettings,
   useSystemInfo,
   useVoiceDevices,
@@ -34,16 +38,19 @@ function WaylandHint() {
 function MicTest() {
   const { t } = useTranslation();
   const test = useMicTest();
-  const on = useVoiceStore((s) => s.micTest);
+  const on = useVoiceStatus().data?.micTest ?? false;
   const level = useVoiceStore((s) => s.selfLevel);
-  const mutate = test.mutate;
+  const onRef = useRef(on);
+  onRef.current = on;
+  const qc = useQueryClient();
 
   // Never leave the microphone loopback running after leaving the screen.
   useEffect(
     () => () => {
-      if (useVoiceStore.getState().micTest) mutate(false);
+      if (!onRef.current) return;
+      void api.voiceMicTest(false).then(() => qc.invalidateQueries({ queryKey: qk.voiceStatus }));
     },
-    [mutate],
+    [qc],
   );
 
   return (

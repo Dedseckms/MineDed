@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import { useRoomState, useVoiceSettings } from "../../api/queries";
+import { useRoomState, useVoiceSettings, useVoiceStatus } from "../../api/queries";
 import { Icon } from "../../components/ui/Icon";
 import { useApplyAppearance } from "../../hooks/useAppearance";
 import { useRoomSync } from "../../hooks/useBackendSync";
@@ -22,6 +22,7 @@ export function OverlayApp() {
   useRoomSync(() => true);
   const room = useRoomState();
   const settings = useVoiceSettings();
+  const voice = useVoiceStatus();
   const speaking = useVoiceStore((s) => s.speaking);
   const messages = useRoomStore((s) => s.messages);
   const lines = lastLines(messages);
@@ -34,7 +35,8 @@ export function OverlayApp() {
   }, []);
 
   const peers = room.data?.peers ?? [];
-  const ptt = settings.data?.mode === "pushToTalk" && settings.data.pttKey ? keyLabel(settings.data.pttKey) : null;
+  const mode = voice.data?.active ? voice.data.mode : settings.data?.mode;
+  const ptt = mode === "pushToTalk" && settings.data?.pttKey ? keyLabel(settings.data.pttKey) : null;
 
   return (
     <div className="flex h-full flex-col gap-2 overflow-hidden rounded-xl border border-border/60 bg-bg/75 p-2 text-sm text-text">
@@ -57,7 +59,8 @@ export function OverlayApp() {
       <ul aria-label={t("voice.overlay.participants")} className="flex flex-col gap-1">
         <li className="flex items-center gap-2">
           <SpeakingAvatar size="sm" name={t("rooms.chat.you")} speaking={speaking[SELF_PEER_ID]?.speaking ?? false} />
-          <span className="truncate text-muted">{t("rooms.chat.you")}</span>
+          <span className="flex-1 truncate text-muted">{t("rooms.chat.you")}</span>
+          {voice.data?.selfMuted ? <Icon name="micOff" className="size-3.5 text-danger" /> : null}
         </li>
         {peers.map((p) => (
           <li key={p.peerId} className="flex items-center gap-2">

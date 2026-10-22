@@ -28,6 +28,7 @@ import type {
   TaskId,
   VersionKind,
   VoiceSettings,
+  VoiceStatus,
   VpnMode,
   VpnNode,
 } from "../bindings";
@@ -64,6 +65,7 @@ export const qk = {
   room: ["room"] as const,
   voiceDevices: ["voiceDevices"] as const,
   voiceSettings: ["voiceSettings"] as const,
+  voiceStatus: ["voiceStatus"] as const,
 };
 
 // ---- queries ---------------------------------------------------------------
@@ -479,28 +481,46 @@ export function useSaveVoiceSettings() {
   });
 }
 
-/** Joins (`true`) or leaves (`false`) the voice of the current room. */
-export function useVoiceActive() {
-  const setActive = useVoiceStore((s) => s.setActive);
+/** Live voice session state; kept fresh by `voice://status` (see `useRoomSync`). */
+export const useVoiceStatus = () =>
+  useQuery({ queryKey: qk.voiceStatus, queryFn: async () => unwrap(await api.voiceStatus()) });
+
+/**
+ * Mutation over a voice command that changes `VoiceStatus`: the status is
+ * patched optimistically and re-read afterwards (the event also arrives).
+ */
+function useVoiceStatusMutation<V>(run: (v: V) => Promise<unknown>, patch: (v: V) => Partial<VoiceStatus>) {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (on: boolean) => {
-      unwrap(on ? await api.voiceStart() : await api.voiceStop());
-      return on;
+    mutationFn: async (v: V) => {
+      await run(v);
+      return v;
     },
-    onSuccess: setActive,
+    onSuccess: (v) => {
+      qc.setQueryData<VoiceStatus>(qk.voiceStatus, (s) => (s ? { ...s, ...patch(v) } : s));
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.voiceStatus }),
   });
 }
 
-export function useSetSelfMuted() {
-  const setSelfMuted = useVoiceStore((s) => s.setSelfMuted);
-  return useMutation({
-    mutationFn: async (muted: boolean) => {
-      unwrap(await api.voiceSetSelfMuted(muted));
-      return muted;
-    },
-    onSuccess: setSelfMuted,
-  });
-}
+/** Joins (`true`) or leaves (`false`) the voice of the current room. */
+export const useVoiceActive = () =>
+  useVoiceStatusMutation(
+    async (on: boolean) => unwrap(on ? await api.voiceStart() : await api.voiceStop()),
+    (active) => ({ active }),
+  );
+
+export const useSetSelfMuted = () =>
+  useVoiceStatusMutation(
+    async (muted: boolean) => unwrap(await api.voiceSetSelfMuted(muted)),
+    (selfMuted) => ({ selfMuted }),
+  );
+
+export const useMicTest = () =>
+  useVoiceStatusMutation(
+    async (on: boolean) => unwrap(await api.voiceMicTest(on)),
+    (micTest) => ({ micTest }),
+  );
 
 export function useSetPeerMuted() {
   const setPeerMuted = useVoiceStore((s) => s.setPeerMuted);
@@ -522,17 +542,6 @@ export function useSetPeerVolume() {
     onMutate: (v) => {
       qc.setQueryData<VoiceSettings>(qk.voiceSettings, (s) => (s ? withPeerVolume(s, v.peer, v.volume) : s));
     },
-  });
-}
-
-export function useMicTest() {
-  const setMicTest = useVoiceStore((s) => s.setMicTest);
-  return useMutation({
-    mutationFn: async (on: boolean) => {
-      unwrap(await api.voiceMicTest(on));
-      return on;
-    },
-    onSuccess: setMicTest,
   });
 }
 

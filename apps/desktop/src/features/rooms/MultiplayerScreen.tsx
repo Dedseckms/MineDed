@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { Peer, RoomState } from "../../bindings";
-import { useKickPeer, useLeaveRoom, useRoomState } from "../../api/queries";
+import { useKickPeer, useLeaveRoom, useRoomState, useVoiceStatus } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Card, CardList, Section } from "../../components/ui/Card";
 import { CopyButton } from "../../components/ui/CopyButton";
@@ -97,7 +97,7 @@ function RoomHeader({ room, onLeave }: { room: RoomState; onLeave: () => void })
 
 function PeerRow({ peer, canKick, onKick }: { peer: Peer; canKick: boolean; onKick: () => void }) {
   const { t } = useTranslation();
-  const voiceOn = useVoiceStore((s) => s.active);
+  const voiceOn = useVoiceStatus().data?.active ?? false;
   const speaking = useVoiceStore((s) => voiceOn && isSpeaking(peer, s.speaking));
   return (
     <Card className="flex flex-col gap-2 py-3">

@@ -9,6 +9,7 @@ import {
   useSystemInfo,
   useVoiceActive,
   useVoiceSettings,
+  useVoiceStatus,
 } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Card";
@@ -103,8 +104,9 @@ function OverlayButton() {
 /** Header shortcut while voice is on: self mute from any screen. */
 export function VoiceHeaderToggle() {
   const { t } = useTranslation();
-  const active = useVoiceStore((s) => s.active);
-  const selfMuted = useVoiceStore((s) => s.selfMuted);
+  const status = useVoiceStatus();
+  const active = status.data?.active ?? false;
+  const selfMuted = status.data?.selfMuted ?? false;
   const speaking = useVoiceStore((s) => s.speaking[SELF_PEER_ID]?.speaking ?? false);
   const mute = useSetSelfMuted();
   if (!active) return null;
@@ -128,13 +130,15 @@ export function VoiceControls() {
   const go = useNavStore((s) => s.go);
   const settings = useVoiceSettings();
   const system = useSystemInfo();
-  const active = useVoiceStore((s) => s.active);
-  const selfMuted = useVoiceStore((s) => s.selfMuted);
+  const voice = useVoiceStatus();
+  const active = voice.data?.active ?? false;
+  const selfMuted = voice.data?.selfMuted ?? false;
   const selfSpeaking = useVoiceStore((s) => s.speaking[SELF_PEER_ID]?.speaking ?? false);
   const selfLevel = useVoiceStore((s) => s.selfLevel);
   const toggle = useVoiceActive();
   const mute = useSetSelfMuted();
-  const mode = settings.data?.mode;
+  // Effective mode from the backend (PTT may fall back to VAD, e.g. on Wayland).
+  const mode = active ? voice.data?.mode : settings.data?.mode;
   const pttKey = settings.data?.pttKey ?? null;
   const status = voiceStatus(mode, active, selfMuted, pttKey);
 

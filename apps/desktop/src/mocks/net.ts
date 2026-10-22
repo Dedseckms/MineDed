@@ -11,6 +11,7 @@ import type {
   RoomState,
   TaskKind,
   VoiceSettings,
+  VoiceStatus,
   VpnNode,
   VpnState,
   commands,
@@ -145,16 +146,24 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
 
   // ---- voice ----
   let voiceSettings = defaultVoiceSettings();
-  let selfMuted = false;
+  let status: VoiceStatus = { active: false, selfMuted: false, mode: voiceSettings.mode, micTest: false };
   let voiceTimer: ReturnType<typeof setInterval> | null = null;
   let micTimer: ReturnType<typeof setInterval> | null = null;
+  const setStatus = (patch: Partial<VoiceStatus>) => {
+    const next = { ...status, ...patch };
+    if (JSON.stringify(next) === JSON.stringify(status)) return;
+    status = next;
+    bus.emit("voiceStatus", { ...status });
+  };
   const stopVoice = () => {
     if (voiceTimer) clearInterval(voiceTimer);
     voiceTimer = null;
+    setStatus({ active: false });
   };
   /** Connected peers take turns speaking; own mic is "on" unless muted. */
   const startVoice = () => {
     stopVoice();
+    setStatus({ active: true, mode: voiceSettings.mode });
     let step = 0;
     voiceTimer = setInterval(() => {
       step += 1;
@@ -164,7 +173,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
         const on = i === turn;
         bus.emit("voiceSpeaking", { peerId: p.peerId, speaking: on, level: on ? mockMicLevel(step) : 0 });
       });
-      const self = !selfMuted && turn === peers.length;
+      const self = !status.selfMuted && turn === peers.length;
       bus.emit("voiceSpeaking", { peerId: SELF_PEER_ID, speaking: self, level: self ? mockMicLevel(step) : 0 });
     }, tickMs * 2);
   };
@@ -422,6 +431,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       const known = (id: string | null) => id === null || MOCK_AUDIO_DEVICES.some((d) => d.id === id);
       if (!known(next.inputDevice) || !known(next.outputDevice)) return err("notFound", "mock: audio device not found");
       voiceSettings = structuredClone(next);
+      if (status.active) setStatus({ mode: next.mode });
       return ok(null);
     },
 
@@ -455,8 +465,13 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
 
     voiceSetSelfMuted: async (muted) => {
       await wait();
-      selfMuted = muted;
+      setStatus({ selfMuted: muted });
       return ok(null);
+    },
+
+    voiceStatus: async () => {
+      await wait();
+      return ok({ ...status });
     },
 
     voiceMicTest: async (enabled) => {
@@ -473,6 +488,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       } else {
         bus.emit("voiceSpeaking", { peerId: SELF_PEER_ID, speaking: false, level: 0 });
       }
+      setStatus({ micTest: enabled });
       return ok(null);
     },
   };

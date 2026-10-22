@@ -3,8 +3,7 @@ import type { AudioDevice, ChatMessage, Peer, VoiceMode, VoiceSettings, VoiceSpe
 
 /**
  * `peerId` of `voice://speaking` events about the local microphone (own
- * speaking indicator and the mic-test level meter). Agreed with voice; see the
- * report's CONTRACT REQUEST.
+ * speaking indicator and the mic-test level meter), per the contract.
  */
 export const SELF_PEER_ID = "self";
 
@@ -51,15 +50,17 @@ export function clampGain(v: number): number {
 export const toPercent = (v: number | null | undefined): number => Math.round(clampGain(v ?? 1) * 100);
 export const fromPercent = (p: number): number => clampGain(p / 100);
 
-/** Key of `VoiceSettings.peerVolumes`: profile UUID, or display name for offline players. */
-export const peerVolumeKey = (peer: Pick<Peer, "uuid" | "name">): string => peer.uuid ?? peer.name;
+type PeerRef = Pick<Peer, "peerId">;
 
-export function peerVolume(settings: VoiceSettings | undefined, peer: Pick<Peer, "uuid" | "name">): number {
+/** Key of `VoiceSettings.peerVolumes`: the room peer id. */
+export const peerVolumeKey = (peer: PeerRef): string => peer.peerId;
+
+export function peerVolume(settings: VoiceSettings | undefined, peer: PeerRef): number {
   return clampGain(settings?.peerVolumes[peerVolumeKey(peer)] ?? 1);
 }
 
 /** Returns settings with an updated per-peer volume (1.0 = default, removed from the map). */
-export function withPeerVolume(settings: VoiceSettings, peer: Pick<Peer, "uuid" | "name">, volume: number): VoiceSettings {
+export function withPeerVolume(settings: VoiceSettings, peer: PeerRef, volume: number): VoiceSettings {
   const key = peerVolumeKey(peer);
   const peerVolumes = { ...settings.peerVolumes };
   const v = clampGain(volume);

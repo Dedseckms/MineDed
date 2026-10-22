@@ -1,7 +1,7 @@
 import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-import type { NetBlockedPayload, RoomPeerEvent, RoomState } from "../bindings";
+import type { NetBlockedPayload, RoomPeerEvent, RoomState, VoiceStatus } from "../bindings";
 import { api, unwrap } from "../api/client";
 import { subscribe } from "../api/events";
 import { qk, useRoomState } from "../api/queries";
@@ -33,6 +33,13 @@ export function applyRoomState(qc: QueryClient, state: RoomState | null): void {
   qc.setQueryData(qk.room, state);
   useRoomStore.getState().syncRoom(state?.roomId ?? null);
   useVoiceStore.getState().syncRoom(state?.roomId ?? null);
+  // Leaving a room stops voice in the backend.
+  if (state === null) void qc.invalidateQueries({ queryKey: qk.voiceStatus });
+}
+
+export function applyVoiceStatus(qc: QueryClient, status: VoiceStatus): void {
+  qc.setQueryData(qk.voiceStatus, status);
+  useVoiceStore.getState().applyStatus(status);
 }
 
 /**
@@ -59,6 +66,7 @@ export function useRoomSync(chatSeen: () => boolean): void {
       subscribe("roomPeer", (ev) => applyRoomPeer(qc, ev)),
       subscribe("chatMessage", (msg) => useRoomStore.getState().addMessage(msg, seenRef.current())),
       subscribe("voiceSpeaking", (ev) => useVoiceStore.getState().applySpeaking(ev)),
+      subscribe("voiceStatus", (status) => applyVoiceStatus(qc, status)),
     ];
     return () => offs.forEach((off) => off());
   }, [qc]);
