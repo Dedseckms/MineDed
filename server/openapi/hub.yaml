@@ -184,7 +184,16 @@ paths:
       tags: [rooms]
       operationId: joinRoom
       summary: Guest joins by code and gets a peer token
-      description: Auth is optional so offline-account friends can join; rate-limited per IP.
+      description: |
+        Bearer is required for `yggdrasil` rooms and optional for `open` ones; rate-limited per
+        IP (429 → code `rateLimited`). A room counts only live members: a guest is a member while
+        its room WebSocket is connected, or for 60 s after join if it never connects; `leave`,
+        WS close and kick free the slot.
+
+        `peerToken` = `<exp>.<mac>`: `exp` is unix seconds (join + 10 min), `mac` is base64url
+        (no padding) of HMAC-SHA256(key = hostToken, msg = "lc-peer/1|" + roomId + "|" +
+        endpointId + "|" + exp). The host verifies it offline against the connecting iroh
+        endpoint id, so the token is bound to that endpoint and cannot be reused by others.
       security: [{}, { bearer: [] }]
       parameters:
         - { name: code, in: path, required: true, schema: { type: string } }
@@ -197,6 +206,8 @@ paths:
               required: [endpointId]
               properties:
                 endpointId: { type: string }
+                name: { type: string, maxLength: 16, description: Display name shown to the room }
+                uuid: { type: string, description: Profile UUID (taken from the token when authenticated) }
       responses:
         "200":
           description: Joined; connect to the host via iroh with `peerToken` in `Hello`
@@ -216,6 +227,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
 
   /rooms/{roomId}:
     delete:

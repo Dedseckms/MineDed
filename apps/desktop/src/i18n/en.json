@@ -297,6 +297,7 @@
     "invalidInput": "Invalid data.",
     "conflict": "Conflict: this action is not possible right now.",
     "permissionDenied": "Permission denied.",
+    "rateLimited": "Too many attempts. Try again later.",
     "notImplemented": "Not available yet.",
     "internal": "Internal error. See the logs for details."
   },

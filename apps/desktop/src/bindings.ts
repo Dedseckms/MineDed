@@ -237,7 +237,9 @@ export type ErrorCode =
 /**  Host looks blocked (RST/TLS failure/DPI); UI may suggest enabling VPN. */
 "blocked" | "hashMismatch" | "notFound" | "authExpired" | "authRequired" | "javaMissing" | "loaderInstall" | 
 /**  CurseForge file with `allowModDistribution=false`; `details` holds the URL. */
-"manualDownloadRequired" | "cancelled" | "io" | "invalidInput" | "conflict" | "permissionDenied" | "notImplemented" | "internal";
+"manualDownloadRequired" | "cancelled" | "io" | "invalidInput" | "conflict" | "permissionDenied" | 
+/**  Too many requests / attempts; `details.retryAfter` (seconds) when known. */
+"rateLimited" | "notImplemented" | "internal";
 
 /**  File present in an instance (`mods/`, `resourcepacks/`, `shaderpacks/`). */
 export type InstalledContent = {
