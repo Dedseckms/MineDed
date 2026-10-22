@@ -430,12 +430,27 @@ export function useJoinRoom() {
   });
 }
 
+/**
+ * Leaves the room. Voice is stopped first (its error is ignored: voice may
+ * simply not be running); the voice UI follows `voice://status` / a re-read.
+ */
 export function useLeaveRoom() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () => unwrap(await api.roomLeave()),
+    mutationFn: async () => {
+      try {
+        await api.voiceStop();
+      } catch {
+        /* voice not running or engine unavailable: leaving still proceeds */
+      }
+      return unwrap(await api.roomLeave());
+    },
     onSuccess: () => qc.setQueryData(qk.room, null),
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.room }),
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: qk.room }),
+        qc.invalidateQueries({ queryKey: qk.voiceStatus }),
+      ]),
   });
 }
 

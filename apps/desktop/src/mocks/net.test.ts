@@ -208,8 +208,9 @@ describe("mock voice", () => {
     unwrap(await api.voiceSetSelfMuted(false));
     await vi.advanceTimersByTimeAsync(300);
     expect(events.some((e) => e.peerId !== "self" && e.speaking)).toBe(true);
-    unwrap(await api.roomLeave());
+    unwrap(await api.voiceStop());
     expect(statuses.at(-1)?.active).toBe(false);
+    unwrap(await api.roomLeave());
 
     events.length = 0;
     unwrap(await api.voiceMicTest(true));
