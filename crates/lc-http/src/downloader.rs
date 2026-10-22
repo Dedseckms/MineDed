@@ -261,8 +261,14 @@ impl HttpDownloader {
 
     /// Ordered `(leg, client)` pairs a request to `url` goes through.
     fn legs(&self, url: &Url, route: Route) -> AppResult<Vec<(Leg, reqwest::Client)>> {
-        let proxy = self.routed().proxy_for(url);
+        let routed = self.routed();
         let direct = (Leg::Direct, self.direct.clone());
+        let proxy = routed.proxy_for(url);
+        if proxy.is_none() && routed.proxy.is_some() {
+            // Target bypasses the OS proxy (loopback/LAN/bypass list): direct
+            // is the only route, even for `Proxied`.
+            return Ok(vec![direct]);
+        }
         Ok(match (route, proxy) {
             (Route::Direct, _) | (Route::Auto, None) => vec![direct],
             (Route::Proxied, Some(p)) => vec![(Leg::Proxy, p)],

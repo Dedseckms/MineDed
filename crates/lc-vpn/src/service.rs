@@ -5,7 +5,7 @@
 //! crashes; `shutdown` / `kill_now` stop it when the app exits.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -65,6 +65,7 @@ struct Running {
     mixed_port: u16,
     controller: Controller,
     pid: Option<u32>,
+    exe: PathBuf,
 }
 
 impl Running {
@@ -132,15 +133,20 @@ impl MihomoVpn {
 
     /// Synchronous best-effort kill for exit hooks without an async context.
     pub fn kill_now(&self) {
-        let (pid, sup) = {
+        let (run, sup) = {
             let mut s = self.shared();
-            (s.run.take().and_then(|r| r.pid), s.supervisor.take())
+            (s.run.take(), s.supervisor.take())
         };
         if let Some((stop, _)) = sup {
             stop.cancel();
         }
-        if let Some(pid) = pid {
-            kill_pid(pid, None);
+        if let Some(Running {
+            pid: Some(pid),
+            exe,
+            ..
+        }) = run
+        {
+            kill_pid(pid, &exe);
         }
         let _ = std::fs::remove_file(self.inner.files.pid());
     }
@@ -294,8 +300,20 @@ fn random_secret() -> AppResult<String> {
     Ok(hex::encode(buf))
 }
 
-/// Kills `pid` if it is still a mihomo process (optionally at `exe`).
-fn kill_pid(pid: u32, exe: Option<&std::path::Path>) {
+/// Same file, tolerant of `\\?\` prefixes and (on Windows) case.
+fn same_exe(a: &Path, b: &Path) -> bool {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (a, b) = (canon(a), canon(b));
+    if cfg!(windows) {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    } else {
+        a == b
+    }
+}
+
+/// Kills `pid` only if it still runs `exe` (guards against PID reuse).
+fn kill_pid(pid: u32, exe: &Path) {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let pid = Pid::from_u32(pid);
     let mut sys = System::new();
@@ -305,17 +323,17 @@ fn kill_pid(pid: u32, exe: Option<&std::path::Path>) {
         ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
     );
     let Some(p) = sys.process(pid) else { return };
-    let is_ours = match (p.exe(), exe) {
-        (Some(actual), Some(want)) => actual == want,
-        (Some(actual), None) => actual
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.to_ascii_lowercase().starts_with("mihomo")),
-        (None, _) => false,
-    };
-    if is_ours {
+    if p.exe().is_some_and(|actual| same_exe(actual, exe)) {
         p.kill();
     }
+}
+
+/// Pid file: `<pid>\n<exe path>`.
+fn parse_pid_file(text: &str) -> Option<(u32, PathBuf)> {
+    let mut lines = text.lines();
+    let pid = lines.next()?.trim().parse().ok()?;
+    let exe = lines.next().map(str::trim).filter(|s| !s.is_empty())?;
+    Some((pid, PathBuf::from(exe)))
 }
 
 /// Kills a mihomo left behind by a previous launcher run that crashed.
@@ -323,9 +341,9 @@ fn kill_stale(inner: &Inner) {
     let Ok(text) = std::fs::read_to_string(inner.files.pid()) else {
         return;
     };
-    if let Ok(pid) = text.trim().parse::<u32>() {
+    if let Some((pid, exe)) = parse_pid_file(&text) {
         if pid != std::process::id() {
-            kill_pid(pid, None);
+            kill_pid(pid, &exe);
         }
     }
     let _ = std::fs::remove_file(inner.files.pid());
@@ -386,7 +404,8 @@ async fn spawn_mihomo(inner: &Inner, sink: &dyn ProgressSink) -> AppResult<(Chil
         })?;
         let pid = child.id();
         if let Some(pid) = pid {
-            let _ = write_private(&inner.files.pid(), pid.to_string().as_bytes());
+            let line = format!("{pid}\n{}", exe.display());
+            let _ = write_private(&inner.files.pid(), line.as_bytes());
         }
         let controller = Controller::new(
             inner.downloader.client(Route::Direct),
@@ -402,6 +421,7 @@ async fn spawn_mihomo(inner: &Inner, sink: &dyn ProgressSink) -> AppResult<(Chil
                         mixed_port,
                         controller,
                         pid,
+                        exe: exe.clone(),
                     },
                 ));
             }
@@ -775,6 +795,21 @@ mod tests {
         assert_eq!(v.set_mode(VpnMode::Off).await.unwrap().mode, VpnMode::Off);
         v.restore().await.unwrap();
         let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[test]
+    fn pid_file_needs_exe_and_matches_paths() {
+        assert_eq!(
+            parse_pid_file("42\nC:/x/mihomo.exe\n"),
+            Some((42, PathBuf::from("C:/x/mihomo.exe")))
+        );
+        assert_eq!(parse_pid_file("42\n"), None);
+        assert_eq!(parse_pid_file("x\n/p"), None);
+        let me = std::env::current_exe().unwrap();
+        assert!(same_exe(&me, &me));
+        assert!(!same_exe(&me, Path::new("/definitely/not/mihomo")));
+        // A live process at another path is never killed.
+        kill_pid(std::process::id(), Path::new("/definitely/not/mihomo"));
     }
 
     #[test]

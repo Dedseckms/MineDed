@@ -5,10 +5,24 @@
 //! ignore them, so multiplayer traffic itself stays direct (no TUN by design).
 
 /// Hosts that must stay direct: loopback (P2P tunnel ports) and LAN.
-const NON_PROXY: &str = "localhost|127.*|[::1]|10.*|192.168.*|*.local";
+/// Java wildcards only work at the ends, so 172.16/12 is spelled out.
+fn non_proxy() -> String {
+    let mut hosts = vec![
+        "localhost".to_owned(),
+        "127.*".into(),
+        "[::1]".into(),
+        "10.*".into(),
+        "192.168.*".into(),
+        "169.254.*".into(),
+    ];
+    hosts.extend((16..=31).map(|n| format!("172.{n}.*")));
+    hosts.push("*.local".into());
+    hosts.join("|")
+}
 
 pub(crate) fn jvm_proxy_args(port: u16) -> Vec<String> {
     let host = "127.0.0.1";
+    let skip = non_proxy();
     vec![
         format!("-DsocksProxyHost={host}"),
         format!("-DsocksProxyPort={port}"),
@@ -16,8 +30,8 @@ pub(crate) fn jvm_proxy_args(port: u16) -> Vec<String> {
         format!("-Dhttp.proxyPort={port}"),
         format!("-Dhttps.proxyHost={host}"),
         format!("-Dhttps.proxyPort={port}"),
-        format!("-Dhttp.nonProxyHosts={NON_PROXY}"),
-        format!("-DsocksNonProxyHosts={NON_PROXY}"),
+        format!("-Dhttp.nonProxyHosts={skip}"),
+        format!("-DsocksNonProxyHosts={skip}"),
         "-Djava.net.useSystemProxies=false".to_owned(),
     ]
 }
@@ -41,5 +55,10 @@ mod tests {
         assert!(a
             .iter()
             .any(|x| x.starts_with("-Dhttp.nonProxyHosts=localhost|127.*")));
+        let skip = non_proxy();
+        for h in ["10.*", "192.168.*", "172.16.*", "172.31.*"] {
+            assert!(skip.split('|').any(|x| x == h), "{h}");
+        }
+        assert!(!skip.contains("172.32."));
     }
 }
