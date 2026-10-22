@@ -195,7 +195,7 @@ async fn create_room(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     limit(&s.limiters.create, ip)?;
-    let req: CreateRoom = parse_json(&body)?;
+    let mut req: CreateRoom = parse_json(&body)?;
     req.validate()?;
     let c = match (bearer(&headers), req.auth_mode) {
         (Some(_), _) | (None, AuthMode::Yggdrasil) => {
@@ -279,15 +279,20 @@ async fn join_room(
         format!("Guest-{tail}")
     });
     let j = s.rooms.join(&code, req.endpoint_id, name, &uuid)?;
-    Ok(Json(json!({
+    let mut out = json!({
         "roomId": j.room_id,
         "peerToken": j.peer_token,
         "hostEndpointId": j.host_endpoint_id,
-        "sig": j.sig,
+        "kind": j.kind,
         "authMode": j.auth_mode,
         "relayUrls": s.cfg.relay_urls,
         "passwordProtected": j.password_protected,
-    })))
+    });
+    // `sig` is absent (not null) for voice rooms.
+    if let (Some(sig), Some(o)) = (j.sig, out.as_object_mut()) {
+        o.insert("sig".into(), json!(sig));
+    }
+    Ok(Json(out))
 }
 
 async fn close_room(
