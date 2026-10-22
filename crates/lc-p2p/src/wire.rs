@@ -101,52 +101,56 @@ pub(crate) fn verify_password_proof(password: &str, ekm: &[u8], proof: &str) -> 
     mac(password.as_bytes(), ekm).verify_slice(&raw).is_ok()
 }
 
-fn peer_token_msg(room_id: RoomId, endpoint_id: &str, exp: u64) -> String {
-    format!("lc-peer/1|{room_id}|{endpoint_id}|{exp}")
+fn peer_token_msg(room_id: RoomId, endpoint_id: &str, uuid: &str, exp: u64) -> String {
+    format!("lc-peer/2|{room_id}|{endpoint_id}|{uuid}|{exp}")
 }
 
-/// Hub `peerToken` (`<exp>.<mac>`, see hub.yaml joinRoom). Used by tests and
+/// Hub `peerToken` v2 (`<exp>.<uuid|->.<mac>`, see hub.yaml joinRoom). `uuid`
+/// is the undashed profile UUID of an authenticated join. Used by tests and
 /// by any local hub implementation.
-pub fn make_peer_token(host_token: &str, room_id: RoomId, endpoint_id: &str, exp: u64) -> String {
+pub fn make_peer_token(
+    host_token: &str,
+    room_id: RoomId,
+    endpoint_id: &str,
+    uuid: Option<&str>,
+    exp: u64,
+) -> String {
+    let uuid = uuid.unwrap_or("-");
     let m = mac(
         host_token.as_bytes(),
-        peer_token_msg(room_id, endpoint_id, exp).as_bytes(),
+        peer_token_msg(room_id, endpoint_id, uuid, exp).as_bytes(),
     );
     format!(
-        "{exp}.{}",
+        "{exp}.{uuid}.{}",
         URL_SAFE_NO_PAD.encode(m.finalize().into_bytes())
     )
 }
 
 /// Verifies a hub `peerToken` against the TLS-authenticated endpoint id of
-/// the connecting guest. `now` is unix seconds.
+/// the connecting guest. `now` is unix seconds. `Some(uuid)` when valid
+/// (`uuid` is `None` for anonymous joins), `None` when invalid or expired.
 pub(crate) fn verify_peer_token(
     token: &str,
     host_token: &str,
     room_id: RoomId,
     endpoint_id: &str,
     now: u64,
-) -> bool {
-    let Some((exp, tag)) = token.split_once('.') else {
-        return false;
-    };
-    let Ok(exp_n) = exp.parse::<u64>() else {
-        return false;
-    };
-    if exp_n < now {
-        return false;
+) -> Option<Option<String>> {
+    let mut parts = token.splitn(3, '.');
+    let (exp, uuid, tag) = (parts.next()?, parts.next()?, parts.next()?);
+    let exp_n = exp.parse::<u64>().ok()?;
+    if exp_n < now || uuid.is_empty() {
+        return None;
     }
-    let Ok(raw) = URL_SAFE_NO_PAD.decode(tag) else {
-        return false;
-    };
+    let raw = URL_SAFE_NO_PAD.decode(tag).ok()?;
     mac(
         host_token.as_bytes(),
-        peer_token_msg(room_id, endpoint_id, exp_n).as_bytes(),
+        peer_token_msg(room_id, endpoint_id, uuid, exp_n).as_bytes(),
     )
     .verify_slice(&raw)
-    .is_ok()
+    .ok()?;
+    Some((uuid != "-").then(|| uuid.to_owned()))
 }
-
 fn mac(key: &[u8], msg: &[u8]) -> HmacSha256 {
     // HMAC accepts keys of any length, so this never fails; the fallback
     // (empty key) is unreachable and cannot match a real tag anyway.
@@ -193,19 +197,30 @@ mod tests {
     #[test]
     fn peer_token_checks() {
         let room = RoomId::new();
-        let t = make_peer_token("host", room, "ep1", 1000);
-        assert!(verify_peer_token(&t, "host", room, "ep1", 999));
-        assert!(verify_peer_token(&t, "host", room, "ep1", 1000));
-        assert!(!verify_peer_token(&t, "host", room, "ep1", 1001)); // expired
-        assert!(!verify_peer_token(&t, "host", room, "ep2", 999)); // other endpoint
-        assert!(!verify_peer_token(&t, "other", room, "ep1", 999));
-        assert!(!verify_peer_token(&t, "host", RoomId::new(), "ep1", 999));
+        let t = make_peer_token("host", room, "ep1", None, 1000);
+        assert_eq!(verify_peer_token(&t, "host", room, "ep1", 999), Some(None));
+        assert_eq!(verify_peer_token(&t, "host", room, "ep1", 1000), Some(None));
+        assert_eq!(verify_peer_token(&t, "host", room, "ep1", 1001), None); // expired
+        assert_eq!(verify_peer_token(&t, "host", room, "ep2", 999), None); // other endpoint
+        assert_eq!(verify_peer_token(&t, "other", room, "ep1", 999), None);
+        assert_eq!(
+            verify_peer_token(&t, "host", RoomId::new(), "ep1", 999),
+            None
+        );
         let forged = t.replacen("1000", "9999", 1);
-        assert!(!verify_peer_token(&forged, "host", room, "ep1", 999));
-        assert!(!verify_peer_token("garbage", "host", room, "ep1", 0));
-        assert!(!verify_peer_token("", "host", room, "ep1", 0));
-    }
+        assert_eq!(verify_peer_token(&forged, "host", room, "ep1", 999), None);
+        assert_eq!(verify_peer_token("garbage", "host", room, "ep1", 0), None);
+        assert_eq!(verify_peer_token("", "host", room, "ep1", 0), None);
 
+        let u = make_peer_token("host", room, "ep1", Some("abcdef0123"), 1000);
+        assert_eq!(
+            verify_peer_token(&u, "host", room, "ep1", 0),
+            Some(Some("abcdef0123".into()))
+        );
+        // Swapping the uuid breaks the MAC.
+        let swapped = u.replacen("abcdef0123", "-", 1);
+        assert_eq!(verify_peer_token(&swapped, "host", room, "ep1", 0), None);
+    }
     #[tokio::test]
     async fn line_reader_limits() {
         let data = b"{\"t\":\"bye\"}\nrest".to_vec();

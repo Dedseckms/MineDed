@@ -39,13 +39,19 @@ struct HubState {
     forge_tokens: bool,
     /// Last join body (name/uuid checks).
     last_join: Option<Value>,
+    create_had_bearer: bool,
 }
 
 type Hub = Arc<Mutex<HubState>>;
 
-async fn create_room(State(hub): State<Hub>, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+async fn create_room(
+    State(hub): State<Hub>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
     let room_id = RoomId::new();
     let mut h = hub.lock().unwrap();
+    h.create_had_bearer = headers.contains_key(axum::http::header::AUTHORIZATION);
     let mut room = body.clone();
     room["roomId"] = json!(room_id);
     h.room = Some(room);
@@ -86,7 +92,13 @@ async fn join_room(
         .unwrap()
         .as_secs()
         + 600;
-    let token = make_peer_token(key, room_id, body["endpointId"].as_str().unwrap(), exp);
+    let token = make_peer_token(
+        key,
+        room_id,
+        body["endpointId"].as_str().unwrap(),
+        None,
+        exp,
+    );
     (
         StatusCode::OK,
         Json(json!({
@@ -286,6 +298,8 @@ async fn direct_pair(password: Option<&str>) -> (Side, Side, Hub, MemoryLookup) 
     assert_eq!(st.role, RoomRole::Host);
     assert_eq!(st.link, "mineup://join/ABCD-1234");
     assert_eq!(st.password_protected, password.is_some());
+    // Offline host, open room: created anonymously.
+    assert!(!hub.lock().unwrap().create_had_bearer);
     lookup.add_endpoint_info(host.rooms.endpoint_addr().unwrap());
     (host, guest, hub, lookup)
 }
