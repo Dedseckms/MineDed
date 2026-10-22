@@ -14,12 +14,12 @@ use lc_http::{DownloaderConfig, HttpDownloader};
 use lc_p2p::iroh::address_lookup::memory::MemoryLookup;
 use lc_p2p::iroh::endpoint::Builder;
 use lc_p2p::{
-    make_peer_token, DatagramTransport, EndpointTweak, Identity, P2pConfig, P2pRooms, RoomEnv,
-    RoomObserver, RoomService,
+    make_peer_token, proto::VoiceHeader, DatagramTransport, EndpointTweak, Identity, P2pConfig,
+    P2pRooms, RoomEnv, RoomObserver, RoomService,
 };
 use lc_runtime::{LaunchPlan, MemorySettingsStore, SettingsStore};
 use lc_types::instance::LaunchOpts;
-use lc_types::room::{InstanceSig, PathKind, Peer, RoomAuthMode, RoomRole, RoomState};
+use lc_types::room::{InstanceSig, PathKind, Peer, RoomAuthMode, RoomKind, RoomRole, RoomState};
 use lc_types::settings::Settings;
 use lc_types::version::LoaderKind;
 use lc_types::voice::ChatMessage;
@@ -105,6 +105,7 @@ async fn join_room(
             "roomId": room["roomId"],
             "peerToken": token,
             "hostEndpointId": room["endpointId"],
+            "kind": room.get("kind").cloned().unwrap_or(json!("game")),
             "sig": room["sig"],
             "authMode": room["authMode"],
             "relayUrls": h.relay_urls,
@@ -682,6 +683,10 @@ async fn instance_mismatch_and_bad_codes() {
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidInput);
+    // Game rooms need an instance to compare against.
+    let err = guest.rooms.join("ABCD-1234", None, None).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert_eq!(err.details.unwrap()["reason"], "instanceRequired");
     let err = guest
         .rooms
         .join("ZZZZ-9999", Some(InstanceId::new()), None)
@@ -758,4 +763,308 @@ async fn tunnel_via_local_relay() {
     .await;
     guest.rooms.leave().await.unwrap();
     host.rooms.leave().await.unwrap();
+}
+
+// ---------------------------------------------------------- voice rooms
+
+/// Online (Yggdrasil) account: voice rooms are registered with a bearer.
+struct OnlineEnv;
+
+#[async_trait]
+impl RoomEnv for OnlineEnv {
+    async fn instance_sig(&self, _instance: InstanceId) -> AppResult<InstanceSig> {
+        Err(lc_types::AppError::internal(
+            "voice rooms never look at instances",
+        ))
+    }
+
+    async fn identity(&self) -> AppResult<Identity> {
+        Ok(Identity {
+            name: "Online".into(),
+            uuid: Some("0123456789abcdef0123456789abcdef".into()),
+            hub_token: Some(lc_accounts::Secret::new("access-token")),
+        })
+    }
+}
+
+fn last_state(rec: &Rec) -> Option<RoomState> {
+    rec.states.lock().unwrap().last().cloned().flatten()
+}
+
+async fn recv_dgram(side: &Side) -> (String, Vec<u8>) {
+    tokio::time::timeout(Duration::from_secs(10), side.rooms.recv())
+        .await
+        .expect("datagram timed out")
+        .expect("room open")
+}
+
+fn frame(speaker: u8, seq: u16, opus: &[u8]) -> Vec<u8> {
+    VoiceHeader {
+        speaker,
+        seq,
+        timestamp_ms: u32::from(seq) * 20,
+    }
+    .encode(opus)
+}
+
+/// Voice host + two guests; `relay` = guests have no IP transport at all.
+async fn voice_trio(relay: bool, password: Option<&str>) -> (Side, Side, Side, Hub) {
+    use lc_p2p::iroh::tls::CaTlsConfig;
+
+    let mut relay_urls = vec![];
+    if relay {
+        let (_map, url, server) = lc_p2p::iroh::test_utils::run_relay_server().await.unwrap();
+        // Keep the relay alive for the whole test process.
+        std::mem::forget(server);
+        relay_urls.push(url.to_string());
+    }
+    let (hub_url, hub) = spawn_hub(relay_urls).await;
+    let lookup = MemoryLookup::new();
+    let host_tweak: EndpointTweak =
+        Arc::new(|b: Builder| loopback_only(b).ca_tls_config(CaTlsConfig::insecure_skip_verify()));
+    let guest_tweak: EndpointTweak = if relay {
+        Arc::new(|b: Builder| {
+            b.clear_ip_transports()
+                .ca_tls_config(CaTlsConfig::insecure_skip_verify())
+        })
+    } else {
+        let l = lookup.clone();
+        Arc::new(move |b| loopback_only(b).address_lookup(l.clone()))
+    };
+    let cfg = |tweak: EndpointTweak| {
+        let mut c = base_cfg(tweak, vec![]);
+        c.relay_override = None;
+        c
+    };
+    let host = side(
+        &hub_url,
+        cfg(host_tweak),
+        FakeEnv {
+            name: "Host",
+            mods: "m1",
+        },
+    )
+    .await;
+    let a = side(
+        &hub_url,
+        cfg(guest_tweak.clone()),
+        FakeEnv {
+            name: "Alice",
+            mods: "x",
+        },
+    )
+    .await;
+    let b = side(
+        &hub_url,
+        cfg(guest_tweak),
+        FakeEnv {
+            name: "Bob",
+            mods: "y",
+        },
+    )
+    .await;
+
+    // No LAN world and no instance needed.
+    let st = host
+        .rooms
+        .create_voice(password.map(str::to_owned))
+        .await
+        .unwrap();
+    assert_eq!(st.kind, RoomKind::Voice);
+    assert_eq!(st.role, RoomRole::Host);
+    assert!(st.sig.is_none() && st.local_addr.is_none());
+    assert_eq!(st.auth_mode, RoomAuthMode::Open);
+    {
+        let h = hub.lock().unwrap();
+        let body = h.room.as_ref().unwrap();
+        assert_eq!(body["kind"], "voice");
+        assert!(body.get("sig").is_none());
+        assert!(!h.create_had_bearer);
+    }
+    if !relay {
+        lookup.add_endpoint_info(host.rooms.endpoint_addr().unwrap());
+    }
+    for g in [&a, &b] {
+        let st = g
+            .rooms
+            .join("ABCD-1234", None, password.map(str::to_owned))
+            .await
+            .unwrap();
+        assert_eq!(st.kind, RoomKind::Voice);
+        assert!(st.sig.is_none() && st.local_addr.is_none());
+    }
+    eventually("everyone sees everyone", || {
+        [&host, &a, &b]
+            .iter()
+            .all(|s| last_state(&s.rec).is_some_and(|st| st.peers.len() == 2))
+    })
+    .await;
+    (host, a, b, hub)
+}
+
+async fn exchange_among_three(host: &Side, a: &Side, b: &Side) {
+    let id = |s: &Side| s.rooms.endpoint_addr().unwrap().id.to_string();
+    let (host_id, a_id, b_id) = (id(host), id(a), id(b));
+    let limit = a.rooms.max_datagram_size();
+    assert!((900..=1024).contains(&limit), "{limit}");
+    assert_eq!(
+        a.rooms
+            .send(None, &vec![1u8; limit + 1])
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidInput
+    );
+
+    // Alice lies about her speaker index; the host stamps the real one (1).
+    a.rooms.send(None, &frame(9, 1, b"alice")).await.unwrap();
+    let (from, data) = recv_dgram(host).await;
+    assert_eq!(from, a_id);
+    let (h, opus) = VoiceHeader::decode(&data).unwrap();
+    assert_eq!((h.speaker, opus), (1, &b"alice"[..]));
+    // Bob gets it through the host, attributed to Alice.
+    let (from, data) = recv_dgram(b).await;
+    assert_eq!(from, a_id);
+    assert_eq!(VoiceHeader::decode(&data).unwrap().0.speaker, 1);
+
+    // Full-size frame survives forwarding.
+    let big = frame(2, 2, &vec![7u8; limit - VoiceHeader::LEN]);
+    b.rooms.send(None, &big).await.unwrap();
+    let (from, data) = recv_dgram(a).await;
+    assert_eq!((from.as_str(), data.len()), (b_id.as_str(), limit));
+    assert_eq!(recv_dgram(host).await.0, b_id);
+
+    // Host broadcast reaches both guests as the host (index 0).
+    host.rooms.send(None, &frame(5, 3, b"host")).await.unwrap();
+    for g in [a, b] {
+        let (from, data) = recv_dgram(g).await;
+        assert_eq!(from, host_id);
+        assert_eq!(VoiceHeader::decode(&data).unwrap().0.speaker, 0);
+    }
+    // Unicast host -> Bob; Alice can't address Bob directly.
+    host.rooms.send(Some(&b_id), b"only bob").await.unwrap();
+    assert_eq!(recv_dgram(b).await.1, b"only bob");
+    assert_eq!(
+        a.rooms.send(Some(&b_id), b"x").await.unwrap_err().code,
+        ErrorCode::NotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn voice_room_direct_three_peers() {
+    let (host, a, b, hub) = voice_trio(false, Some("pw")).await;
+    exchange_among_three(&host, &a, &b).await;
+
+    // Speaking / muted flags travel over the control stream.
+    let a_id = a.rooms.endpoint_addr().unwrap().id.to_string();
+    a.rooms.set_voice_state(true, false).unwrap();
+    eventually("host sees alice speaking", || {
+        last_state(&host.rec).is_some_and(|s| {
+            s.peers
+                .iter()
+                .any(|p| p.peer_id == a_id && p.speaking && !p.muted)
+        })
+    })
+    .await;
+    host.rooms.set_voice_state(false, true).unwrap();
+    eventually("guests see host muted", || {
+        [&a, &b].iter().all(|g| {
+            last_state(&g.rec).is_some_and(|s| s.peers.iter().any(|p| p.name == "Host" && p.muted))
+        })
+    })
+    .await;
+
+    // Chat works like in game rooms.
+    a.rooms.send_chat("hello voice").await.unwrap();
+    eventually("chat forwarded to bob", || {
+        b.rec
+            .chats
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.text == "hello voice" && c.from_name == "Alice")
+    })
+    .await;
+
+    // Kick bans as usual.
+    host.rooms.kick(&a_id).await.unwrap();
+    eventually("alice out", || {
+        a.rec
+            .states
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(Option::is_none)
+    })
+    .await;
+    let err = a
+        .rooms
+        .join("ABCD-1234", None, Some("pw".into()))
+        .await
+        .unwrap_err();
+    assert_eq!(err.details.unwrap()["reason"], "banned");
+
+    b.rooms.leave().await.unwrap();
+    host.rooms.leave().await.unwrap();
+    assert!(hub.lock().unwrap().closed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn voice_room_via_relay_three_peers() {
+    let (host, a, b, _hub) = voice_trio(true, None).await;
+    eventually("guests on relay", || {
+        last_state(&a.rec).is_some_and(|s| {
+            s.peers
+                .iter()
+                .any(|p| p.name == "Host" && p.path == PathKind::Relay)
+        })
+    })
+    .await;
+    exchange_among_three(&host, &a, &b).await;
+    a.rooms.leave().await.unwrap();
+    b.rooms.leave().await.unwrap();
+    host.rooms.leave().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn voice_room_password_and_online_host() {
+    let (hub_url, hub) = spawn_hub(vec![]).await;
+    let settings = Arc::new(MemorySettingsStore::default());
+    settings
+        .set(Settings {
+            hub_url: hub_url.clone(),
+            ..Settings::default()
+        })
+        .await
+        .unwrap();
+    let downloader = Arc::new(HttpDownloader::new(DownloaderConfig::default()).unwrap());
+    let host = P2pRooms::new(
+        base_cfg(Arc::new(loopback_only), vec![]),
+        downloader,
+        settings,
+        Arc::new(OnlineEnv),
+        Arc::new(Rec::default()),
+    );
+    let st = host.create_voice(None).await.unwrap();
+    assert_eq!(st.auth_mode, RoomAuthMode::Yggdrasil);
+    assert_eq!(st.kind, RoomKind::Voice);
+    assert!(hub.lock().unwrap().create_had_bearer);
+    assert_eq!(
+        host.create_voice(None).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+
+    // Offline guest: the room needs a Yggdrasil account.
+    let guest = side(
+        &hub_url,
+        base_cfg(Arc::new(loopback_only), vec![]),
+        FakeEnv {
+            name: "Guest",
+            mods: "m1",
+        },
+    )
+    .await;
+    let err = guest.rooms.join("ABCD-1234", None, None).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::AuthRequired);
+    host.leave().await.unwrap();
 }

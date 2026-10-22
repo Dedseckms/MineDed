@@ -33,14 +33,17 @@ use crate::contract::{DatagramTransport, RoomObserver, RoomService};
 use crate::env::{Identity, RoomEnv};
 use crate::hub::{CreateRoomReq, HubClient};
 use crate::lan::{self, LanSeen};
-use crate::proto::{ControlMsg, StreamOpen, ALPN, PROTOCOL_VERSION};
+use crate::proto::{ControlMsg, StreamOpen, VoiceHeader, ALPN, PROTOCOL_VERSION};
 use crate::wire::{self, MAX_LINE, MAX_OPEN_LINE};
 
 /// Hook to adjust the iroh endpoint builder (tests: trust a self-signed relay,
 /// add address lookups). Applied after the defaults.
 pub type EndpointTweak = Arc<dyn Fn(Builder) -> Builder + Send + Sync>;
 
-const DEFAULT_DATAGRAM: usize = 1200;
+/// Datagram payload cap. Every QUIC path carries at least 1200-byte packets,
+/// so a payload this size always fits the host's forward to any other guest
+/// (whose path a sender cannot see). Opus voice frames are far smaller.
+const MAX_DATAGRAM: usize = 1024;
 const MAX_CHAT_CHARS: usize = 500;
 const MAX_NAME_CHARS: usize = 32;
 const PATH_POLL: Duration = Duration::from_secs(2);
@@ -134,11 +137,23 @@ struct HostCtx {
     host_token: Secret,
     password: Option<Secret>,
     /// LAN port fixed at create time; never re-read while the room lives.
-    lan_port: u16,
+    /// `None` for voice rooms (no game tunnel).
+    lan_port: Option<u16>,
     /// Endpoint ids and (yggdrasil rooms) profile uuids kicked from this room.
     banned: StdMutex<HashSet<String>>,
     /// Wrong password attempts per endpoint id: (count, last failure).
     pw_fails: StdMutex<HashMap<String, (u32, Instant)>>,
+}
+
+/// Inputs of `start_hosting`, shared by game and voice rooms.
+struct Hosting {
+    hub: HubClient,
+    me: Identity,
+    kind: RoomKind,
+    sig: Option<InstanceSig>,
+    auth_mode: RoomAuthMode,
+    password: Option<Secret>,
+    lan_port: Option<u16>,
 }
 
 pub(crate) struct Session {
@@ -146,7 +161,8 @@ pub(crate) struct Session {
     pub(crate) room_id: RoomId,
     code: String,
     auth_mode: RoomAuthMode,
-    sig: InstanceSig,
+    kind: RoomKind,
+    sig: Option<InstanceSig>,
     expires_at: String,
     password_protected: bool,
     pub(crate) local_addr: Option<SocketAddr>,
@@ -157,6 +173,8 @@ pub(crate) struct Session {
     peers: StdMutex<Peers>,
     dgram_tx: mpsc::Sender<(String, Vec<u8>)>,
     dgram_rx: tokio::sync::Mutex<mpsc::Receiver<(String, Vec<u8>)>>,
+    /// Our last published (speaking, muted).
+    voice: StdMutex<(bool, bool)>,
     host: Option<HostCtx>,
 }
 
@@ -188,8 +206,8 @@ impl Session {
             code: self.code.clone(),
             role: self.role,
             auth_mode: self.auth_mode,
-            kind: RoomKind::Game,
-            sig: Some(self.sig.clone()),
+            kind: self.kind,
+            sig: self.sig.clone(),
             peers: list,
             expires_at: self.expires_at.clone(),
             link: join_link(&self.code),
@@ -234,6 +252,17 @@ impl Session {
             .filter(|(id, _)| Some(id.as_str()) != except)
             .filter_map(|(_, e)| e.conn.clone())
             .collect()
+    }
+
+    /// Voice speaker index of `id` (its position in `Welcome` order).
+    fn speaker_index(&self, id: &str) -> Option<u8> {
+        let p = self.peers();
+        let i = p.order.iter().position(|x| x == id)?;
+        u8::try_from(i).ok()
+    }
+
+    fn speaker_id(&self, index: u8) -> Option<String> {
+        self.peers().order.get(usize::from(index)).cloned()
     }
 }
 
@@ -447,11 +476,61 @@ impl P2pRooms {
         cancel.cancel();
         let lan_port = detected?;
         tracing::info!("rooms: hosting LAN world on port {lan_port}");
+        self.start_hosting(Hosting {
+            hub,
+            me,
+            kind: RoomKind::Game,
+            sig: Some(sig),
+            auth_mode,
+            password,
+            lan_port: Some(lan_port),
+        })
+        .await
+    }
 
+    async fn create_voice_room(&self, password: Option<String>) -> AppResult<RoomState> {
+        let _op = self.inner.op.lock().await;
+        if self.inner.current().is_some() {
+            return Err(AppError::new(ErrorCode::Conflict, "already in a room"));
+        }
+        let password = password.filter(|p| !p.is_empty()).map(Secret::new);
+        let hub = self.hub().await?;
+        let me = self.inner.env.identity().await?;
+        // No game server here: the mode only says whether guests must prove a
+        // Yggdrasil account (and lets bans stick to the profile).
+        let auth_mode = if me.hub_token.is_some() {
+            RoomAuthMode::Yggdrasil
+        } else {
+            RoomAuthMode::Open
+        };
+        self.start_hosting(Hosting {
+            hub,
+            me,
+            kind: RoomKind::Voice,
+            sig: None,
+            auth_mode,
+            password,
+            lan_port: None,
+        })
+        .await
+    }
+
+    /// Registers the room in hub and starts accepting peers. Caller holds `op`.
+    async fn start_hosting(&self, h: Hosting) -> AppResult<RoomState> {
+        let Hosting {
+            hub,
+            me,
+            kind,
+            sig,
+            auth_mode,
+            password,
+            lan_port,
+        } = h;
         let secret = self.inner.secret.clone();
         let my_id = secret.public().to_string();
         let req = CreateRoomReq {
             endpoint_id: my_id.clone(),
+            kind,
             sig: sig.clone(),
             auth_mode,
             max_peers: self.inner.cfg.max_peers,
@@ -474,6 +553,7 @@ impl P2pRooms {
             room_id: resp.room_id,
             code: resp.code,
             auth_mode,
+            kind,
             sig,
             expires_at: resp.expires_at,
             password_protected: password.is_some(),
@@ -488,6 +568,7 @@ impl P2pRooms {
             }),
             dgram_tx,
             dgram_rx: tokio::sync::Mutex::new(dgram_rx),
+            voice: StdMutex::new((false, false)),
             host: Some(HostCtx {
                 hub,
                 host_token,
@@ -647,6 +728,11 @@ impl P2pRooms {
             old.close(0u32.into(), b"replaced");
         }
         self.host_broadcast_welcome(&s)?;
+        let (speaking, muted) = *lock(&s.voice);
+        if speaking || muted {
+            let line = wire::encode(&ControlMsg::VoiceState { speaking, muted })?;
+            s.send_to(&remote, &line);
+        }
         self.inner.observer.on_peer(peer, true);
         self.emit_state();
 
@@ -774,7 +860,7 @@ impl P2pRooms {
     async fn join_room(
         &self,
         code: &str,
-        instance: InstanceId,
+        instance: Option<InstanceId>,
         password: Option<String>,
     ) -> AppResult<RoomState> {
         let code = parse_code(code)?;
@@ -785,7 +871,11 @@ impl P2pRooms {
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
         let hub = self.hub().await?;
         let me = self.inner.env.identity().await?;
-        let local_sig = self.inner.env.instance_sig(instance).await?;
+        // Computed up front so a broken instance fails before hub is asked.
+        let local_sig = match instance {
+            Some(i) => Some(self.inner.env.instance_sig(i).await?),
+            None => None,
+        };
 
         let secret = self.inner.secret.clone();
         let my_id = secret.public().to_string();
@@ -812,7 +902,22 @@ impl P2pRooms {
             )
             .detail("reason", "yggdrasilAccountRequired"));
         }
-        check_sig(&resp.sig, &local_sig)?;
+        if resp.kind == RoomKind::Game {
+            let remote = resp.sig.as_ref().ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::Network,
+                    "unexpected hub response: game room without sig",
+                )
+            })?;
+            let local = local_sig.as_ref().ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::InvalidInput,
+                    "instance is required for game rooms",
+                )
+                .detail("reason", "instanceRequired")
+            })?;
+            check_sig(remote, local)?;
+        }
         if resp.password_protected && password.is_none() {
             return Err(
                 AppError::new(ErrorCode::InvalidInput, "room password required")
@@ -845,15 +950,24 @@ impl P2pRooms {
             }
         };
 
-        let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await {
-            Ok(l) => l,
-            Err(e) => {
-                conn.close(0u32.into(), b"bye");
-                endpoint.close().await;
-                return Err(e.into());
+        // Game rooms: local TCP port tunnelled to the host's world.
+        let listener = if resp.kind == RoomKind::Game {
+            let bound = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await {
+                Ok(l) => l.local_addr().map(|a| (l, a)),
+                Err(e) => Err(e),
+            };
+            match bound {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    conn.close(0u32.into(), b"bye");
+                    endpoint.close().await;
+                    return Err(e.into());
+                }
             }
+        } else {
+            None
         };
-        let local_addr = listener.local_addr()?;
+        let local_addr = listener.as_ref().map(|(_, a)| *a);
 
         let host_key = host_id.to_string();
         let (tx, rx) = mpsc::channel(CONTROL_QUEUE);
@@ -883,10 +997,11 @@ impl P2pRooms {
             room_id: resp.room_id,
             code,
             auth_mode: resp.auth_mode,
-            sig: resp.sig,
+            kind: resp.kind,
+            sig: resp.sig.filter(|_| resp.kind == RoomKind::Game),
             expires_at: String::new(),
             password_protected: resp.password_protected,
-            local_addr: Some(local_addr),
+            local_addr,
             my_id,
             my_name: clean_name(&me.name),
             endpoint,
@@ -894,17 +1009,20 @@ impl P2pRooms {
             peers: StdMutex::new(peers),
             dgram_tx,
             dgram_rx: tokio::sync::Mutex::new(dgram_rx),
+            voice: StdMutex::new((false, false)),
             host: None,
         });
         self.inner.set_current(Some(session.clone()));
 
-        tokio::spawn(guest_tunnel(listener, conn.clone(), session.cancel.clone()));
-        if self.inner.cfg.lan_multicast {
-            tokio::spawn(lan::announce(
-                format!("{host_name} (MineUP)"),
-                local_addr.port(),
-                session.cancel.clone(),
-            ));
+        if let Some((listener, local_addr)) = listener {
+            tokio::spawn(guest_tunnel(listener, conn.clone(), session.cancel.clone()));
+            if self.inner.cfg.lan_multicast {
+                tokio::spawn(lan::announce(
+                    format!("{host_name} (MineUP)"),
+                    local_addr.port(),
+                    session.cancel.clone(),
+                ));
+            }
         }
         tokio::spawn(
             self.clone()
@@ -1053,11 +1171,19 @@ impl P2pRooms {
                     self.on_chat(&s, &from, (orig, from_name), id, text, sent_at);
                 }
                 ControlMsg::VoiceState { speaking, muted } => {
-                    if let Some(e) = s.peers().map.get_mut(&from) {
-                        e.peer.speaking = speaking;
-                        e.peer.muted = muted;
+                    // Attributed to the connection only: the message carries
+                    // no sender, so the host cannot relay guests' states.
+                    let changed = match s.peers().map.get_mut(&from) {
+                        Some(e) if (e.peer.speaking, e.peer.muted) != (speaking, muted) => {
+                            e.peer.speaking = speaking;
+                            e.peer.muted = muted;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if changed {
+                        self.emit_state();
                     }
-                    self.emit_state();
                 }
                 ControlMsg::Welcome { peers, peer_names } if s.role == RoomRole::Guest => {
                     apply_welcome(&mut s.peers(), peers, peer_names, &s.my_id, &from);
@@ -1128,13 +1254,29 @@ impl P2pRooms {
                     Err(_) => return,
                 },
             };
+            if data.len() > MAX_DATAGRAM {
+                continue;
+            }
+            let mut data = data.to_vec();
+            let mut sender = from.clone();
             if s.role == RoomRole::Host {
+                // Authoritative speaker index: a guest cannot speak as someone else.
+                if let Some(idx) = s.speaker_index(&from) {
+                    set_speaker(&mut data, idx);
+                }
                 for other in s.connections(Some(&from)) {
-                    let _ = other.send_datagram(data.clone());
+                    if other.max_datagram_size().is_some_and(|m| data.len() <= m) {
+                        let _ = other.send_datagram(data.clone().into());
+                    }
+                }
+            } else if let Some(id) = speaker(&data).and_then(|i| s.speaker_id(i)) {
+                // Forwarded by the host on behalf of another guest.
+                if id != s.my_id {
+                    sender = id;
                 }
             }
             // Voice is lossy anyway: drop when the consumer lags.
-            let _ = s.dgram_tx.try_send((from.clone(), data.to_vec()));
+            let _ = s.dgram_tx.try_send((sender, data));
         }
     }
 
@@ -1219,7 +1361,28 @@ impl P2pRooms {
             .iter()
             .filter_map(Connection::max_datagram_size)
             .min()
-            .unwrap_or(DEFAULT_DATAGRAM)
+            .unwrap_or(MAX_DATAGRAM)
+            .min(MAX_DATAGRAM)
+    }
+
+    /// Publishes our voice activity (`ControlMsg::VoiceState`) to directly
+    /// connected peers; they expose it as `Peer::speaking` / `Peer::muted`.
+    /// Guests see the host's state, the host sees every guest's. No-op when
+    /// unchanged or outside a room.
+    pub fn set_voice_state(&self, speaking: bool, muted: bool) -> AppResult<()> {
+        let Some(s) = self.inner.current() else {
+            return Ok(());
+        };
+        {
+            let mut v = lock(&s.voice);
+            if *v == (speaking, muted) {
+                return Ok(());
+            }
+            *v = (speaking, muted);
+        }
+        let line = wire::encode(&ControlMsg::VoiceState { speaking, muted })?;
+        s.broadcast(&line, None);
+        Ok(())
     }
 }
 
@@ -1240,18 +1403,11 @@ impl RoomService for P2pRooms {
         instance: Option<InstanceId>,
         password: Option<String>,
     ) -> AppResult<RoomState> {
-        // TODO(net, wave 4): voice rooms join without an instance.
-        let instance = instance.ok_or_else(|| {
-            AppError::new(
-                ErrorCode::InvalidInput,
-                "instance is required for game rooms",
-            )
-        })?;
         self.join_room(code, instance, password).await
     }
 
-    async fn create_voice(&self, _password: Option<String>) -> AppResult<RoomState> {
-        Err(AppError::not_implemented("RoomService::create_voice"))
+    async fn create_voice(&self, password: Option<String>) -> AppResult<RoomState> {
+        self.create_voice_room(password).await
     }
 
     async fn leave(&self) -> AppResult<()> {
@@ -1280,6 +1436,14 @@ impl DatagramTransport for P2pRooms {
             return Err(AppError::new(ErrorCode::InvalidInput, "datagram too large")
                 .detail("max", limit.to_string()));
         }
+        let mut payload = payload.to_vec();
+        if s.role == RoomRole::Host {
+            if let Some(idx) = s.speaker_index(&s.my_id) {
+                set_speaker(&mut payload, idx);
+            }
+        }
+        // Guests reach other guests only through the host, which fans every
+        // datagram out to the whole room; unicast needs a direct connection.
         match to {
             Some(id) => {
                 let conn = s.peers().map.get(id).and_then(|e| e.conn.clone());
@@ -1287,12 +1451,12 @@ impl DatagramTransport for P2pRooms {
                     AppError::new(ErrorCode::NotFound, "peer is not directly connected")
                         .detail("peerId", id)
                 })?;
-                conn.send_datagram(payload.to_vec().into())
+                conn.send_datagram(payload.into())
                     .map_err(|e| net_err("datagram", e))
             }
             None => {
                 for conn in s.connections(None) {
-                    let _ = conn.send_datagram(payload.to_vec().into());
+                    let _ = conn.send_datagram(payload.clone().into());
                 }
                 Ok(())
             }
@@ -1312,7 +1476,21 @@ impl DatagramTransport for P2pRooms {
         self.inner
             .current()
             .map(|s| Self::datagram_limit(&s))
-            .unwrap_or(DEFAULT_DATAGRAM)
+            .unwrap_or(MAX_DATAGRAM)
+    }
+}
+
+/// Speaker index of a voice datagram (`VoiceHeader`), if it is one.
+fn speaker(data: &[u8]) -> Option<u8> {
+    VoiceHeader::decode(data).ok().map(|(h, _)| h.speaker)
+}
+
+/// Overwrites the speaker byte of a voice datagram; other payloads are left as is.
+fn set_speaker(data: &mut [u8], idx: u8) {
+    if VoiceHeader::decode(data).is_ok() {
+        if let Some(b) = data.get_mut(1) {
+            *b = idx;
+        }
     }
 }
 
@@ -1525,8 +1703,8 @@ fn spawn_writer(mut send: SendStream, mut rx: mpsc::Receiver<String>) {
 }
 
 /// Host: every bi-stream after the control stream is one game connection to
-/// the LAN port fixed at create time.
-async fn host_game_streams(conn: Connection, lan_port: u16, cancel: CancellationToken) {
+/// the LAN port fixed at create time. Voice rooms (`None`) refuse them.
+async fn host_game_streams(conn: Connection, lan_port: Option<u16>, cancel: CancellationToken) {
     loop {
         let (send, recv) = tokio::select! {
             () = cancel.cancelled() => return,
@@ -1535,7 +1713,16 @@ async fn host_game_streams(conn: Connection, lan_port: u16, cancel: Cancellation
                 Err(_) => return,
             },
         };
-        tokio::spawn(serve_game_stream(send, recv, lan_port));
+        match lan_port {
+            Some(port) => {
+                tokio::spawn(serve_game_stream(send, recv, port));
+            }
+            None => {
+                let (mut send, mut recv) = (send, recv);
+                let _ = send.reset(1u32.into());
+                let _ = recv.stop(1u32.into());
+            }
+        }
     }
 }
 
