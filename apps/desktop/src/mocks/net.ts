@@ -372,7 +372,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
     roomLeave: async () => {
       await wait();
       clearTimers();
-      stopVoice();
+      // Like the real backend, leaving does not stop voice; the UI calls voice_stop first.
       if (room) {
         room = null;
         emitRoom();
