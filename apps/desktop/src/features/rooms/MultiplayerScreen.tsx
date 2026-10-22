@@ -10,17 +10,24 @@ import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
 import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
 import { PATH_TONE } from "../../lib/rooms";
+import { isSpeaking } from "../../lib/voice";
 import { useNavStore } from "../../stores/navStore";
+import { useVoiceStore } from "../../stores/voiceStore";
+import { PeerVoiceControls, SpeakingAvatar, VoiceControls } from "../voice/VoicePanel";
 import { RoomChat } from "./RoomChat";
-import { CreateRoomForm, JoinRoomForm } from "./RoomForms";
+import { CreateRoomForm, CreateVoiceRoomForm, JoinRoomForm } from "./RoomForms";
 
 function RoomHeader({ room, onLeave }: { room: RoomState; onLeave: () => void }) {
   const { t, i18n } = useTranslation();
   const go = useNavStore((s) => s.go);
   const host = room.role === "host";
+  const voice = room.kind === "voice";
+  const title = voice
+    ? host ? t("rooms.room.voiceHostTitle") : t("rooms.room.voiceGuestTitle")
+    : host ? t("rooms.room.hostTitle") : t("rooms.room.guestTitle");
   return (
     <Section
-      title={host ? t("rooms.room.hostTitle") : t("rooms.room.guestTitle")}
+      title={title}
       actions={
         <Button size="sm" variant="danger" icon={<Icon name="logout" />} onClick={onLeave}>
           {host ? t("rooms.room.close") : t("rooms.room.leave")}
@@ -29,7 +36,8 @@ function RoomHeader({ room, onLeave }: { room: RoomState; onLeave: () => void })
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={host ? "accent" : "info"}>{t(`rooms.role.${room.role}`)}</Badge>
-        <Badge>{t(`rooms.authMode.${room.authMode}`)}</Badge>
+        <Badge tone={voice ? "info" : "neutral"}>{t(`rooms.kind.${room.kind}`)}</Badge>
+        {voice ? null : <Badge>{t(`rooms.authMode.${room.authMode}`)}</Badge>}
         {room.passwordProtected ? (
           <Badge tone="warning">
             <span className="inline-flex items-center gap-1">
@@ -73,37 +81,51 @@ function RoomHeader({ room, onLeave }: { room: RoomState; onLeave: () => void })
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-muted">{host ? t("rooms.room.hostHint") : t("rooms.room.guestHint")}</p>
-        <Button size="sm" variant="primary" icon={<Icon name="play" />} onClick={() => go("play")}>
-          {t("rooms.room.toPlay")}
-        </Button>
-      </div>
+      {voice ? (
+        <p className="text-xs text-muted">{host ? t("rooms.room.voiceHostHint") : t("rooms.room.voiceGuestHint")}</p>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-muted">{host ? t("rooms.room.hostHint") : t("rooms.room.guestHint")}</p>
+          <Button size="sm" variant="primary" icon={<Icon name="play" />} onClick={() => go("play")}>
+            {t("rooms.room.toPlay")}
+          </Button>
+        </div>
+      )}
     </Section>
   );
 }
 
 function PeerRow({ peer, canKick, onKick }: { peer: Peer; canKick: boolean; onKick: () => void }) {
   const { t } = useTranslation();
+  const voiceOn = useVoiceStore((s) => s.active);
+  const speaking = useVoiceStore((s) => voiceOn && isSpeaking(peer, s.speaking));
   return (
-    <Card className="flex items-center gap-3 py-3">
-      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2 font-semibold uppercase">
-        {peer.name.slice(0, 1)}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{peer.name}</p>
-        <p className="truncate text-xs text-muted">
-          {peer.rttMs !== null ? t("rooms.peers.rtt", { ms: peer.rttMs }) : t("rooms.peers.rttUnknown")}
-        </p>
+    <Card className="flex flex-col gap-2 py-3">
+      <div className="flex items-center gap-3">
+        <SpeakingAvatar name={peer.name} speaking={speaking} />
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-1.5 truncate font-medium">
+            {peer.name}
+            {peer.muted ? (
+              <span title={t("voice.peer.micOff")} aria-label={t("voice.peer.micOff")} className="text-muted">
+                <Icon name="micOff" className="size-3.5" />
+              </span>
+            ) : null}
+          </p>
+          <p className="truncate text-xs text-muted">
+            {peer.rttMs !== null ? t("rooms.peers.rtt", { ms: peer.rttMs }) : t("rooms.peers.rttUnknown")}
+          </p>
+        </div>
+        <Badge tone={PATH_TONE[peer.path]}>
+          <span title={t(`rooms.pathHint.${peer.path}`)}>{t(`rooms.path.${peer.path}`)}</span>
+        </Badge>
+        {canKick ? (
+          <Button size="sm" variant="ghost" className="text-danger" onClick={onKick} aria-label={t("rooms.peers.kickNamed", { name: peer.name })}>
+            {t("rooms.peers.kick")}
+          </Button>
+        ) : null}
       </div>
-      <Badge tone={PATH_TONE[peer.path]}>
-        <span title={t(`rooms.pathHint.${peer.path}`)}>{t(`rooms.path.${peer.path}`)}</span>
-      </Badge>
-      {canKick ? (
-        <Button size="sm" variant="ghost" className="text-danger" onClick={onKick} aria-label={t("rooms.peers.kickNamed", { name: peer.name })}>
-          {t("rooms.peers.kick")}
-        </Button>
-      ) : null}
+      {voiceOn && peer.path !== "connecting" ? <PeerVoiceControls peer={peer} /> : null}
     </Card>
   );
 }
@@ -164,14 +186,17 @@ function RoomView({ room }: { room: RoomState }) {
         }}
       />
       <div className="grid gap-6 lg:grid-cols-2">
-        <PeersSection room={room} />
+        <div className="flex flex-col gap-6">
+          <VoiceControls />
+          <PeersSection room={room} />
+        </div>
         <RoomChat />
       </div>
       <ConfirmDialog
         open={confirm}
         danger
         title={host ? t("rooms.room.closeTitle") : t("rooms.room.leaveTitle")}
-        message={host ? t("rooms.room.closeMessage") : t("rooms.room.leaveMessage")}
+        message={host ? t("rooms.room.closeMessage") : room.kind === "voice" ? t("rooms.room.voiceLeaveMessage") : t("rooms.room.leaveMessage")}
         confirmLabel={host ? t("rooms.room.close") : t("rooms.room.leave")}
         loading={leave.isPending}
         error={leave.error ? <ErrorMessage error={leave.error} /> : null}
@@ -190,7 +215,10 @@ export function MultiplayerScreen() {
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <CreateRoomForm />
-      <JoinRoomForm />
+      <div className="flex flex-col gap-6">
+        <JoinRoomForm />
+        <CreateVoiceRoomForm />
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import type { NetBlockedPayload, RoomPeerEvent, RoomState } from "../bindings";
 import { api, unwrap } from "../api/client";
@@ -11,6 +11,7 @@ import { useNavStore } from "../stores/navStore";
 import { useRoomStore } from "../stores/roomStore";
 import { useTaskStore } from "../stores/taskStore";
 import { useToastStore } from "../stores/toastStore";
+import { useVoiceStore } from "../stores/voiceStore";
 
 /** Toast for `net://blocked`; one per host, with a shortcut to the VPN screen. */
 export function notifyNetBlocked(p: NetBlockedPayload): void {
@@ -31,6 +32,36 @@ export function notifyNetBlocked(p: NetBlockedPayload): void {
 export function applyRoomState(qc: QueryClient, state: RoomState | null): void {
   qc.setQueryData(qk.room, state);
   useRoomStore.getState().syncRoom(state?.roomId ?? null);
+  useVoiceStore.getState().syncRoom(state?.roomId ?? null);
+}
+
+/**
+ * Room, chat and voice subscriptions. Used by the main shell and by the
+ * compact overlay window (which has its own JS context and stores).
+ * `chatSeen` decides whether an incoming message counts as unread.
+ */
+export function useRoomSync(chatSeen: () => boolean): void {
+  const qc = useQueryClient();
+  const room = useRoomState();
+  const seenRef = useRef(chatSeen);
+  seenRef.current = chatSeen;
+
+  useEffect(() => {
+    if (room.data === undefined) return;
+    const id = room.data?.roomId ?? null;
+    useRoomStore.getState().syncRoom(id);
+    useVoiceStore.getState().syncRoom(id);
+  }, [room.data]);
+
+  useEffect(() => {
+    const offs = [
+      subscribe("roomState", (state) => applyRoomState(qc, state)),
+      subscribe("roomPeer", (ev) => applyRoomPeer(qc, ev)),
+      subscribe("chatMessage", (msg) => useRoomStore.getState().addMessage(msg, seenRef.current())),
+      subscribe("voiceSpeaking", (ev) => useVoiceStore.getState().applySpeaking(ev)),
+    ];
+    return () => offs.forEach((off) => off());
+  }, [qc]);
 }
 
 export function applyRoomPeer(qc: QueryClient, ev: RoomPeerEvent): void {
@@ -46,18 +77,13 @@ export function useBackendSync(): void {
   const syncSummaries = useTaskStore((s) => s.syncSummaries);
   const applyState = useGameStore((s) => s.applyState);
   const appendLog = useGameStore((s) => s.appendLog);
-  const syncRoom = useRoomStore((s) => s.syncRoom);
 
   const tasks = useQuery({ queryKey: qk.tasks, queryFn: async () => unwrap(await api.tasksList()) });
-  const room = useRoomState();
+  useRoomSync(() => useNavStore.getState().section === "multiplayer");
 
   useEffect(() => {
     if (tasks.data) syncSummaries(tasks.data);
   }, [tasks.data, syncSummaries]);
-
-  useEffect(() => {
-    if (room.data !== undefined) syncRoom(room.data?.roomId ?? null);
-  }, [room.data, syncRoom]);
 
   useEffect(() => {
     const offs = [
@@ -81,11 +107,6 @@ export function useBackendSync(): void {
         void qc.invalidateQueries({ queryKey: qk.vpnNodes });
       }),
       subscribe("netBlocked", notifyNetBlocked),
-      subscribe("roomState", (state) => applyRoomState(qc, state)),
-      subscribe("roomPeer", (ev) => applyRoomPeer(qc, ev)),
-      subscribe("chatMessage", (msg) => {
-        useRoomStore.getState().addMessage(msg, useNavStore.getState().section === "multiplayer");
-      }),
     ];
     return () => offs.forEach((off) => off());
   }, [qc, applyState, appendLog]);

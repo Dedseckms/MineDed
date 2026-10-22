@@ -20,6 +20,7 @@ import {
   validateProxy,
 } from "../../lib/validation";
 import { MemoryEditor, useFormatMb } from "../common/MemoryEditor";
+import { VoiceSettingsSection } from "../voice/VoiceSettingsSection";
 
 type ThemeChoice = "dark" | "light" | "system";
 
@@ -302,6 +303,7 @@ export function SettingsScreen() {
   return (
     <div className="flex flex-col gap-6">
       <AppearanceSection settings={settings.data} />
+      <VoiceSettingsSection />
       <GameSection settings={settings.data} />
     </div>
   );
