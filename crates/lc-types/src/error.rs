@@ -24,6 +24,8 @@ pub enum ErrorCode {
     InvalidInput,
     Conflict,
     PermissionDenied,
+    /// Too many requests / attempts; `details.retryAfter` (seconds) when known.
+    RateLimited,
     NotImplemented,
     Internal,
 }
