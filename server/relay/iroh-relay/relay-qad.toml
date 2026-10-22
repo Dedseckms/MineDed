@@ -1,0 +1,22 @@
+# iroh-relay 1.4.1 with QUIC address discovery. Run with `--dev` (plain HTTP relay,
+# Caddy terminates TLS); QUIC uses the Caddy certificate mounted at /certs.
+enable_relay = true
+http_bind_addr = "0.0.0.0:3340"
+enable_quic_addr_discovery = true
+enable_metrics = false
+key_cache_capacity = 1024
+access = "everyone"
+
+[tls]
+cert_mode = "Reloading"
+manual_cert_path = "/certs/relay.dedseckms.ru.crt"
+manual_key_path = "/certs/relay.dedseckms.ru.key"
+quic_bind_addr = "0.0.0.0:7842"
+
+[limits]
+accept_conn_limit = 5.0
+accept_conn_burst = 20
+
+[limits.client.rx]
+bytes_per_second = 2097152
+max_burst_bytes = 4194304

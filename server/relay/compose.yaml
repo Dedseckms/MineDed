@@ -1,0 +1,89 @@
+# MineUP relay stack: iroh-relay (P2P relay + QUIC address discovery) and hub (rooms API).
+# Project name is fixed: always run as `docker compose -p mineup-relay ...` (see start.sh).
+# Both services are stateless (rooms live in hub memory), so there are no volumes.
+name: mineup-relay
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  hub:
+    build:
+      context: ./hub
+      dockerfile: Dockerfile
+    image: mineup/hub:${HUB_VERSION:-0.1.0}
+    container_name: mineup-relay-hub
+    restart: unless-stopped
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      HUB_ADDR: "0.0.0.0:8080"
+      # Drasl on the skinserver project network (internal plain HTTP).
+      HUB_DRASL_URL: "http://mineup-skin-drasl:25585/authlib-injector"
+      HUB_RELAY_URLS: ${HUB_RELAY_URLS:?set HUB_RELAY_URLS in .env}
+      HUB_ROOM_TTL_SECS: ${HUB_ROOM_TTL_SECS:-21600}
+      HUB_MAX_ROOMS: ${HUB_MAX_ROOMS:-200}
+      HUB_MAX_ROOMS_PER_USER: ${HUB_MAX_ROOMS_PER_USER:-3}
+      # Caddy overwrites X-Real-IP; the port is bound to 127.0.0.1 only.
+      HUB_TRUST_PROXY: "true"
+    ports:
+      - "127.0.0.1:${HUB_PORT:?set HUB_PORT in .env}:8080"
+    networks: [relay_net, skin_net]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.2
+    cpu_shares: 256
+    pids_limit: 64
+    logging: *logging
+
+  iroh-relay:
+    image: n0computer/iroh-relay:v1.4.1
+    container_name: mineup-relay-iroh
+    restart: unless-stopped
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    command: ["--config-path", "/etc/iroh-relay/relay.toml"]
+    environment:
+      RUST_LOG: "iroh_relay=info"
+    volumes:
+      - ./iroh-relay/relay.toml:/etc/iroh-relay/relay.toml:ro
+    ports:
+      # Plain HTTP relay, TLS terminates in the host Caddy (relay.dedseckms.ru).
+      - "127.0.0.1:${RELAY_HTTP_PORT:?set RELAY_HTTP_PORT in .env}:3340"
+    networks: [relay_net]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3340/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.4
+    cpu_shares: 256
+    pids_limit: 64
+    logging: *logging
+
+networks:
+  relay_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${RELAY_SUBNET:-172.30.43.0/24}
+  # Owned by our mineup-skin project; hub joins it only to reach Drasl.
+  skin_net:
+    external: true
+    name: mineup-skin_skin_net

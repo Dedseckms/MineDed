@@ -1,0 +1,16 @@
+# Override: enable QUIC address discovery (QAD) on UDP ${QAD_PORT} (iroh default 7842).
+# QUIC needs a real TLS cert for relay.dedseckms.ru: we reuse the one the host Caddy
+# obtained (read-only bind mount, container runs as the caddy uid/gid to read it, no caps).
+# `--dev` only means "serve the relay over plain HTTP" (TLS for HTTP stays in Caddy);
+# the QUIC endpoint still uses the mounted certificate (cert_mode = "Reloading").
+# Used by start.sh when QAD=1 in .env.
+services:
+  iroh-relay:
+    user: "${CADDY_UID:-996}:${CADDY_GID:-988}"
+    command: ["--dev", "--config-path", "/etc/iroh-relay/relay.toml"]
+    volumes:
+      - ./iroh-relay/relay-qad.toml:/etc/iroh-relay/relay.toml:ro
+      - ${CADDY_CERT_DIR:?set CADDY_CERT_DIR in .env}:/certs:ro
+    ports:
+      # Must be reachable from the internet: router forwards UDP QAD_PORT -> this host.
+      - "0.0.0.0:${QAD_PORT:-7842}:7842/udp"
