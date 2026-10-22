@@ -149,6 +149,11 @@ paths:
       tags: [rooms]
       operationId: createRoom
       summary: Host registers a room; returns a human code
+      description: |
+        Bearer is required for `yggdrasil` rooms. `open` rooms (offline host) may be created
+        anonymously, with strict per-IP limits (≤2 active rooms, ≤10 creates/hour; 429 →
+        `rateLimited`).
+      security: [{}, { bearer: [] }]
       requestBody:
         required: true
         content:
@@ -190,10 +195,12 @@ paths:
         its room WebSocket is connected, or for 60 s after join if it never connects; `leave`,
         WS close and kick free the slot.
 
-        `peerToken` = `<exp>.<mac>`: `exp` is unix seconds (join + 10 min), `mac` is base64url
-        (no padding) of HMAC-SHA256(key = hostToken, msg = "lc-peer/1|" + roomId + "|" +
-        endpointId + "|" + exp). The host verifies it offline against the connecting iroh
-        endpoint id, so the token is bound to that endpoint and cannot be reused by others.
+        `peerToken` = `<exp>.<uuid>.<mac>`: `exp` is unix seconds (join + 10 min); `uuid` is the
+        undashed profile UUID from the validated bearer, or `-` for anonymous joins; `mac` is
+        base64url (no padding) of HMAC-SHA256(key = hostToken, msg = "lc-peer/2|" + roomId + "|"
+        + endpointId + "|" + uuid + "|" + exp). The host verifies it offline against the
+        connecting iroh endpoint id (bound to that endpoint) and uses the token's `uuid` — not
+        the one in `Hello` — as the identity for bans in `yggdrasil` rooms.
       security: [{}, { bearer: [] }]
       parameters:
         - { name: code, in: path, required: true, schema: { type: string } }
