@@ -1,0 +1,18 @@
+# iroh-relay 1.4.1, plain HTTP behind the host Caddy (no QAD). See compose.qad.yaml.
+enable_relay = true
+http_bind_addr = "0.0.0.0:3340"
+enable_quic_addr_discovery = false
+enable_metrics = false
+key_cache_capacity = 1024
+# Anyone may relay: endpoints connect to their home relay before they have a room.
+access = "everyone"
+
+[limits]
+# New connections per second (+ burst) for the whole relay.
+accept_conn_limit = 5.0
+accept_conn_burst = 20
+
+# Per-client upload into the relay: 2 MiB/s, 4 MiB burst (Minecraft needs well below).
+[limits.client.rx]
+bytes_per_second = 2097152
+max_burst_bytes = 4194304
