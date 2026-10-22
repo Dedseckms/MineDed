@@ -2,6 +2,7 @@ use std::fmt;
 use std::time::Duration;
 
 use lc_types::settings::{ProxyCfg, Settings};
+use url::Url;
 
 /// Default `User-Agent` for every launcher request.
 pub fn default_user_agent() -> String {
@@ -34,13 +35,39 @@ pub struct DownloaderConfig {
     pub prefer_mirrors: bool,
     /// Use BMCLAPI as a mirror for Mojang hosts.
     pub use_bmclapi: bool,
-    /// Initial manual proxy (`None` = direct, system/env proxies ignored).
+    /// Initial manual proxy. `Route::Direct` never uses any proxy.
     pub proxy: Option<ProxyCfg>,
+    /// Last-resort proxy for `Route::Auto` / `Route::Proxied` after the
+    /// built-in VPN and the manual proxy.
+    pub system_proxy: SystemProxyMode,
     /// Maximum body size accepted by `get_bytes` (default 32 MiB).
     pub max_body_bytes: u64,
     /// How long a host stays "proxy first" after `Route::Auto` needed the
     /// proxy for it (default 30 min).
     pub proxy_first_ttl: Duration,
+}
+
+/// Where the OS-level fallback proxy comes from.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub enum SystemProxyMode {
+    /// Environment variables, then (Windows) the WinINet user settings;
+    /// re-read periodically so toggling e.g. FlClash takes effect.
+    #[default]
+    Detect,
+    /// Never use a system proxy.
+    Off,
+    /// Fixed URL (tests, embedding). Loopback/private targets still bypass it.
+    Fixed(Url),
+}
+
+impl fmt::Debug for SystemProxyMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Detect => f.write_str("Detect"),
+            Self::Off => f.write_str("Off"),
+            Self::Fixed(u) => write!(f, "Fixed({})", crate::sysproxy::redacted(u)),
+        }
+    }
 }
 
 impl Default for DownloaderConfig {
@@ -57,6 +84,7 @@ impl Default for DownloaderConfig {
             prefer_mirrors: false,
             use_bmclapi: true,
             proxy: None,
+            system_proxy: SystemProxyMode::Detect,
             max_body_bytes: 32 * 1024 * 1024,
             proxy_first_ttl: Duration::from_secs(30 * 60),
         }
@@ -94,6 +122,7 @@ impl fmt::Debug for DownloaderConfig {
             .field("prefer_mirrors", &self.prefer_mirrors)
             .field("use_bmclapi", &self.use_bmclapi)
             .field("proxy", &self.proxy.as_ref().map(redacted_proxy))
+            .field("system_proxy", &self.system_proxy)
             .field("max_body_bytes", &self.max_body_bytes)
             .field("proxy_first_ttl", &self.proxy_first_ttl)
             .finish()
