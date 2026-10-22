@@ -22,6 +22,7 @@ const room = (roomId: string): RoomState => ({
   code: "ABCD-1234",
   role: "host",
   authMode: "open",
+  kind: "game",
   sig: { mc: "1.21.1", loader: "vanilla", loaderVersion: null, modsHash: "0" },
   peers: [],
   expiresAt: "2026-10-22T12:00:00Z",

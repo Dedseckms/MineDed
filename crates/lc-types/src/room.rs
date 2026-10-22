@@ -21,6 +21,15 @@ pub enum PathKind {
     Connecting,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RoomKind {
+    /// Host's world tunnelled to guests, plus chat and voice.
+    Game,
+    /// Chat and voice only (players on a regular server).
+    Voice,
+}
+
 /// How the host's integrated server checks players.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -63,7 +72,9 @@ pub struct RoomState {
     pub code: String,
     pub role: RoomRole,
     pub auth_mode: RoomAuthMode,
-    pub sig: InstanceSig,
+    pub kind: RoomKind,
+    /// `None` for voice rooms.
+    pub sig: Option<InstanceSig>,
     pub peers: Vec<Peer>,
     /// RFC 3339.
     pub expires_at: String,

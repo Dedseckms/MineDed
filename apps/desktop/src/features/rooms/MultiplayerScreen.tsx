@@ -38,10 +38,10 @@ function RoomHeader({ room, onLeave }: { room: RoomState; onLeave: () => void })
             </span>
           </Badge>
         ) : null}
-        <Badge>
+        {room.sig ? (<Badge>
           {room.sig.mc} · {t(`loader.${room.sig.loader}`)}
           {room.sig.loaderVersion ? ` ${room.sig.loaderVersion}` : ""}
-        </Badge>
+        </Badge>) : null}
         <span className="text-xs text-muted">
           {t("rooms.room.expires", { date: new Date(room.expiresAt).toLocaleString(i18n.language) })}
         </span>

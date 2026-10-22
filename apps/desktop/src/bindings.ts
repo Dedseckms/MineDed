@@ -59,7 +59,8 @@ export const commands = {
 	vpnSelect: (node: string) => typedError<null, AppError>(__TAURI_INVOKE("vpn_select", { node })),
 	vpnTestLatency: () => typedError<VpnNode[], AppError>(__TAURI_INVOKE("vpn_test_latency")),
 	roomCreate: (instance: InstanceId, authMode: RoomAuthMode, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create", { instance, authMode, password })),
-	roomJoin: (code: string, instance: InstanceId, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_join", { code, instance, password })),
+	roomJoin: (code: string, instance: string | null, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_join", { code, instance, password })),
+	roomCreateVoice: (password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create_voice", { password })),
 	roomLeave: () => typedError<null, AppError>(__TAURI_INVOKE("room_leave")),
 	roomState: () => typedError<{
 	roomId: RoomId,
@@ -67,7 +68,9 @@ export const commands = {
 	code: string,
 	role: RoomRole,
 	authMode: RoomAuthMode,
-	sig: InstanceSig,
+	kind: RoomKind,
+	/**  `None` for voice rooms. */
+	sig: InstanceSig | null,
 	peers: Peer[],
 	/**  RFC 3339. */
 	expiresAt: string,
@@ -86,6 +89,7 @@ export const commands = {
 	voiceStart: () => typedError<null, AppError>(__TAURI_INVOKE("voice_start")),
 	voiceStop: () => typedError<null, AppError>(__TAURI_INVOKE("voice_stop")),
 	voiceSetPeerMuted: (peerId: string, muted: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_peer_muted", { peerId, muted })),
+	voiceSetPeerVolume: (peerId: string, volume: number | null) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_peer_volume", { peerId, volume })),
 	voiceSetSelfMuted: (muted: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_self_muted", { muted })),
 	voiceMicTest: (enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_mic_test", { enabled })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
@@ -469,6 +473,12 @@ export type RoomAuthMode =
 
 export type RoomId = string;
 
+export type RoomKind = 
+/**  Host's world tunnelled to guests, plus chat and voice. */
+"game" | 
+/**  Chat and voice only (players on a regular server). */
+"voice";
+
 export type RoomPeerEvent = {
 	peer: Peer,
 	joined: boolean,
@@ -482,7 +492,9 @@ export type RoomState = {
 	code: string,
 	role: RoomRole,
 	authMode: RoomAuthMode,
-	sig: InstanceSig,
+	kind: RoomKind,
+	/**  `None` for voice rooms. */
+	sig: InstanceSig | null,
 	peers: Peer[],
 	/**  RFC 3339. */
 	expiresAt: string,
@@ -657,6 +669,11 @@ export type VoiceSettings = {
 	inputGain: number | null,
 	outputVolume: number | null,
 	noiseSuppression: boolean,
+	/**
+	 *  Per-participant playback volume 0.0..=2.0, keyed by profile UUID (or
+	 *  display name for offline players). Missing = 1.0.
+	 */
+	peerVolumes: { [key in string]: number | null },
 };
 
 export type VoiceSpeakingEvent = VoiceSpeakingPayload;

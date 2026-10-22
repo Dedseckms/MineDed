@@ -28,6 +28,7 @@ const room = (peers: Peer[]): RoomState => ({
   code: "ABCD-1234",
   role: "host",
   authMode: "open",
+  kind: "game",
   sig: { mc: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", modsHash: "0" },
   peers,
   expiresAt: "2026-10-22T12:00:00Z",

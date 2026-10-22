@@ -71,6 +71,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             vpn::vpn_test_latency,
             rooms::room_create,
             rooms::room_join,
+            rooms::room_create_voice,
             rooms::room_leave,
             rooms::room_state,
             rooms::room_kick,
@@ -82,6 +83,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             voice::voice_start,
             voice::voice_stop,
             voice::voice_set_peer_muted,
+            voice::voice_set_peer_volume,
             voice::voice_set_self_muted,
             voice::voice_mic_test,
             // lead

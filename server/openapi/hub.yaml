@@ -160,10 +160,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [endpointId, sig, authMode]
+              required: [endpointId, authMode]
               properties:
                 endpointId: { type: string, description: iroh endpoint id of the host }
-                sig: { $ref: "#/components/schemas/InstanceSig" }
+                kind: { type: string, enum: [game, voice], default: game, description: "`voice` = chat/voice only, no game tunnel" }
+                sig: { $ref: "#/components/schemas/InstanceSig", description: Required for `game` rooms, absent for `voice` }
                 authMode: { type: string, enum: [yggdrasil, open] }
                 maxPeers: { type: integer, minimum: 2, maximum: 16, default: 8 }
                 passwordProtected: { type: boolean, default: false, description: The host checks the password itself over P2P; hub never sees it }
@@ -222,12 +223,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [roomId, peerToken, hostEndpointId, sig, authMode, relayUrls, passwordProtected]
+                required: [roomId, peerToken, hostEndpointId, kind, authMode, relayUrls, passwordProtected]
                 properties:
                   roomId: { type: string, format: uuid }
                   peerToken: { type: string }
                   hostEndpointId: { type: string }
-                  sig: { $ref: "#/components/schemas/InstanceSig" }
+                  kind: { type: string, enum: [game, voice] }
+                  sig: { $ref: "#/components/schemas/InstanceSig", description: Absent for voice rooms }
                   authMode: { type: string, enum: [yggdrasil, open] }
                   relayUrls: { type: array, items: { type: string, format: uri } }
                   passwordProtected: { type: boolean }

@@ -23,10 +23,19 @@ pub async fn room_create(
 pub async fn room_join(
     state: State<'_, AppState>,
     code: String,
-    instance: InstanceId,
+    instance: Option<InstanceId>,
     password: Option<String>,
 ) -> AppResult<RoomState> {
     state.rooms.join(&code, instance, password).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn room_create_voice(
+    state: State<'_, AppState>,
+    password: Option<String>,
+) -> AppResult<RoomState> {
+    state.rooms.create_voice(password).await
 }
 
 #[tauri::command]

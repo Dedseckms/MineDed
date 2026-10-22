@@ -312,7 +312,7 @@ async fn direct_tunnel_chat_datagrams_kick() {
 
     let st = guest
         .rooms
-        .join("mineup://join/abcd1234", InstanceId::new(), None)
+        .join("mineup://join/abcd1234", Some(InstanceId::new()), None)
         .await
         .unwrap();
     assert_eq!(st.role, RoomRole::Guest);
@@ -448,7 +448,7 @@ async fn direct_tunnel_chat_datagrams_kick() {
     // Kicked launchers stay out for the room's lifetime.
     let err = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), None)
+        .join("ABCD-1234", Some(InstanceId::new()), None)
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::PermissionDenied);
@@ -465,14 +465,14 @@ async fn password_is_checked_by_host() {
 
     let err = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), None)
+        .join("ABCD-1234", Some(InstanceId::new()), None)
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidInput);
 
     let err = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), Some("wrong".into()))
+        .join("ABCD-1234", Some(InstanceId::new()), Some("wrong".into()))
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::PermissionDenied, "{err:?}");
@@ -482,7 +482,11 @@ async fn password_is_checked_by_host() {
 
     let st = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), Some("open sesame".into()))
+        .join(
+            "ABCD-1234",
+            Some(InstanceId::new()),
+            Some("open sesame".into()),
+        )
         .await
         .unwrap();
     assert!(st.password_protected);
@@ -503,14 +507,18 @@ async fn password_is_checked_by_host() {
     for _ in 0..5 {
         let err = guest
             .rooms
-            .join("ABCD-1234", InstanceId::new(), Some("guess".into()))
+            .join("ABCD-1234", Some(InstanceId::new()), Some("guess".into()))
             .await
             .unwrap_err();
         assert_eq!(err.details.unwrap()["reason"], "bad_password");
     }
     let err = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), Some("open sesame".into()))
+        .join(
+            "ABCD-1234",
+            Some(InstanceId::new()),
+            Some("open sesame".into()),
+        )
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::RateLimited, "{err:?}");
@@ -523,7 +531,7 @@ async fn forged_peer_token_is_rejected() {
     hub.lock().unwrap().forge_tokens = true;
     let err = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), None)
+        .join("ABCD-1234", Some(InstanceId::new()), None)
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::PermissionDenied);
@@ -594,7 +602,7 @@ async fn chat_cannot_redirect_tunnel() {
 
     let st = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), None)
+        .join("ABCD-1234", Some(InstanceId::new()), None)
         .await
         .unwrap();
     let local = st.local_addr.unwrap();
@@ -664,19 +672,19 @@ async fn instance_mismatch_and_bad_codes() {
 
     let err = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), None)
+        .join("ABCD-1234", Some(InstanceId::new()), None)
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict);
     let err = guest
         .rooms
-        .join("ABC!-123", InstanceId::new(), None)
+        .join("ABC!-123", Some(InstanceId::new()), None)
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidInput);
     let err = guest
         .rooms
-        .join("ZZZZ-9999", InstanceId::new(), None)
+        .join("ZZZZ-9999", Some(InstanceId::new()), None)
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::NotFound);
@@ -727,7 +735,7 @@ async fn tunnel_via_local_relay() {
 
     let st = guest
         .rooms
-        .join("ABCD-1234", InstanceId::new(), None)
+        .join("ABCD-1234", Some(InstanceId::new()), None)
         .await
         .unwrap();
     let local = st.local_addr.unwrap();

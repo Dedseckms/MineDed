@@ -19,6 +19,9 @@ pub trait VoiceEngine: Send + Sync {
     async fn stop(&self) -> AppResult<()>;
     /// Local mute of a remote peer.
     async fn set_peer_muted(&self, peer_id: &str, muted: bool) -> AppResult<()>;
+    /// Playback volume 0.0..=2.0 of a remote peer; persisted in
+    /// `VoiceSettings::peer_volumes`.
+    async fn set_peer_volume(&self, peer_id: &str, volume: f32) -> AppResult<()>;
     async fn set_self_muted(&self, muted: bool) -> AppResult<()>;
     /// Plays the microphone back locally (settings screen).
     async fn mic_test(&self, enabled: bool) -> AppResult<()>;

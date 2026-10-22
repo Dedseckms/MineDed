@@ -253,6 +253,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
         code,
         role: "host",
         authMode,
+        kind: "game",
         sig: sigOf(inst),
         peers: [],
         expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString(),
@@ -268,7 +269,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
 
     roomJoin: async (input, instance, password) => {
       await wait();
-      const inst = ctx.findInstance(instance);
+      const inst = instance ? ctx.findInstance(instance) : undefined;
       if (!inst) return err("notFound", `mock: instance ${instance} not found`);
       if (room) return err("conflict", "mock: already in a room");
       const parsed = parseJoinInput(input);
@@ -287,6 +288,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
         code,
         role: "guest",
         authMode: "open",
+        kind: "game",
         sig: sigOf(inst),
         peers: [hostPeer],
         expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString(),

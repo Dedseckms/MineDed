@@ -26,6 +26,7 @@ impl VoiceEngine for StubVoice {
             input_gain: 1.0,
             output_volume: 1.0,
             noise_suppression: true,
+            peer_volumes: Default::default(),
         })
     }
 
@@ -43,6 +44,10 @@ impl VoiceEngine for StubVoice {
 
     async fn set_peer_muted(&self, _peer_id: &str, _muted: bool) -> AppResult<()> {
         Err(AppError::not_implemented("VoiceEngine::set_peer_muted"))
+    }
+
+    async fn set_peer_volume(&self, _peer_id: &str, _volume: f32) -> AppResult<()> {
+        Err(AppError::not_implemented("VoiceEngine::set_peer_volume"))
     }
 
     async fn set_self_muted(&self, _muted: bool) -> AppResult<()> {

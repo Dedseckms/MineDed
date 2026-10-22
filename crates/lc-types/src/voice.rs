@@ -38,6 +38,9 @@ pub struct VoiceSettings {
     pub input_gain: f32,
     pub output_volume: f32,
     pub noise_suppression: bool,
+    /// Per-participant playback volume 0.0..=2.0, keyed by profile UUID (or
+    /// display name for offline players). Missing = 1.0.
+    pub peer_volumes: std::collections::BTreeMap<String, f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]

@@ -20,7 +20,7 @@ use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use lc_accounts::Secret;
 use lc_http::{Downloader, Route};
 use lc_runtime::SettingsStore;
-use lc_types::room::{InstanceSig, PathKind, Peer, RoomAuthMode, RoomRole, RoomState};
+use lc_types::room::{InstanceSig, PathKind, Peer, RoomAuthMode, RoomKind, RoomRole, RoomState};
 use lc_types::voice::ChatMessage;
 use lc_types::{AppError, AppResult, ErrorCode, InstanceId, RoomId};
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -188,7 +188,8 @@ impl Session {
             code: self.code.clone(),
             role: self.role,
             auth_mode: self.auth_mode,
-            sig: self.sig.clone(),
+            kind: RoomKind::Game,
+            sig: Some(self.sig.clone()),
             peers: list,
             expires_at: self.expires_at.clone(),
             link: join_link(&self.code),
@@ -1236,10 +1237,21 @@ impl RoomService for P2pRooms {
     async fn join(
         &self,
         code: &str,
-        instance: InstanceId,
+        instance: Option<InstanceId>,
         password: Option<String>,
     ) -> AppResult<RoomState> {
+        // TODO(net, wave 4): voice rooms join without an instance.
+        let instance = instance.ok_or_else(|| {
+            AppError::new(
+                ErrorCode::InvalidInput,
+                "instance is required for game rooms",
+            )
+        })?;
         self.join_room(code, instance, password).await
+    }
+
+    async fn create_voice(&self, _password: Option<String>) -> AppResult<RoomState> {
+        Err(AppError::not_implemented("RoomService::create_voice"))
     }
 
     async fn leave(&self) -> AppResult<()> {

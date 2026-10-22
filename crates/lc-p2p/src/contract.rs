@@ -20,12 +20,17 @@ pub trait RoomService: Send + Sync {
     /// `code` is a room code or a `mineup://join/<code>` link. Validates
     /// `InstanceSig` against the local instance, connects to the host and opens
     /// a local TCP port (`RoomState::local_addr`) tunnelled to the host's world.
+    /// `instance` is required for game rooms and ignored for voice rooms.
     async fn join(
         &self,
         code: &str,
-        instance: InstanceId,
+        instance: Option<InstanceId>,
         password: Option<String>,
     ) -> AppResult<RoomState>;
+    /// Voice/text-only room (`RoomKind::Voice`) for players on a regular
+    /// server: no game tunnel, no instance check. Auth follows the account
+    /// (Yggdrasil bearer if available, else anonymous like open rooms).
+    async fn create_voice(&self, password: Option<String>) -> AppResult<RoomState>;
     async fn leave(&self) -> AppResult<()>;
     async fn state(&self) -> AppResult<Option<RoomState>>;
     /// Host only.
