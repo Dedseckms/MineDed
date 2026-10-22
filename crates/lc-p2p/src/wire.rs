@@ -1,15 +1,10 @@
-//! Line framing for `proto.rs` messages plus optional extension fields.
-//!
-//! Extension fields are extra keys in the same JSON object. Peers that do not
-//! know them ignore them (`ControlMsg` does not deny unknown fields), so the
-//! wire stays compatible with `proto.rs`. They are pending a CONTRACT REQUEST
-//! to become regular fields:
-//! - `password_proof` on `hello`: HMAC proof of the room password;
-//! - `from` / `from_name` on `chat`: original sender when the host forwards.
+//! Line framing for `proto.rs` messages, password proofs and peer tokens.
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use hmac::{Hmac, Mac};
-use lc_types::{AppError, AppResult, ErrorCode};
-use serde::{Deserialize, Serialize};
+use lc_types::{AppError, AppResult, ErrorCode, RoomId};
+use serde::Serialize;
 use sha2::Sha256;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt};
 
@@ -20,42 +15,16 @@ pub(crate) const MAX_LINE: usize = 64 * 1024;
 /// Upper bound for the `StreamOpen` line of a game stream.
 pub(crate) const MAX_OPEN_LINE: usize = 256;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Ext {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password_proof: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_name: Option<String>,
-}
-
-/// JSON line (with trailing `\n`) for a message plus extension fields.
-pub(crate) fn encode(msg: &ControlMsg, ext: &Ext) -> AppResult<String> {
-    let mut v = serde_json::to_value(msg).map_err(json_err)?;
-    if let (Some(obj), serde_json::Value::Object(extra)) = (
-        v.as_object_mut(),
-        serde_json::to_value(ext).map_err(json_err)?,
-    ) {
-        for (k, val) in extra {
-            obj.insert(k, val);
-        }
-    }
-    let mut line = serde_json::to_string(&v).map_err(json_err)?;
+/// JSON line with a trailing `\n`.
+pub(crate) fn encode<T: Serialize>(msg: &T) -> AppResult<String> {
+    let mut line =
+        serde_json::to_string(msg).map_err(|e| AppError::internal(format!("p2p json: {e}")))?;
     line.push('\n');
     Ok(line)
 }
 
-pub(crate) fn encode_plain<T: Serialize>(msg: &T) -> AppResult<String> {
-    let mut line = serde_json::to_string(msg).map_err(json_err)?;
-    line.push('\n');
-    Ok(line)
-}
-
-pub(crate) fn decode(line: &str) -> AppResult<(ControlMsg, Ext)> {
-    let msg: ControlMsg = serde_json::from_str(line).map_err(proto_err)?;
-    let ext: Ext = serde_json::from_str(line).map_err(proto_err)?;
-    Ok((msg, ext))
+pub(crate) fn decode(line: &str) -> AppResult<ControlMsg> {
+    serde_json::from_str(line).map_err(proto_err)
 }
 
 /// Reads one `\n`-terminated line of at most `max` bytes. `Ok(None)` on a
@@ -113,35 +82,78 @@ pub(crate) async fn read_line_unbuffered<R: AsyncRead + Unpin>(
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Label for TLS keying material export (RFC 5705) used by password proofs.
+/// Label for TLS keying material export (RFC 5705) used by password proofs;
+/// the export context is the room id.
 pub(crate) const EKM_LABEL: &[u8] = b"lc/1 room password";
 
-/// `hex(HMAC-SHA256(key = password, msg = ekm))`. `ekm` is exported from the
-/// QUIC/TLS session, so a proof is bound to one connection and useless to
-/// anyone who records it; the hub never sees either side.
+/// `base64url(HMAC-SHA256(key = password, msg = ekm))` (`Hello.password_proof`).
+/// `ekm` comes from the QUIC/TLS session, so a proof is bound to one
+/// connection and useless to anyone who records it; the hub never sees it.
 pub(crate) fn password_proof(password: &str, ekm: &[u8]) -> String {
-    hex::encode(mac(password, ekm).finalize().into_bytes())
+    URL_SAFE_NO_PAD.encode(mac(password.as_bytes(), ekm).finalize().into_bytes())
 }
 
 /// Constant-time check of a proof produced by [`password_proof`].
 pub(crate) fn verify_password_proof(password: &str, ekm: &[u8], proof: &str) -> bool {
-    let Ok(raw) = hex::decode(proof) else {
+    let Ok(raw) = URL_SAFE_NO_PAD.decode(proof) else {
         return false;
     };
-    mac(password, ekm).verify_slice(&raw).is_ok()
+    mac(password.as_bytes(), ekm).verify_slice(&raw).is_ok()
 }
 
-fn mac(password: &str, ekm: &[u8]) -> HmacSha256 {
-    // HMAC accepts keys of any length, so this never fails; fall back to an
-    // empty-key MAC that cannot match a real proof just in case.
-    let mut m = <HmacSha256 as Mac>::new_from_slice(password.as_bytes())
+fn peer_token_msg(room_id: RoomId, endpoint_id: &str, exp: u64) -> String {
+    format!("lc-peer/1|{room_id}|{endpoint_id}|{exp}")
+}
+
+/// Hub `peerToken` (`<exp>.<mac>`, see hub.yaml joinRoom). Used by tests and
+/// by any local hub implementation.
+pub fn make_peer_token(host_token: &str, room_id: RoomId, endpoint_id: &str, exp: u64) -> String {
+    let m = mac(
+        host_token.as_bytes(),
+        peer_token_msg(room_id, endpoint_id, exp).as_bytes(),
+    );
+    format!(
+        "{exp}.{}",
+        URL_SAFE_NO_PAD.encode(m.finalize().into_bytes())
+    )
+}
+
+/// Verifies a hub `peerToken` against the TLS-authenticated endpoint id of
+/// the connecting guest. `now` is unix seconds.
+pub(crate) fn verify_peer_token(
+    token: &str,
+    host_token: &str,
+    room_id: RoomId,
+    endpoint_id: &str,
+    now: u64,
+) -> bool {
+    let Some((exp, tag)) = token.split_once('.') else {
+        return false;
+    };
+    let Ok(exp_n) = exp.parse::<u64>() else {
+        return false;
+    };
+    if exp_n < now {
+        return false;
+    }
+    let Ok(raw) = URL_SAFE_NO_PAD.decode(tag) else {
+        return false;
+    };
+    mac(
+        host_token.as_bytes(),
+        peer_token_msg(room_id, endpoint_id, exp_n).as_bytes(),
+    )
+    .verify_slice(&raw)
+    .is_ok()
+}
+
+fn mac(key: &[u8], msg: &[u8]) -> HmacSha256 {
+    // HMAC accepts keys of any length, so this never fails; the fallback
+    // (empty key) is unreachable and cannot match a real tag anyway.
+    let mut m = <HmacSha256 as Mac>::new_from_slice(key)
         .unwrap_or_else(|_| <HmacSha256 as Mac>::new(&Default::default()));
-    m.update(ekm);
+    m.update(msg);
     m
-}
-
-fn json_err(e: serde_json::Error) -> AppError {
-    AppError::internal(format!("p2p json: {e}"))
 }
 
 pub(crate) fn proto_err(e: impl std::fmt::Display) -> AppError {
@@ -153,36 +165,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extension_fields_roundtrip_and_are_ignored_by_plain_decoder() {
+    fn hello_roundtrip() {
         let msg = ControlMsg::Hello {
             protocol: 1,
             name: "Steve".into(),
             uuid: None,
             peer_token: "tok".into(),
-        };
-        let ext = Ext {
             password_proof: Some("ab".into()),
-            ..Ext::default()
         };
-        let line = encode(&msg, &ext).unwrap();
+        let line = encode(&msg).unwrap();
         assert!(line.ends_with('\n'));
-        let (back, back_ext) = decode(line.trim_end()).unwrap();
-        assert_eq!(back, msg);
-        assert_eq!(back_ext, ext);
-        // A peer that only knows proto.rs still parses the message.
-        let plain: ControlMsg = serde_json::from_str(line.trim_end()).unwrap();
-        assert_eq!(plain, msg);
+        assert_eq!(decode(line.trim_end()).unwrap(), msg);
     }
 
     #[test]
     fn password_proof_checks() {
         let ekm = [7u8; 32];
         let p = password_proof("secret", &ekm);
+        assert!(!p.contains('='));
         assert!(verify_password_proof("secret", &ekm, &p));
         assert!(!verify_password_proof("Secret", &ekm, &p));
         assert!(!verify_password_proof("secret", &[8u8; 32], &p));
-        assert!(!verify_password_proof("secret", &ekm, "zz"));
+        assert!(!verify_password_proof("secret", &ekm, "zz!"));
         assert!(!verify_password_proof("secret", &ekm, ""));
+    }
+
+    #[test]
+    fn peer_token_checks() {
+        let room = RoomId::new();
+        let t = make_peer_token("host", room, "ep1", 1000);
+        assert!(verify_peer_token(&t, "host", room, "ep1", 999));
+        assert!(verify_peer_token(&t, "host", room, "ep1", 1000));
+        assert!(!verify_peer_token(&t, "host", room, "ep1", 1001)); // expired
+        assert!(!verify_peer_token(&t, "host", room, "ep2", 999)); // other endpoint
+        assert!(!verify_peer_token(&t, "other", room, "ep1", 999));
+        assert!(!verify_peer_token(&t, "host", RoomId::new(), "ep1", 999));
+        let forged = t.replacen("1000", "9999", 1);
+        assert!(!verify_peer_token(&forged, "host", room, "ep1", 999));
+        assert!(!verify_peer_token("garbage", "host", room, "ep1", 0));
+        assert!(!verify_peer_token("", "host", room, "ep1", 0));
     }
 
     #[tokio::test]

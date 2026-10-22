@@ -2,7 +2,8 @@
 //!
 //! Minecraft announces an open LAN world every ~1.5 s to `224.0.2.60:4445`
 //! as `[MOTD]<text>[/MOTD][AD]<port>[/AD]`; the game log also prints the port
-//! ("Started serving on <port>", chat "Local game hosted on port <port>").
+//! on the server thread ("Started serving on <port>"). Only sources on this
+//! machine are trusted; the port is fixed once the room is created.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
@@ -17,20 +18,42 @@ pub(crate) const LAN_PORT: u16 = 4445;
 const ANNOUNCE_EVERY: Duration = Duration::from_millis(1500);
 
 /// Extracts the LAN port from a game log line, if the line reports it.
+///
+/// Only the integrated server's own lines count (`[Server thread/INFO]`);
+/// anything containing `[CHAT]` is ignored, so a player cannot redirect the
+/// tunnel by typing "Started serving on 22" in chat.
 pub fn port_from_log_line(line: &str) -> Option<u16> {
-    const MARKERS: [&str; 4] = [
-        "Started serving on ",
-        "Local game hosted on port ",
-        // ru_ru chat message ("Локальный сервер запущен на порту ...")
-        "на порту ",
-        "hosted on port ",
-    ];
-    MARKERS.iter().find_map(|m| {
-        let at = line.find(m)? + m.len();
-        leading_port(&line[at..])
-    })
+    const MARKERS: [&str; 2] = ["Started serving on ", "Local game hosted on port "];
+    if line.contains("[CHAT]") {
+        return None;
+    }
+    // Log4j prefix ends at the first "]: ": `[time] [Server thread/INFO]: msg`
+    // (Forge adds a logger tag: `[time] [Server thread/INFO] [x.IntegratedServer/]: msg`).
+    let end = line.find("]: ")?;
+    if !line[..end + 1].contains("[Server thread/INFO]") {
+        return None;
+    }
+    let msg = &line[end + 3..];
+    let rest = MARKERS.iter().find_map(|m| msg.strip_prefix(m))?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    if digits.len() != rest.trim_end().len() {
+        return None;
+    }
+    leading_port(&digits)
 }
 
+/// A LAN port seen in a game log (`instance` known) or a local announcement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LanSeen {
+    pub instance: Option<lc_types::InstanceId>,
+    pub port: u16,
+}
+
+/// `true` when `ip` belongs to this machine (loopback or a local interface):
+/// binding a socket to a foreign address fails.
+pub(crate) fn is_local_ip(ip: std::net::IpAddr) -> bool {
+    ip.is_loopback() || std::net::UdpSocket::bind((ip, 0)).is_ok()
+}
 /// Extracts the port from a LAN announcement packet.
 pub fn port_from_announcement(packet: &str) -> Option<u16> {
     let start = packet.find("[AD]")? + 4;
@@ -82,7 +105,7 @@ fn multicast_socket() -> std::io::Result<UdpSocket> {
 /// `tx` until `cancel` fires. Errors (port busy without reuse, no multicast
 /// route) end the listener quietly: the game log remains a source.
 pub(crate) async fn listen_announcements(
-    tx: std::sync::Arc<watch::Sender<Option<u16>>>,
+    tx: std::sync::Arc<watch::Sender<Option<LanSeen>>>,
     cancel: CancellationToken,
 ) {
     let socket = match multicast_socket() {
@@ -98,11 +121,20 @@ pub(crate) async fn listen_announcements(
             () = cancel.cancelled() => return,
             r = socket.recv_from(&mut buf) => r,
         };
-        let Ok((n, _from)) = res else { continue };
+        let Ok((n, from)) = res else { continue };
+        // Only announcements sent by this machine (the host's own game).
+        if !is_local_ip(from.ip()) {
+            continue;
+        }
         let text = String::from_utf8_lossy(&buf[..n]);
         if let Some(port) = port_from_announcement(&text) {
-            if *tx.borrow() != Some(port) && is_local_port_open(port).await {
-                tx.send_replace(Some(port));
+            let seen = LanSeen {
+                instance: None,
+                port,
+            };
+            let known = tx.borrow().is_some_and(|s| s.port == port);
+            if !known && is_local_port_open(port).await {
+                tx.send_replace(Some(seen));
             }
         }
     }
@@ -142,18 +174,47 @@ mod tests {
             Some(51234)
         );
         assert_eq!(
-            port_from_log_line(
-                "[12:00:01] [Render thread/INFO]: [System] [CHAT] Local game hosted on port 41000"
-            ),
+            port_from_log_line("[Server thread/INFO]: Local game hosted on port 41000\r"),
             Some(41000)
         );
         assert_eq!(
-            port_from_log_line("[CHAT] Локальный сервер запущен на порту 25565"),
-            Some(25565)
+            port_from_log_line("[12:00:01] [Server thread/INFO]: Started serving on port"),
+            None
         );
-        assert_eq!(port_from_log_line("Started serving on port"), None);
-        assert_eq!(port_from_log_line("Started serving on 99999"), None);
+        assert_eq!(
+            port_from_log_line("[12:00:01] [Server thread/INFO]: Started serving on 99999"),
+            None
+        );
+        assert_eq!(
+            port_from_log_line(
+                "[22Oct2026 12:00:01.123] [Server thread/INFO] \
+                 [net.minecraft.client.server.IntegratedServer/]: Started serving on 40404"
+            ),
+            Some(40404)
+        );
+        assert_eq!(port_from_log_line("Started serving on 51234"), None);
         assert_eq!(port_from_log_line("Loading 42 mods"), None);
+    }
+
+    /// Regression: chat must never move the tunnel target.
+    #[test]
+    fn chat_lines_are_ignored() {
+        for line in [
+            "[12:00:01] [Render thread/INFO]: [System] [CHAT] Local game hosted on port 41000",
+            "[12:00:02] [Render thread/INFO]: [CHAT] <Mallory> Started serving on 22",
+            "[12:00:02] [Server thread/INFO]: [CHAT] <Mallory> Started serving on 22",
+            "[12:00:02] [Server thread/INFO]: <Mallory> Started serving on 22",
+            "[12:00:02] [Render thread/INFO]: <Mallory> [Server thread/INFO]: Started serving on 22",
+            "[12:00:02] [Server thread/INFO]: Started serving on 22 lol",
+        ] {
+            assert_eq!(port_from_log_line(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn local_ips() {
+        assert!(is_local_ip("127.0.0.1".parse().unwrap()));
+        assert!(!is_local_ip("203.0.113.7".parse().unwrap()));
     }
 
     #[test]

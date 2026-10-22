@@ -30,6 +30,10 @@ pub(crate) struct CreateRoomResp {
 #[serde(rename_all = "camelCase")]
 struct JoinRoomReq<'a> {
     endpoint_id: &'a str,
+    /// Display name shown to the room (hub limit: 16 chars).
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uuid: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,11 +98,18 @@ impl HubClient {
         &self,
         code: &str,
         endpoint_id: &str,
+        name: &str,
+        uuid: Option<&str>,
         bearer: Option<&Secret>,
     ) -> AppResult<JoinRoomResp> {
         // `code` is canonical (`[A-Z0-9]{4}-[A-Z0-9]{4}`), safe in a path.
         let url = format!("{}/rooms/{code}/join", self.base);
-        let mut rb = self.client.post(&url).json(&JoinRoomReq { endpoint_id });
+        let name: String = name.chars().take(16).collect();
+        let mut rb = self.client.post(&url).json(&JoinRoomReq {
+            endpoint_id,
+            name: &name,
+            uuid,
+        });
         if let Some(token) = bearer {
             rb = rb.bearer_auth(token.expose());
         }
@@ -146,6 +157,11 @@ fn network(url: &str, e: &reqwest::Error) -> AppError {
 
 async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
     let status = resp.status();
+    let retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
     let body: Option<HubError> = resp
         .bytes()
         .await
@@ -157,8 +173,7 @@ async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
         404 => ErrorCode::NotFound,
         409 => ErrorCode::Conflict,
         400 | 422 => ErrorCode::InvalidInput,
-        // Hub reports rate limits as permissionDenied + reason=rateLimited.
-        429 => ErrorCode::PermissionDenied,
+        429 => ErrorCode::RateLimited,
         _ => ErrorCode::Network,
     };
     let message = body
@@ -172,11 +187,15 @@ async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
     if let Some(hub_code) = hub_code {
         err = err.detail("hubCode", hub_code);
     }
-    let reason = details
-        .and_then(|mut d| d.remove("reason"))
-        .or_else(|| (status.as_u16() == 429).then(|| "rateLimited".to_owned()));
-    if let Some(reason) = reason {
+    let mut details = details.unwrap_or_default();
+    if let Some(reason) = details.remove("reason") {
         err = err.detail("reason", reason);
+    }
+    let retry_after = details
+        .remove("retryAfter")
+        .or_else(|| retry_after.map(|s| s.to_string()));
+    if let Some(secs) = retry_after {
+        err = err.detail("retryAfter", secs);
     }
     err
 }
@@ -197,7 +216,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rate_limit_maps_to_permission_denied() {
+    async fn rate_limit_maps_to_rate_limited() {
         use axum::http::StatusCode;
         use axum::routing::post;
         use lc_http::{Downloader, Route, StubDownloader};
@@ -207,10 +226,10 @@ mod tests {
             post(|| async {
                 (
                     StatusCode::TOO_MANY_REQUESTS,
+                    [("retry-after", "30")],
                     axum::Json(serde_json::json!({
-                        "code": "permissionDenied",
-                        "message": "slow down",
-                        "details": {"reason": "rateLimited"}
+                        "code": "rateLimited",
+                        "message": "slow down"
                     })),
                 )
             }),
@@ -223,10 +242,14 @@ mod tests {
             &format!("http://{addr}/api/v1"),
         )
         .unwrap();
-        let err = hub.join_room("ABCD-1234", "e", None).await.unwrap_err();
-        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        let err = hub
+            .join_room("ABCD-1234", "e", "Steve", None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::RateLimited);
         let d = err.details.unwrap();
-        assert_eq!(d["reason"], "rateLimited");
+        assert_eq!(d["retryAfter"], "30");
+        assert_eq!(d["hubCode"], "rateLimited");
         assert_eq!(d["status"], "429");
     }
 

@@ -14,8 +14,8 @@ use lc_http::{DownloaderConfig, HttpDownloader};
 use lc_p2p::iroh::address_lookup::memory::MemoryLookup;
 use lc_p2p::iroh::endpoint::Builder;
 use lc_p2p::{
-    DatagramTransport, EndpointTweak, Identity, P2pConfig, P2pRooms, RoomEnv, RoomObserver,
-    RoomService,
+    make_peer_token, DatagramTransport, EndpointTweak, Identity, P2pConfig, P2pRooms, RoomEnv,
+    RoomObserver, RoomService,
 };
 use lc_runtime::{LaunchPlan, MemorySettingsStore, SettingsStore};
 use lc_types::instance::LaunchOpts;
@@ -35,6 +35,10 @@ struct HubState {
     room: Option<Value>,
     relay_urls: Vec<String>,
     closed: bool,
+    /// Issue tokens signed with the wrong key (forgery test).
+    forge_tokens: bool,
+    /// Last join body (name/uuid checks).
+    last_join: Option<Value>,
 }
 
 type Hub = Arc<Mutex<HubState>>;
@@ -60,20 +64,34 @@ async fn create_room(State(hub): State<Hub>, Json(body): Json<Value>) -> (Status
 async fn join_room(
     State(hub): State<Hub>,
     Path(code): Path<String>,
-    Json(_body): Json<Value>,
+    Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
-    let h = hub.lock().unwrap();
+    let mut h = hub.lock().unwrap();
+    h.last_join = Some(body.clone());
+    let h = &*h;
     let Some(room) = h.room.as_ref().filter(|_| code == "ABCD-1234" && !h.closed) else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"code": "notFound", "message": "no such room"})),
         );
     };
+    let room_id: RoomId = serde_json::from_value(room["roomId"].clone()).unwrap();
+    let key = if h.forge_tokens {
+        "not-the-host-token"
+    } else {
+        "host-token"
+    };
+    let exp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 600;
+    let token = make_peer_token(key, room_id, body["endpointId"].as_str().unwrap(), exp);
     (
         StatusCode::OK,
         Json(json!({
             "roomId": room["roomId"],
-            "peerToken": "peer-token",
+            "peerToken": token,
             "hostEndpointId": room["endpointId"],
             "sig": room["sig"],
             "authMode": room["authMode"],
@@ -408,6 +426,19 @@ async fn direct_tunnel_chat_datagrams_kick() {
     assert!(guest.rooms.state().await.unwrap().is_none());
     assert!(guest.rooms.recv().await.is_none());
     assert!(host.rooms.state().await.unwrap().unwrap().peers.is_empty());
+    assert_eq!(
+        hub.lock().unwrap().last_join.as_ref().unwrap()["name"],
+        "Guest"
+    );
+
+    // Kicked launchers stay out for the room's lifetime.
+    let err = guest
+        .rooms
+        .join("ABCD-1234", InstanceId::new(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::PermissionDenied);
+    assert_eq!(err.details.unwrap()["reason"], "banned");
 
     host.rooms.leave().await.unwrap();
     assert!(host.rooms.state().await.unwrap().is_none());
@@ -453,6 +484,108 @@ async fn password_is_checked_by_host() {
             .any(|(_, joined)| !joined)
     })
     .await;
+
+    // Brute force: after 5 wrong passwords even the right one is refused.
+    for _ in 0..5 {
+        let err = guest
+            .rooms
+            .join("ABCD-1234", InstanceId::new(), Some("guess".into()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.details.unwrap()["reason"], "bad_password");
+    }
+    let err = guest
+        .rooms
+        .join("ABCD-1234", InstanceId::new(), Some("open sesame".into()))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::RateLimited, "{err:?}");
+    host.rooms.leave().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forged_peer_token_is_rejected() {
+    let (_host, guest, hub, _lookup) = direct_pair(None).await;
+    hub.lock().unwrap().forge_tokens = true;
+    let err = guest
+        .rooms
+        .join("ABCD-1234", InstanceId::new(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::PermissionDenied);
+    assert_eq!(err.details.unwrap()["reason"], "bad_token");
+}
+
+/// Regression: a chat line (or anything but the server thread) must not move
+/// the tunnel, and the port is locked once the room exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat_cannot_redirect_tunnel() {
+    let (hub_url, _hub) = spawn_hub(vec![]).await;
+    let host_tweak: EndpointTweak = Arc::new(loopback_only);
+    let lookup = MemoryLookup::new();
+    let guest_lookup = lookup.clone();
+    let guest_tweak: EndpointTweak =
+        Arc::new(move |b| loopback_only(b).address_lookup(guest_lookup.clone()));
+    let host = side(
+        &hub_url,
+        base_cfg(host_tweak, vec![]),
+        FakeEnv {
+            name: "Host",
+            mods: "m1",
+        },
+    )
+    .await;
+    let guest = side(
+        &hub_url,
+        base_cfg(guest_tweak, vec![]),
+        FakeEnv {
+            name: "Guest",
+            mods: "m1",
+        },
+    )
+    .await;
+    let world = spawn_echo().await;
+    // "Sensitive" local service that must never be reachable.
+    let evil_l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let evil = evil_l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = evil_l.accept().await {
+            let _ = s.write_all(b"EVIL!!").await;
+        }
+    });
+    let inst = InstanceId::new();
+    host.rooms.feed_game_log(
+        inst,
+        &format!("[12:00:00] [Server thread/INFO]: Started serving on {world}"),
+    );
+    host.rooms.feed_game_log(
+        inst,
+        &format!("[12:00:05] [Render thread/INFO]: [CHAT] <Mallory> Started serving on {evil}"),
+    );
+    host.rooms.feed_game_log(
+        inst,
+        &format!("[12:00:05] [Server thread/INFO]: <Mallory> Started serving on {evil}"),
+    );
+    host.rooms
+        .create(inst, RoomAuthMode::Open, None)
+        .await
+        .unwrap();
+    lookup.add_endpoint_info(host.rooms.endpoint_addr().unwrap());
+    // Even a genuine-looking server line after create changes nothing.
+    host.rooms.feed_game_log(
+        inst,
+        &format!("[12:01:00] [Server thread/INFO]: Started serving on {evil}"),
+    );
+    host.rooms.set_lan_port(Some(evil));
+
+    let st = guest
+        .rooms
+        .join("ABCD-1234", InstanceId::new(), None)
+        .await
+        .unwrap();
+    let local = st.local_addr.unwrap();
+    assert_eq!(echo_through(&local, b"secret").await, b"secret");
+    guest.rooms.leave().await.unwrap();
     host.rooms.leave().await.unwrap();
 }
 
@@ -487,12 +620,23 @@ async fn instance_mismatch_and_bad_codes() {
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::NotFound);
 
-    // Port from the game log.
+    // Port from the game log of the hosted instance.
     let port = spawn_echo().await;
+    let inst = InstanceId::new();
+    host.rooms.feed_game_log(
+        inst,
+        &format!("[12:00:00] [Server thread/INFO]: Started serving on {port}"),
+    );
+    // An offline host cannot run a yggdrasil (online-mode) room.
+    let err = host
+        .rooms
+        .create(inst, RoomAuthMode::Yggdrasil, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert_eq!(err.details.unwrap()["reason"], "authModeMismatch");
     host.rooms
-        .feed_game_log(&format!("[Server thread/INFO]: Started serving on {port}"));
-    host.rooms
-        .create(InstanceId::new(), RoomAuthMode::Yggdrasil, None)
+        .create(inst, RoomAuthMode::Open, None)
         .await
         .unwrap();
     assert_eq!(
