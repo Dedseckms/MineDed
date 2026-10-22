@@ -26,7 +26,10 @@
   (+ `GET /minecraftservices/minecraft/profile` для id/имени), кэш 60 с.
 - `POST /api/v1/rooms/{code}/join` — публичный для `authMode=open`, Bearer для `yggdrasil`.
   Считаются только живые участники (WS открыт или ≤ 60 с после join без WS); `peerToken` =
-  `<exp>.<HMAC-SHA256(hostToken, …)>`, живёт 10 мин.
+  `<exp>.<uuid|->.<HMAC-SHA256(hostToken, "lc-peer/2|…")>`, живёт 10 мин; uuid — только из
+  проверенного Bearer.
+- `POST /api/v1/rooms` без Bearer — только `authMode=open` (офлайн-хост): ≤ 2 активных
+  комнаты и ≤ 10 созданий/ч на IP, закрытие — по `hostToken`.
 - `DELETE /api/v1/rooms/{roomId}` — Bearer = Yggdrasil-токен владельца или `hostToken`.
 - `GET /api/v1/rooms/{roomId}/ws?token=` — presence + fallback-чат; закрытие WS, `leave` или
   `kick` от хоста освобождают место.

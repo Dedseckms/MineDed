@@ -115,14 +115,29 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// `peerToken` = `<exp>.<base64url-nopad(HMAC-SHA256(hostToken,
-/// "lc-peer/1|roomId|endpointId|exp"))>`; the host verifies it offline.
-pub fn peer_token(host_token: &str, room_id: Uuid, endpoint_id: &str, exp: u64) -> String {
+/// `peerToken` v2 = `<exp>.<uuid|->.<base64url-nopad(HMAC-SHA256(hostToken,
+/// "lc-peer/2|roomId|endpointId|uuid|exp"))>`; the host verifies it offline.
+/// `uuid` is the undashed profile UUID of a validated bearer, or `-` (anonymous).
+pub fn peer_token(
+    host_token: &str,
+    room_id: Uuid,
+    endpoint_id: &str,
+    uuid: &str,
+    exp: u64,
+) -> String {
     use base64::Engine;
-    let msg = format!("lc-peer/1|{room_id}|{endpoint_id}|{exp}");
+    let msg = format!("lc-peer/2|{room_id}|{endpoint_id}|{uuid}|{exp}");
     let mac = hmac_sha256(host_token.as_bytes(), msg.as_bytes());
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac);
-    format!("{exp}.{b64}")
+    format!("{exp}.{uuid}.{b64}")
+}
+
+/// Token-segment form of a profile id: undashed lowercase UUID, else `-`.
+pub fn profile_uuid(user_id: Option<&str>) -> String {
+    user_id
+        .and_then(|u| Uuid::parse_str(u).ok())
+        .map(|u| u.simple().to_string())
+        .unwrap_or_else(|| "-".to_owned())
 }
 
 fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
@@ -245,6 +260,16 @@ impl RoomStore {
     }
 
     pub fn create(&self, req: CreateRoom, who: &Identity) -> Result<Created, ApiError> {
+        self.create_limited(req, who, self.limits.max_rooms_per_user)
+    }
+
+    /// Like [`Self::create`] with a custom cap of active rooms for `who`.
+    pub fn create_limited(
+        &self,
+        req: CreateRoom,
+        who: &Identity,
+        max_owned: usize,
+    ) -> Result<Created, ApiError> {
         let mut inner = self.lock();
         if inner.rooms.len() >= self.limits.max_rooms {
             return Err(ApiError::rate_limited(60).detail("limit", "maxRooms"));
@@ -254,7 +279,7 @@ impl RoomStore {
             .values()
             .filter(|r| r.owner == who.user_id)
             .count();
-        if owned >= self.limits.max_rooms_per_user {
+        if owned >= max_owned {
             return Err(ApiError::rate_limited(60).detail("limit", "maxRoomsPerUser"));
         }
         let mut code = new_code();
@@ -308,15 +333,35 @@ impl RoomStore {
 
     /// Joins by code. Only live members count toward `maxPeers` (see [`Peer::is_live`]).
     /// Re-joining with the same endpoint keeps the slot and issues a fresh token.
-    pub fn join(&self, code: &str, endpoint_id: String, name: String) -> Result<Joined, ApiError> {
-        self.join_at(code, endpoint_id, name, Instant::now(), unix_now())
+    /// `uuid` = [`profile_uuid`] of the caller (`-` for anonymous guests).
+    pub fn join(
+        &self,
+        code: &str,
+        endpoint_id: String,
+        name: String,
+        uuid: &str,
+    ) -> Result<Joined, ApiError> {
+        self.join_full(code, endpoint_id, name, uuid, Instant::now(), unix_now())
     }
 
+    #[cfg(test)]
     fn join_at(
         &self,
         code: &str,
         endpoint_id: String,
         name: String,
+        now: Instant,
+        unix: u64,
+    ) -> Result<Joined, ApiError> {
+        self.join_full(code, endpoint_id, name, "-", now, unix)
+    }
+
+    fn join_full(
+        &self,
+        code: &str,
+        endpoint_id: String,
+        name: String,
+        uuid: &str,
         now: Instant,
         unix: u64,
     ) -> Result<Joined, ApiError> {
@@ -336,6 +381,7 @@ impl RoomStore {
             &room.host.token,
             room.id,
             &endpoint_id,
+            uuid,
             unix + PEER_TOKEN_TTL_SECS,
         );
         match room.peers.iter_mut().find(|p| p.endpoint_id == endpoint_id) {
@@ -571,9 +617,9 @@ mod tests {
         );
 
         // Re-join keeps the slot; a second guest does not fit (maxPeers=2 incl. host).
-        s.join(&a.code, "g1".into(), "G".into()).unwrap();
-        s.join(&a.code, "g1".into(), "G".into()).unwrap();
-        let full = s.join(&a.code, "g2".into(), "G".into()).err().unwrap();
+        s.join(&a.code, "g1".into(), "G".into(), "-").unwrap();
+        s.join(&a.code, "g1".into(), "G".into(), "-").unwrap();
+        let full = s.join(&a.code, "g2".into(), "G".into(), "-").err().unwrap();
         assert_eq!(full.status, StatusCode::CONFLICT);
 
         // Host connected keeps the room alive past its deadline.
@@ -590,22 +636,36 @@ mod tests {
     fn peer_token_format_and_binding() {
         let s = RoomStore::new(limits());
         let a = s.create(req(), &who("a")).unwrap();
-        let j = s.join(&a.code, "guest1".into(), "G".into()).unwrap();
-        let (exp, mac) = j.peer_token.split_once('.').unwrap();
-        let exp: u64 = exp.parse().unwrap();
+        let uuid = profile_uuid(Some("069a79f4-44e9-4726-a5be-fca90e38aaf5"));
+        assert_eq!(uuid, "069a79f444e94726a5befca90e38aaf5");
+        assert_eq!(profile_uuid(Some("token:abc")), "-");
+        assert_eq!(profile_uuid(None), "-");
+        let j = s.join(&a.code, "guest1".into(), "G".into(), &uuid).unwrap();
+        let parts: Vec<&str> = j.peer_token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let exp: u64 = parts[0].parse().unwrap();
         let now = unix_now();
         assert!(exp >= now + PEER_TOKEN_TTL_SECS - 5 && exp <= now + PEER_TOKEN_TTL_SECS + 5);
+        assert_eq!(parts[1], uuid);
+        let mac = parts[2];
         assert_eq!(mac.len(), 43); // 32 bytes, base64url without padding
         assert!(mac
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
         assert_eq!(
             j.peer_token,
-            peer_token(&a.host_token, a.room_id, "guest1", exp)
+            peer_token(&a.host_token, a.room_id, "guest1", &uuid, exp)
         );
         assert_ne!(
             j.peer_token,
-            peer_token(&a.host_token, a.room_id, "guest2", exp)
+            peer_token(&a.host_token, a.room_id, "guest2", &uuid, exp)
+        );
+        // Anonymous guests carry `-`; the MAC covers the uuid segment.
+        let anon = s.join(&a.code, "guest1".into(), "G".into(), "-").unwrap();
+        assert_eq!(anon.peer_token.split('.').nth(1), Some("-"));
+        assert_ne!(
+            peer_token(&a.host_token, a.room_id, "guest1", "-", exp),
+            peer_token(&a.host_token, a.room_id, "guest1", &uuid, exp)
         );
         // RFC 4231 test case 2.
         let kat: String = hmac_sha256(b"Jefe", b"what do ya want for nothing?")
@@ -616,7 +676,9 @@ mod tests {
             kat,
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
-        assert!(s.member(a.room_id, &j.peer_token).is_some());
+        // Re-join replaced the token: only the latest one opens the WS.
+        assert!(s.member(a.room_id, &anon.peer_token).is_some());
+        assert!(s.member(a.room_id, &j.peer_token).is_none());
         assert!(s.member(a.room_id, "1.AAAA").is_none());
     }
 

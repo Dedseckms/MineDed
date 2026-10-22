@@ -26,6 +26,15 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
         }
     }
 
+    /// `per_hour` steady requests per hour, `burst` bucket size.
+    pub fn per_hour(per_hour: u32, burst: u32) -> Self {
+        Self {
+            per_sec: f64::from(per_hour.max(1)) / 3600.0,
+            burst: f64::from(burst.max(1)),
+            buckets: Mutex::new(HashMap::new()),
+        }
+    }
+
     /// Takes one token for `key`. `Err(secs)` = retry after `secs`.
     pub fn check(&self, key: &K) -> Result<(), u64> {
         self.check_at(key, Instant::now())
