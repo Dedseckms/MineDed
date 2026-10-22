@@ -18,6 +18,7 @@ import type {
   InstanceId,
   InstancePatch,
   LoaderKind,
+  Peer,
   RoomAuthMode,
   SearchQuery,
   Settings,
@@ -26,12 +27,16 @@ import type {
   TaskEvent,
   TaskId,
   VersionKind,
+  VoiceSettings,
+  VoiceStatus,
   VpnMode,
   VpnNode,
 } from "../bindings";
 import { nextOffset } from "../lib/content";
+import { withPeerVolume } from "../lib/voice";
 import { selectNode } from "../lib/vpn";
 import { useRoomStore } from "../stores/roomStore";
+import { useVoiceStore } from "../stores/voiceStore";
 import { useTaskStore } from "../stores/taskStore";
 import { createTaskChannel } from "./channel";
 import { api, unwrap } from "./client";
@@ -58,6 +63,9 @@ export const qk = {
   vpnState: ["vpnState"] as const,
   vpnNodes: ["vpnNodes"] as const,
   room: ["room"] as const,
+  voiceDevices: ["voiceDevices"] as const,
+  voiceSettings: ["voiceSettings"] as const,
+  voiceStatus: ["voiceStatus"] as const,
 };
 
 // ---- queries ---------------------------------------------------------------
@@ -403,21 +411,46 @@ export function useCreateRoom() {
   });
 }
 
+/** Voice room: chat and voice only, no instance (players meet on a regular server). */
+export function useCreateVoiceRoom() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (password: string | null) => unwrap(await api.roomCreateVoice(password)),
+    onSuccess: (state) => qc.setQueryData(qk.room, state),
+  });
+}
+
+/** `instance: null` joins as voice-only (voice rooms). */
 export function useJoinRoom() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (v: { code: string; instance: InstanceId; password: string | null }) =>
+    mutationFn: async (v: { code: string; instance: InstanceId | null; password: string | null }) =>
       unwrap(await api.roomJoin(v.code, v.instance, v.password)),
     onSuccess: (state) => qc.setQueryData(qk.room, state),
   });
 }
 
+/**
+ * Leaves the room. Voice is stopped first (its error is ignored: voice may
+ * simply not be running); the voice UI follows `voice://status` / a re-read.
+ */
 export function useLeaveRoom() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () => unwrap(await api.roomLeave()),
+    mutationFn: async () => {
+      try {
+        await api.voiceStop();
+      } catch {
+        /* voice not running or engine unavailable: leaving still proceeds */
+      }
+      return unwrap(await api.roomLeave());
+    },
     onSuccess: () => qc.setQueryData(qk.room, null),
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.room }),
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: qk.room }),
+        qc.invalidateQueries({ queryKey: qk.voiceStatus }),
+      ]),
   });
 }
 
@@ -435,6 +468,95 @@ export function useSendChat() {
   return useMutation({
     mutationFn: async (text: string) => unwrap(await api.chatSend(text)),
     onSuccess: addOwnMessage,
+  });
+}
+
+// ---- voice -----------------------------------------------------------------
+
+export const useVoiceDevices = () =>
+  useQuery({ queryKey: qk.voiceDevices, queryFn: async () => unwrap(await api.voiceDevices()) });
+
+export const useVoiceSettings = () =>
+  useQuery({ queryKey: qk.voiceSettings, queryFn: async () => unwrap(await api.voiceSettings()) });
+
+/** Saves voice settings; the cache is updated optimistically. */
+export function useSaveVoiceSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (next: VoiceSettings) => unwrap(await api.voiceSetSettings(next)),
+    onMutate: async (next) => {
+      await qc.cancelQueries({ queryKey: qk.voiceSettings });
+      const prev = qc.getQueryData<VoiceSettings>(qk.voiceSettings);
+      qc.setQueryData(qk.voiceSettings, next);
+      return { prev };
+    },
+    onError: (_e, _next, ctx) => {
+      if (ctx?.prev) qc.setQueryData(qk.voiceSettings, ctx.prev);
+    },
+  });
+}
+
+/** Live voice session state; kept fresh by `voice://status` (see `useRoomSync`). */
+export const useVoiceStatus = () =>
+  useQuery({ queryKey: qk.voiceStatus, queryFn: async () => unwrap(await api.voiceStatus()) });
+
+/**
+ * Mutation over a voice command that changes `VoiceStatus`: the status is
+ * patched optimistically and re-read afterwards (the event also arrives).
+ */
+function useVoiceStatusMutation<V>(run: (v: V) => Promise<unknown>, patch: (v: V) => Partial<VoiceStatus>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: V) => {
+      await run(v);
+      return v;
+    },
+    onSuccess: (v) => {
+      qc.setQueryData<VoiceStatus>(qk.voiceStatus, (s) => (s ? { ...s, ...patch(v) } : s));
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.voiceStatus }),
+  });
+}
+
+/** Joins (`true`) or leaves (`false`) the voice of the current room. */
+export const useVoiceActive = () =>
+  useVoiceStatusMutation(
+    async (on: boolean) => unwrap(on ? await api.voiceStart() : await api.voiceStop()),
+    (active) => ({ active }),
+  );
+
+export const useSetSelfMuted = () =>
+  useVoiceStatusMutation(
+    async (muted: boolean) => unwrap(await api.voiceSetSelfMuted(muted)),
+    (selfMuted) => ({ selfMuted }),
+  );
+
+export const useMicTest = () =>
+  useVoiceStatusMutation(
+    async (on: boolean) => unwrap(await api.voiceMicTest(on)),
+    (micTest) => ({ micTest }),
+  );
+
+export function useSetPeerMuted() {
+  const setPeerMuted = useVoiceStore((s) => s.setPeerMuted);
+  return useMutation({
+    mutationFn: async (v: { peerId: string; muted: boolean }) => {
+      unwrap(await api.voiceSetPeerMuted(v.peerId, v.muted));
+      return v;
+    },
+    onSuccess: (v) => setPeerMuted(v.peerId, v.muted),
+  });
+}
+
+/** Per-peer volume; the backend persists it in `VoiceSettings.peerVolumes`. */
+export function useSetPeerVolume() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { peer: Peer; volume: number }) =>
+      unwrap(await api.voiceSetPeerVolume(v.peer.peerId, v.volume)),
+    onMutate: (v) => {
+      qc.setQueryData<VoiceSettings>(qk.voiceSettings, (s) => (s ? withPeerVolume(s, v.peer, v.volume) : s));
+    },
   });
 }
 

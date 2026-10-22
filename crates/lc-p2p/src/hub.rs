@@ -1,7 +1,7 @@
 //! Minimal client for the rooms part of the hub API (`server/openapi/hub.yaml`).
 
 use lc_accounts::Secret;
-use lc_types::room::{InstanceSig, RoomAuthMode};
+use lc_types::room::{InstanceSig, RoomAuthMode, RoomKind};
 use lc_types::{AppError, AppResult, ErrorCode, RoomId};
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CreateRoomReq {
     pub endpoint_id: String,
-    pub sig: InstanceSig,
+    pub kind: RoomKind,
+    /// Game rooms only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sig: Option<InstanceSig>,
     pub auth_mode: RoomAuthMode,
     pub max_peers: u32,
     pub password_protected: bool,
@@ -42,12 +45,21 @@ pub(crate) struct JoinRoomResp {
     pub room_id: RoomId,
     pub peer_token: String,
     pub host_endpoint_id: String,
-    pub sig: InstanceSig,
+    /// Hubs predating voice rooms omit it: game.
+    #[serde(default = "game_kind")]
+    pub kind: RoomKind,
+    /// Absent for voice rooms.
+    #[serde(default)]
+    pub sig: Option<InstanceSig>,
     pub auth_mode: RoomAuthMode,
     #[serde(default)]
     pub relay_urls: Vec<String>,
     #[serde(default)]
     pub password_protected: bool,
+}
+
+fn game_kind() -> RoomKind {
+    RoomKind::Game
 }
 
 /// Error body shared by hub and launcher (`{code, message, details}`).
@@ -257,12 +269,13 @@ mod tests {
     fn create_request_is_camel_case() {
         let req = CreateRoomReq {
             endpoint_id: "e".into(),
-            sig: InstanceSig {
+            kind: RoomKind::Game,
+            sig: Some(InstanceSig {
                 mc: "1.21.1".into(),
                 loader: lc_types::version::LoaderKind::NeoForge,
                 loader_version: None,
                 mods_hash: "h".into(),
-            },
+            }),
             auth_mode: RoomAuthMode::Open,
             max_peers: 8,
             password_protected: true,
@@ -273,5 +286,26 @@ mod tests {
         assert_eq!(v["passwordProtected"], true);
         assert_eq!(v["sig"]["loader"], "neoForge");
         assert_eq!(v["sig"]["modsHash"], "h");
+        assert_eq!(v["kind"], "game");
+
+        let voice = CreateRoomReq {
+            kind: RoomKind::Voice,
+            sig: None,
+            ..req
+        };
+        let v = serde_json::to_value(&voice).unwrap();
+        assert_eq!(v["kind"], "voice");
+        assert!(v.get("sig").is_none());
+    }
+
+    #[test]
+    fn join_response_defaults_to_game() {
+        let r: JoinRoomResp = serde_json::from_value(serde_json::json!({
+            "roomId": lc_types::RoomId::new(), "peerToken": "t", "hostEndpointId": "h",
+            "authMode": "open", "relayUrls": [], "passwordProtected": false
+        }))
+        .unwrap();
+        assert_eq!(r.kind, RoomKind::Game);
+        assert!(r.sig.is_none());
     }
 }

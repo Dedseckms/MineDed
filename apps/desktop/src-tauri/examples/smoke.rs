@@ -79,6 +79,10 @@ impl lc_p2p::RoomObserver for NoRoomObs {
     fn on_chat(&self, _message: lc_types::voice::ChatMessage) {}
 }
 
+impl lc_voice::VoiceObserver for NoRoomObs {
+    fn on_speaking(&self, _payload: lc_types::events::VoiceSpeakingPayload) {}
+}
+
 fn sink() -> PrintSink {
     PrintSink {
         id: TaskId::new(),
@@ -101,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store,
         &settings,
         obs.clone(),
+        Arc::new(NoRoomObs),
         Arc::new(NoRoomObs),
     )?;
 

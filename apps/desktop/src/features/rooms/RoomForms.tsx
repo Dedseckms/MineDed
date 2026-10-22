@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { InstanceId, RoomAuthMode } from "../../bindings";
-import { useCreateRoom, useInstances, useJoinRoom } from "../../api/queries";
+import type { InstanceId, RoomAuthMode, RoomKind } from "../../bindings";
+import { useCreateRoom, useCreateVoiceRoom, useInstances, useJoinRoom } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
@@ -133,11 +133,50 @@ export function CreateRoomForm() {
   );
 }
 
+/** Voice-only room: chat and voice for players on a regular server, no instance. */
+export function CreateVoiceRoomForm() {
+  const { t } = useTranslation();
+  const create = useCreateVoiceRoom();
+  const [password, setPassword] = useState("");
+  const pwError = validateRoomPassword(password);
+
+  return (
+    <Section title={t("rooms.voiceCreate.title")}>
+      <p className="text-sm text-muted">{t("rooms.voiceCreate.intro")}</p>
+      <form
+        className="flex flex-col gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (pwError) return;
+          create.mutate(passwordOrNull(password), { onSuccess: () => setPassword("") });
+        }}
+      >
+        <PasswordField
+          value={password}
+          error={pwError}
+          onChange={(v) => {
+            setPassword(v);
+            create.reset();
+          }}
+        />
+        <div className="flex justify-end">
+          <Button type="submit" variant="primary" icon={<Icon name="headphones" />} disabled={!!pwError} loading={create.isPending}>
+            {t("rooms.voiceCreate.submit")}
+          </Button>
+        </div>
+        <ErrorMessage error={create.error} />
+      </form>
+    </Section>
+  );
+}
+
 export function JoinRoomForm() {
   const { t } = useTranslation();
   const pick = useInstancePick();
   const join = useJoinRoom();
   const selectPlayInstance = useNavStore((s) => s.selectPlayInstance);
+  const [kind, setKind] = useState<RoomKind>("game");
+  const voice = kind === "voice";
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [touched, setTouched] = useState(false);
@@ -154,13 +193,13 @@ export function JoinRoomForm() {
         onSubmit={(e) => {
           e.preventDefault();
           setTouched(true);
-          if (!parsed.ok || !pick.value || pwError) return;
-          const instance = pick.value;
+          if (!parsed.ok || (!voice && !pick.value) || pwError) return;
+          const instance = voice ? null : pick.value;
           join.mutate(
             { code: parsed.code, instance, password: passwordOrNull(password) },
             {
               onSuccess: () => {
-                selectPlayInstance(instance);
+                if (instance) selectPlayInstance(instance);
                 setCode("");
                 setPassword("");
                 setTouched(false);
@@ -185,7 +224,23 @@ export function JoinRoomForm() {
             />
           )}
         </Field>
-        <InstanceField pick={pick} />
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-medium">{t("rooms.kind.label")}</span>
+          <Segmented<RoomKind>
+            ariaLabel={t("rooms.kind.label")}
+            value={kind}
+            onChange={(k) => {
+              setKind(k);
+              join.reset();
+            }}
+            options={[
+              { value: "game", label: t("rooms.kind.game") },
+              { value: "voice", label: t("rooms.kind.voice") },
+            ]}
+          />
+          <p className="text-xs text-muted">{t(`rooms.kindHint.${kind}`)}</p>
+        </div>
+        {voice ? null : <InstanceField pick={pick} />}
         <PasswordField
           value={password}
           error={pwError}
@@ -195,7 +250,7 @@ export function JoinRoomForm() {
           }}
         />
         <div className="flex justify-end">
-          <Button type="submit" variant="primary" icon={<Icon name="link" />} disabled={!pick.value || !!pwError} loading={join.isPending}>
+          <Button type="submit" variant="primary" icon={<Icon name="link" />} disabled={(!voice && !pick.value) || !!pwError} loading={join.isPending}>
             {t("rooms.join.submit")}
           </Button>
         </div>

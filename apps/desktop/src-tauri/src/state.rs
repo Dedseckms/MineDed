@@ -22,7 +22,7 @@ use lc_runtime::{MemorySettingsStore, Paths, SettingsStore};
 use lc_types::settings::Settings;
 use lc_types::version::LoaderKind;
 use lc_types::AppResult;
-use lc_voice::{StubVoice, VoiceEngine};
+use lc_voice::{CpalVoiceEngine, StubVoice, VoiceEngine, VoiceObserver};
 use lc_vpn::{MihomoVpn, StubVpn, VpnController};
 
 use crate::tasks::TaskRegistry;
@@ -57,14 +57,16 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Real services everywhere except voice (still a stub).
+    /// Real services everywhere.
     pub fn real(
         paths: Paths,
         settings: Arc<dyn SettingsStore>,
         initial: &Settings,
         observer: Arc<dyn GameObserver>,
         room_observer: Arc<dyn RoomObserver>,
+        voice_observer: Arc<dyn VoiceObserver>,
     ) -> AppResult<Self> {
+        let voice = Arc::new(CpalVoiceEngine::new(&paths, voice_observer));
         let downloader: Arc<dyn Downloader> = Arc::new(HttpDownloader::new(
             DownloaderConfig::from_settings(initial),
         )?);
@@ -122,7 +124,7 @@ impl AppState {
             mihomo: Some(mihomo),
             rooms: rooms.clone(),
             datagrams: rooms,
-            voice: Arc::new(StubVoice),
+            voice,
         })
     }
 
