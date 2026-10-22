@@ -728,10 +728,24 @@ impl P2pRooms {
             old.close(0u32.into(), b"replaced");
         }
         self.host_broadcast_welcome(&s)?;
-        let (speaking, muted) = *lock(&s.voice);
-        if speaking || muted {
-            let line = wire::encode(&ControlMsg::VoiceState { speaking, muted })?;
-            s.send_to(&remote, &line);
+        // Current voice states: ours, then the other guests' (relayed).
+        let mut states = vec![(None, *lock(&s.voice))];
+        states.extend(
+            s.peers()
+                .map
+                .iter()
+                .filter(|(id, _)| **id != remote)
+                .map(|(id, e)| (Some(id.clone()), (e.peer.speaking, e.peer.muted))),
+        );
+        for (peer, (speaking, muted)) in states {
+            if speaking || muted {
+                let line = wire::encode(&ControlMsg::VoiceState {
+                    speaking,
+                    muted,
+                    peer,
+                })?;
+                s.send_to(&remote, &line);
+            }
         }
         self.inner.observer.on_peer(peer, true);
         self.emit_state();
@@ -1170,10 +1184,21 @@ impl P2pRooms {
                 } => {
                     self.on_chat(&s, &from, (orig, from_name), id, text, sent_at);
                 }
-                ControlMsg::VoiceState { speaking, muted } => {
-                    // Attributed to the connection only: the message carries
-                    // no sender, so the host cannot relay guests' states.
-                    let changed = match s.peers().map.get_mut(&from) {
+                ControlMsg::VoiceState {
+                    speaking,
+                    muted,
+                    peer,
+                } => {
+                    // The host trusts only the connection identity; guests
+                    // accept the host's attribution of relayed states.
+                    let target = match (s.role, peer) {
+                        (RoomRole::Guest, Some(p)) => p,
+                        _ => from.clone(),
+                    };
+                    if target == s.my_id {
+                        continue;
+                    }
+                    let changed = match s.peers().map.get_mut(&target) {
                         Some(e) if (e.peer.speaking, e.peer.muted) != (speaking, muted) => {
                             e.peer.speaking = speaking;
                             e.peer.muted = muted;
@@ -1182,6 +1207,16 @@ impl P2pRooms {
                         _ => false,
                     };
                     if changed {
+                        if s.role == RoomRole::Host {
+                            let relay = wire::encode(&ControlMsg::VoiceState {
+                                speaking,
+                                muted,
+                                peer: Some(from.clone()),
+                            });
+                            if let Ok(line) = relay {
+                                s.broadcast(&line, Some(&from));
+                            }
+                        }
                         self.emit_state();
                     }
                 }
@@ -1365,11 +1400,9 @@ impl P2pRooms {
             .min(MAX_DATAGRAM)
     }
 
-    /// Publishes our voice activity (`ControlMsg::VoiceState`) to directly
-    /// connected peers; they expose it as `Peer::speaking` / `Peer::muted`.
-    /// Guests see the host's state, the host sees every guest's. No-op when
-    /// unchanged or outside a room.
-    pub fn set_voice_state(&self, speaking: bool, muted: bool) -> AppResult<()> {
+    /// Sends our voice activity to directly connected peers (the host relays
+    /// guests' states to everyone). No-op when unchanged or outside a room.
+    fn publish_voice_state(&self, speaking: bool, muted: bool) -> AppResult<()> {
         let Some(s) = self.inner.current() else {
             return Ok(());
         };
@@ -1380,7 +1413,11 @@ impl P2pRooms {
             }
             *v = (speaking, muted);
         }
-        let line = wire::encode(&ControlMsg::VoiceState { speaking, muted })?;
+        let line = wire::encode(&ControlMsg::VoiceState {
+            speaking,
+            muted,
+            peer: None,
+        })?;
         s.broadcast(&line, None);
         Ok(())
     }
@@ -1477,6 +1514,10 @@ impl DatagramTransport for P2pRooms {
             .current()
             .map(|s| Self::datagram_limit(&s))
             .unwrap_or(MAX_DATAGRAM)
+    }
+
+    async fn set_voice_state(&self, speaking: bool, muted: bool) -> AppResult<()> {
+        self.publish_voice_state(speaking, muted)
     }
 }
 

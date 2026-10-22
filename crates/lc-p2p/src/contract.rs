@@ -48,6 +48,11 @@ pub trait DatagramTransport: Send + Sync {
     async fn recv(&self) -> Option<(String, Vec<u8>)>;
     /// Max payload size for the current path.
     fn max_datagram_size(&self) -> usize;
+    /// Publishes our own speaking/muted state to the room (`ControlMsg::VoiceState`).
+    /// Default: ignored (test doubles).
+    async fn set_voice_state(&self, _speaking: bool, _muted: bool) -> AppResult<()> {
+        Ok(())
+    }
 }
 
 /// Room events; implemented in `src-tauri` (emits `room://*`, `chat://message`).

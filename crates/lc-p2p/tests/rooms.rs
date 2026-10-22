@@ -182,7 +182,7 @@ impl RoomObserver for Rec {
 }
 
 async fn eventually(what: &str, mut f: impl FnMut() -> bool) {
-    for _ in 0..200 {
+    for _ in 0..400 {
         if f() {
             return;
         }
@@ -253,11 +253,22 @@ async fn echo_through(addr: &str, payload: &[u8]) -> Vec<u8> {
     let mut tcp = TcpStream::connect(addr).await.unwrap();
     tcp.write_all(payload).await.unwrap();
     let mut back = vec![0u8; payload.len()];
-    tokio::time::timeout(Duration::from_secs(10), tcp.read_exact(&mut back))
+    tokio::time::timeout(Duration::from_secs(30), tcp.read_exact(&mut back))
         .await
         .expect("echo timed out")
         .unwrap();
     back
+}
+
+/// Relay tests: guests can only reach a host that is already registered
+/// with its home relay.
+async fn wait_home_relay(rooms: &P2pRooms) {
+    eventually("host home relay", || {
+        rooms
+            .endpoint_addr()
+            .is_some_and(|a| a.relay_urls().next().is_some())
+    })
+    .await;
 }
 
 /// Host + guest wired for direct connections on loopback (no relay).
@@ -737,6 +748,7 @@ async fn tunnel_via_local_relay() {
         .create(InstanceId::new(), RoomAuthMode::Open, None)
         .await
         .unwrap();
+    wait_home_relay(&host.rooms).await;
 
     let st = guest
         .rooms
@@ -881,7 +893,9 @@ async fn voice_trio(relay: bool, password: Option<&str>) -> (Side, Side, Side, H
         assert!(body.get("sig").is_none());
         assert!(!h.create_had_bearer);
     }
-    if !relay {
+    if relay {
+        wait_home_relay(&host.rooms).await;
+    } else {
         lookup.add_endpoint_info(host.rooms.endpoint_addr().unwrap());
     }
     for g in [&a, &b] {
@@ -957,7 +971,7 @@ async fn voice_room_direct_three_peers() {
 
     // Speaking / muted flags travel over the control stream.
     let a_id = a.rooms.endpoint_addr().unwrap().id.to_string();
-    a.rooms.set_voice_state(true, false).unwrap();
+    a.rooms.set_voice_state(true, false).await.unwrap();
     eventually("host sees alice speaking", || {
         last_state(&host.rec).is_some_and(|s| {
             s.peers
@@ -966,7 +980,16 @@ async fn voice_room_direct_three_peers() {
         })
     })
     .await;
-    host.rooms.set_voice_state(false, true).unwrap();
+    // Relayed by the host to the other guest, attributed to Alice.
+    eventually("bob sees alice speaking", || {
+        last_state(&b.rec).is_some_and(|s| {
+            s.peers
+                .iter()
+                .any(|p| p.peer_id == a_id && p.speaking && !p.muted)
+        })
+    })
+    .await;
+    host.rooms.set_voice_state(false, true).await.unwrap();
     eventually("guests see host muted", || {
         [&a, &b].iter().all(|g| {
             last_state(&g.rec).is_some_and(|s| s.peers.iter().any(|p| p.name == "Host" && p.muted))
