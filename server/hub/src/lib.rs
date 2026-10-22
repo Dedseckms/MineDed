@@ -55,8 +55,13 @@ impl Default for Config {
     }
 }
 
+/// Anonymous (`open`, no bearer) rooms per IP at a time (hub.yaml createRoom).
+pub const ANON_MAX_ACTIVE_ROOMS: usize = 2;
+
 struct Limiters {
     create: RateLimiter<IpAddr>,
+    /// Anonymous creates: 10 per hour per IP.
+    anon_create: RateLimiter<IpAddr>,
     join: RateLimiter<IpAddr>,
     ws: RateLimiter<IpAddr>,
     close: RateLimiter<IpAddr>,
@@ -79,6 +84,7 @@ impl AppState {
             rooms,
             limiters: Arc::new(Limiters {
                 create: RateLimiter::per_minute(6, 5),
+                anon_create: RateLimiter::per_hour(10, 10),
                 join: RateLimiter::per_minute(20, 10),
                 ws: RateLimiter::per_minute(60, 20),
                 close: RateLimiter::per_minute(30, 10),
@@ -95,6 +101,7 @@ impl AppState {
                 t.tick().await;
                 s.rooms.reap();
                 s.limiters.create.sweep();
+                s.limiters.anon_create.sweep();
                 s.limiters.join.sweep();
                 s.limiters.ws.sweep();
                 s.limiters.close.sweep();
@@ -188,10 +195,23 @@ async fn create_room(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     limit(&s.limiters.create, ip)?;
-    let who = require_identity(&s, &headers).await?;
     let req: CreateRoom = parse_json(&body)?;
     req.validate()?;
-    let c = s.rooms.create(req, &who)?;
+    let c = match (bearer(&headers), req.auth_mode) {
+        (Some(_), _) | (None, AuthMode::Yggdrasil) => {
+            let who = require_identity(&s, &headers).await?;
+            s.rooms.create(req, &who)?
+        }
+        // Offline host: anonymous `open` room, strict per-IP limits.
+        (None, AuthMode::Open) => {
+            limit(&s.limiters.anon_create, ip)?;
+            let who = Identity {
+                user_id: format!("ip:{ip}"),
+                name: "Host".into(),
+            };
+            s.rooms.create_limited(req, &who, ANON_MAX_ACTIVE_ROOMS)?
+        }
+    };
     let body = json!({
         "roomId": c.room_id,
         "code": c.code,
@@ -253,11 +273,12 @@ async fn join_room(
         (AuthMode::Open, Some(t)) => s.validator.validate(t).await.ok().flatten(),
         (AuthMode::Open, None) => None,
     };
+    let uuid = rooms::profile_uuid(who.as_ref().map(|w| w.user_id.as_str()));
     let name = who.map(|w| w.name).or(body_name).unwrap_or_else(|| {
         let tail: String = req.endpoint_id.chars().take(4).collect();
         format!("Guest-{tail}")
     });
-    let j = s.rooms.join(&code, req.endpoint_id, name)?;
+    let j = s.rooms.join(&code, req.endpoint_id, name, &uuid)?;
     Ok(Json(json!({
         "roomId": j.room_id,
         "peerToken": j.peer_token,

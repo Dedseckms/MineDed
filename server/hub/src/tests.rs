@@ -19,7 +19,12 @@ impl TokenValidator for FakeValidator {
     async fn validate(&self, token: &str) -> Result<Option<Identity>, ApiError> {
         Ok(match token {
             "alice" | "bob" => Some(Identity {
-                user_id: format!("id-{token}"),
+                // Drasl profile ids are undashed UUIDs.
+                user_id: if token == "alice" {
+                    "0000000000000000000000000000000a".into()
+                } else {
+                    "0000000000000000000000000000000b".into()
+                },
                 name: token.into(),
             }),
             _ => None,
@@ -148,9 +153,10 @@ async fn create_room_shape_and_auth() {
     );
     assert_eq!(v["relayUrls"], json!(["https://relay.example.ru"]));
 
+    // Bearer is required for yggdrasil rooms; an invalid bearer is rejected for any mode.
     let (st, _, v) = call(
         &app,
-        post_json("/api/v1/rooms", None, "10.0.0.2", room_body("open", 4)),
+        post_json("/api/v1/rooms", None, "10.0.0.2", room_body("yggdrasil", 4)),
     )
     .await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
@@ -187,6 +193,75 @@ async fn create_room_shape_and_auth() {
     .await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
     assert_app_error(&v, "invalidInput");
+}
+
+#[tokio::test]
+async fn anonymous_open_room_per_ip_limits() {
+    let app = app();
+    let anon = |ip: &str| post_json("/api/v1/rooms", None, ip, room_body("open", 4));
+    let (st, _, a) = call(&app, anon("10.5.0.1")).await;
+    assert_eq!(st, StatusCode::CREATED, "{a}");
+    let (st, _, _) = call(&app, anon("10.5.0.1")).await;
+    assert_eq!(st, StatusCode::CREATED);
+    // Third active anonymous room from the same IP.
+    let (st, h, v) = call(&app, anon("10.5.0.1")).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+    assert_app_error(&v, "rateLimited");
+    assert!(h.contains_key("retry-after"));
+    // Another IP is independent.
+    let (st, _, _) = call(&app, anon("10.5.0.2")).await;
+    assert_eq!(st, StatusCode::CREATED);
+    // Closing with hostToken frees a slot; anonymous host gets a working room.
+    let id = a["roomId"].as_str().unwrap();
+    let (st, _, _) = call(&app, delete_req(id, a["hostToken"].as_str())).await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    let (st, _, _) = call(&app, anon("10.5.0.1")).await;
+    assert_eq!(st, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn anonymous_creates_capped_per_hour() {
+    // 10 creates/hour/IP. Over HTTP the per-minute limiter (burst 5) fires first,
+    // so the hourly bucket is checked directly.
+    let rl = RateLimiter::<IpAddr>::per_hour(10, 10);
+    let ip: IpAddr = "10.6.0.1".parse().unwrap();
+    for _ in 0..10 {
+        assert!(rl.check(&ip).is_ok());
+    }
+    let wait = rl.check(&ip).unwrap_err();
+    assert!((300..=360).contains(&wait), "{wait}");
+}
+
+#[tokio::test]
+async fn peer_token_carries_bearer_uuid() {
+    let app = app();
+    let room = create(&app, "open", 8).await;
+    let uri = format!("/api/v1/rooms/{}/join", room["code"].as_str().unwrap());
+    let (_, _, j) = call(
+        &app,
+        post_json(&uri, Some("bob"), "10.8.0.1", json!({"endpointId": "gb"})),
+    )
+    .await;
+    let parts: Vec<&str> = j["peerToken"].as_str().unwrap().split('.').collect();
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[1], "0000000000000000000000000000000b");
+    let exp: u64 = parts[0].parse().unwrap();
+    let rid = Uuid::parse_str(room["roomId"].as_str().unwrap()).unwrap();
+    let expect = rooms::peer_token(
+        room["hostToken"].as_str().unwrap(),
+        rid,
+        "gb",
+        parts[1],
+        exp,
+    );
+    assert_eq!(j["peerToken"], expect.as_str());
+    // A client-supplied uuid is not trusted for anonymous joins.
+    let body = json!({"endpointId": "ga", "uuid": "0000000000000000000000000000000b"});
+    let (_, _, j) = call(&app, post_json(&uri, None, "10.8.0.1", body)).await;
+    assert_eq!(
+        j["peerToken"].as_str().unwrap().split('.').nth(1),
+        Some("-")
+    );
 }
 
 #[tokio::test]
