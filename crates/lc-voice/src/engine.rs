@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use lc_p2p::DatagramTransport;
 use lc_runtime::Paths;
 use lc_types::events::VoiceSpeakingPayload;
-use lc_types::voice::{AudioDevice, VoiceMode, VoiceSettings};
+use lc_types::voice::{AudioDevice, VoiceMode, VoiceSettings, VoiceStatus};
 use lc_types::{AppError, AppResult, ErrorCode};
 use tokio::task::JoinHandle;
 
@@ -49,6 +49,8 @@ struct Live {
     input_gain: f32,
     noise_suppression: bool,
     mic_test: bool,
+    /// Voice started in a room.
+    active: bool,
 }
 
 /// State shared with the background tasks (no back-reference to the engine,
@@ -60,6 +62,8 @@ struct Shared {
     live: Mutex<Live>,
     ptt: Mutex<Option<PttWatcher>>,
     tracker: Mutex<SpeakingTracker>,
+    /// Last status sent to the observer.
+    status: Mutex<Option<VoiceStatus>>,
     speaker: u8,
     seq_start: u16,
 }
@@ -78,6 +82,31 @@ impl Shared {
             },
             live.mic_test,
         )
+    }
+
+    fn status(&self) -> VoiceStatus {
+        let live = *lock(&self.live);
+        VoiceStatus {
+            active: live.active,
+            self_muted: live.self_muted,
+            mode: match live.gate {
+                Gate::Off => VoiceMode::Off,
+                Gate::PushToTalk => VoiceMode::PushToTalk,
+                Gate::Vad => VoiceMode::Vad,
+            },
+            mic_test: live.mic_test,
+        }
+    }
+
+    /// Notifies the observer when the status changed.
+    fn publish_status(&self) {
+        let now = self.status();
+        let mut last = lock(&self.status);
+        if *last != Some(now) {
+            *last = Some(now);
+            drop(last);
+            self.observer.on_status(now);
+        }
     }
 
     fn emit(&self, payloads: Vec<VoiceSpeakingPayload>) {
@@ -166,9 +195,11 @@ impl CpalVoiceEngine {
                 input_gain: settings.input_gain,
                 noise_suppression: settings.noise_suppression,
                 mic_test: false,
+                active: false,
             }),
             ptt: Mutex::new(None),
             tracker: Mutex::new(SpeakingTracker::new()),
+            status: Mutex::new(None),
             speaker: rnd as u8,
             seq_start: (rnd >> 8) as u16,
         };
@@ -231,7 +262,11 @@ impl CpalVoiceEngine {
     async fn reconcile(&self, run: &mut Run) -> AppResult<Option<AppError>> {
         let s = self.current();
         let active = run.transport.is_some() || run.mic_test;
-        lock(&self.shared.live).mic_test = run.mic_test;
+        {
+            let mut live = lock(&self.shared.live);
+            live.mic_test = run.mic_test;
+            live.active = run.transport.is_some();
+        }
         if !active {
             run.abort_tasks();
             run.io = None;
@@ -239,6 +274,7 @@ impl CpalVoiceEngine {
             lock(&self.shared.mixer).clear_streams();
             let resets = lock(&self.shared.tracker).reset();
             self.shared.emit(resets);
+            self.shared.publish_status();
             return Ok(None);
         }
         let mut warning = self.apply_gate(&s, true).err().map(ptt_error);
@@ -264,6 +300,7 @@ impl CpalVoiceEngine {
                 run.transport.clone(),
             )));
         }
+        self.shared.publish_status();
         Ok(warning)
     }
 
@@ -401,7 +438,9 @@ impl VoiceEngine for CpalVoiceEngine {
         if active {
             warn_to_result(self.reconcile(&mut run).await?)
         } else {
-            self.apply_gate(&s, false).map_err(ptt_error)
+            let r = self.apply_gate(&s, false).map_err(ptt_error);
+            self.shared.publish_status();
+            r
         }
     }
 
@@ -463,7 +502,12 @@ impl VoiceEngine for CpalVoiceEngine {
 
     async fn set_self_muted(&self, muted: bool) -> AppResult<()> {
         lock(&self.shared.live).self_muted = muted;
+        self.shared.publish_status();
         Ok(())
+    }
+
+    async fn status(&self) -> AppResult<VoiceStatus> {
+        Ok(self.shared.status())
     }
 
     async fn mic_test(&self, enabled: bool) -> AppResult<()> {
@@ -536,6 +580,34 @@ mod tests {
         assert_eq!(lock(&e.shared.live).gate, Gate::Vad);
         // Settings are still saved as requested.
         assert_eq!(e.settings().await.unwrap().mode, VoiceMode::PushToTalk);
+        let st = e.status().await.unwrap();
+        assert_eq!(st.mode, VoiceMode::Vad);
+        assert!(!st.active && !st.mic_test && !st.self_muted);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[derive(Default)]
+    struct StatusRecorder(Mutex<Vec<VoiceStatus>>);
+    impl VoiceObserver for StatusRecorder {
+        fn on_speaking(&self, _payload: VoiceSpeakingPayload) {}
+        fn on_status(&self, status: VoiceStatus) {
+            lock(&self.0).push(status);
+        }
+    }
+
+    #[tokio::test]
+    async fn status_changes_are_published_once() {
+        let dir =
+            std::env::temp_dir().join(format!("lc-voice-engine-status-{}", std::process::id()));
+        let rec = Arc::new(StatusRecorder::default());
+        let e = CpalVoiceEngine::new(&Paths::new(&dir), rec.clone());
+        e.set_self_muted(true).await.unwrap();
+        e.set_self_muted(true).await.unwrap();
+        e.set_self_muted(false).await.unwrap();
+        let seen = lock(&rec.0).clone();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].self_muted && !seen[1].self_muted);
+        assert!(e.status().await.unwrap() == seen[1]);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
