@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ChatMessage, RoomPeerEvent, RoomStateEvent, TaskEvent, VpnState } from "../bindings";
+import type { ChatMessage, RoomPeerEvent, RoomStateEvent, TaskEvent, VoiceSpeakingEvent, VoiceStatus, VpnState } from "../bindings";
 import { unwrap } from "../api/client";
 import { createMockBus } from "./bus";
 import { createMockCommands } from "./index";
-import { MOCK_NODES, mockLatency } from "./net";
+import { MOCK_NODES, mockLatency, mockMicLevel } from "./net";
 
 const channel = (events: TaskEvent[]) =>
   ({ onmessage: (e: TaskEvent) => events.push(e) }) as unknown as Parameters<
@@ -139,6 +139,24 @@ describe("mock rooms", () => {
     unwrap(await api.roomLeave());
   });
 
+  it("voice room: create without instance; join VOX codes with instance=null", async () => {
+    const bus = createMockBus();
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+    expect((await api.roomCreateVoice("abc")).status).toBe("error");
+    const room = unwrap(await api.roomCreateVoice(null));
+    expect(room).toMatchObject({ kind: "voice", sig: null, localAddr: null, role: "host" });
+    unwrap(await api.roomLeave());
+
+    const game = await api.roomJoin("ABCD-1234", null, null);
+    expect(game.status === "error" && game.error.code).toBe("invalidInput");
+    const joined = unwrap(await api.roomJoin("VOXA-1234", null, null));
+    expect(joined).toMatchObject({ kind: "voice", sig: null, localAddr: null, role: "guest" });
+    unwrap(await api.roomLeave());
+    const withInst = unwrap(await api.roomJoin("VOXB-1234", "inst-fabric", null));
+    expect(withInst.kind).toBe("voice");
+    unwrap(await api.roomLeave());
+  });
+
   it("leaving cancels pending simulated joins", async () => {
     const bus = createMockBus();
     const peers: RoomPeerEvent[] = [];
@@ -148,5 +166,63 @@ describe("mock rooms", () => {
     unwrap(await api.roomLeave());
     await vi.advanceTimersByTimeAsync(1000);
     expect(peers).toEqual([]);
+  });
+});
+
+describe("mock voice", () => {
+  it("settings validation, devices, peer volume persistence", async () => {
+    const api = createMockCommands({}, { bus: createMockBus(), tickMs: 10 });
+    const devices = unwrap(await api.voiceDevices());
+    expect(devices.some((d) => d.direction === "input")).toBe(true);
+    const s = unwrap(await api.voiceSettings());
+    expect(s).toMatchObject({ mode: "pushToTalk", pttKey: "KeyV" });
+    expect((await api.voiceSetSettings({ ...s, inputGain: 3 })).status).toBe("error");
+    expect((await api.voiceSetSettings({ ...s, inputDevice: "nope" })).status).toBe("error");
+    unwrap(await api.voiceSetSettings({ ...s, mode: "vad", inputDevice: "in-usb" }));
+    expect(unwrap(await api.voiceSettings())).toMatchObject({ mode: "vad", inputDevice: "in-usb" });
+
+    expect((await api.voiceStart()).status).toBe("error");
+    const room = unwrap(await api.roomJoin("VOXA-0001", null, null));
+    const host = room.peers[0];
+    unwrap(await api.voiceSetPeerVolume(host?.peerId ?? "", 1.5));
+    expect(unwrap(await api.voiceSettings()).peerVolumes).toEqual({ [host?.peerId ?? ""]: 1.5 });
+    expect((await api.voiceSetPeerVolume(host?.peerId ?? "", 5)).status).toBe("error");
+    expect((await api.voiceSetPeerMuted("ghost", true)).status).toBe("error");
+    unwrap(await api.voiceSetPeerMuted(host?.peerId ?? "", true));
+    unwrap(await api.roomLeave());
+  });
+
+  it("voice start emits speaking events; mic test emits self levels", async () => {
+    const bus = createMockBus();
+    const events: VoiceSpeakingEvent[] = [];
+    const statuses: VoiceStatus[] = [];
+    bus.on("voiceSpeaking", (e) => events.push(e));
+    bus.on("voiceStatus", (s) => statuses.push(s));
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+    expect(unwrap(await api.voiceStatus())).toMatchObject({ active: false, selfMuted: false, micTest: false });
+    unwrap(await api.roomJoin("VOXA-0002", null, null));
+    unwrap(await api.voiceStart());
+    expect(statuses.at(-1)).toMatchObject({ active: true, mode: "pushToTalk" });
+    unwrap(await api.voiceSetSelfMuted(true));
+    expect(unwrap(await api.voiceStatus())).toMatchObject({ active: true, selfMuted: true });
+    unwrap(await api.voiceSetSelfMuted(false));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(events.some((e) => e.peerId !== "self" && e.speaking)).toBe(true);
+    unwrap(await api.roomLeave());
+    expect(statuses.at(-1)?.active).toBe(false);
+
+    events.length = 0;
+    unwrap(await api.voiceMicTest(true));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(events.length).toBeGreaterThan(3);
+    expect(events.every((e) => e.peerId === "self")).toBe(true);
+    expect(statuses.at(-1)?.micTest).toBe(true);
+    unwrap(await api.voiceMicTest(false));
+    expect(statuses.at(-1)?.micTest).toBe(false);
+    const n = events.length;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(events.length).toBe(n);
+    expect(events.at(-1)).toMatchObject({ speaking: false, level: 0 });
+    expect(mockMicLevel(3)).toBe(mockMicLevel(3));
   });
 });

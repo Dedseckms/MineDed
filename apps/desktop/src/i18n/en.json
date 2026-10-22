@@ -609,7 +609,12 @@
       "closeTitle": "Close the room?",
       "closeMessage": "Everyone will be disconnected.",
       "leaveTitle": "Leave the room?",
-      "leaveMessage": "You will be disconnected from your friend's world."
+      "leaveMessage": "You will be disconnected from your friend's world.",
+      "voiceHostTitle": "Your voice room",
+      "voiceGuestTitle": "Voice room",
+      "voiceHostHint": "Send the code to friends; join the server in game as usual.",
+      "voiceGuestHint": "Join the server in game as usual — voice and chat work here.",
+      "voiceLeaveMessage": "You will leave the voice and chat of this room."
     },
     "peers": {
       "title": "Players ({{n}})",
@@ -641,6 +646,85 @@
       "placeholder": "Write a message…",
       "send": "Send",
       "unread": "Unread: {{n}}"
+    },
+    "kind": {
+      "label": "Room type",
+      "game": "Game",
+      "voice": "Voice only"
+    },
+    "kindHint": {
+      "game": "Friend's world: pick the same instance as the host.",
+      "voice": "Chat and voice only — for playing together on a regular server."
+    },
+    "voiceCreate": {
+      "title": "Voice room",
+      "intro": "Playing on a regular server? Create a voice room: chat and voice by code, no instance needed.",
+      "submit": "Create voice room"
+    }
+  },
+  "voice": {
+    "title": "Voice",
+    "openSettings": "Voice settings",
+    "join": "Join voice",
+    "leave": "Leave voice",
+    "muteSelf": "Mute microphone",
+    "unmuteSelf": "Unmute microphone",
+    "selfLevel": "Your microphone level",
+    "status": {
+      "inactive": "Voice is off",
+      "off": "Microphone disabled in settings",
+      "muted": "Microphone muted",
+      "pushToTalk": "Push to talk: {{key}}",
+      "vad": "Voice activation",
+      "pttNoKey": "Push to talk: no key set"
+    },
+    "mode": {
+      "pushToTalk": "Push to talk",
+      "vad": "Voice activation",
+      "off": "Listen only"
+    },
+    "modeHint": {
+      "pushToTalk": "The microphone is on only while the key is held (works over the game).",
+      "vad": "The microphone turns on automatically when you speak.",
+      "off": "You hear others, your microphone is never sent."
+    },
+    "peer": {
+      "muteNamed": "Mute {{name}}",
+      "unmuteNamed": "Unmute {{name}}",
+      "volumeNamed": "Volume of {{name}}",
+      "micOff": "Microphone off"
+    },
+    "overlay": {
+      "title": "MineUP — voice",
+      "toggle": "Overlay on top of the game",
+      "hint": "A small always-on-top window with speakers and chat. Works over the game in windowed or borderless mode, not in exclusive fullscreen.",
+      "hintWayland": "Wayland may ignore “always on top”. Use windowed/borderless game mode, or keep the launcher visible next to the game.",
+      "noRoom": "Not in a room",
+      "ptt": "PTT: {{key}}",
+      "close": "Close overlay",
+      "participants": "Participants"
+    },
+    "settings": {
+      "title": "Voice chat",
+      "mode": "Microphone mode",
+      "pttKey": "Push-to-talk key",
+      "pttListening": "Press a key…",
+      "pttNone": "Not set",
+      "pttClear": "Clear",
+      "pttHint": "Click and press the key you want to hold while talking.",
+      "pttListeningHint": "Press any key. Esc cancels.",
+      "waylandPtt": "Wayland does not allow global hotkeys: push-to-talk works only while the launcher window is focused. Voice activation is recommended.",
+      "input": "Microphone",
+      "output": "Speakers / headphones",
+      "systemDefault": "System default",
+      "inputGain": "Microphone gain",
+      "outputVolume": "Voice volume",
+      "noiseSuppression": "Noise suppression",
+      "noiseSuppressionHint": "Removes keyboard clicks, fans and background noise.",
+      "micTest": "Check microphone",
+      "micTestStop": "Stop check",
+      "micLevel": "Microphone level",
+      "micTestHint": "You will hear yourself; the bar shows the input level."
     }
   }
 }

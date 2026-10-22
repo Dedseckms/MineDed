@@ -18,6 +18,7 @@ import { PlayScreen } from "../play/PlayScreen";
 import { SettingsScreen } from "../settings/SettingsScreen";
 import { MultiplayerScreen } from "../rooms/MultiplayerScreen";
 import { SkinsScreen } from "../skins/SkinsScreen";
+import { VoiceHeaderToggle } from "../voice/VoicePanel";
 import { VpnScreen } from "../vpn/VpnScreen";
 import { TaskCenter } from "./TaskCenter";
 
@@ -141,6 +142,7 @@ export function AppShell() {
           <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border px-6">
             <h1 className="text-lg font-semibold">{t(`nav.${section}`)}</h1>
             <div className="flex items-center gap-2">
+              <VoiceHeaderToggle />
               <TaskCenter />
               <CurrentAccount />
             </div>

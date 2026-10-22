@@ -2,6 +2,7 @@
 // the real backend through the mock bus. Owned by ui.
 import type {
   AppError,
+  AudioDevice,
   ChatMessage,
   Instance,
   InstanceId,
@@ -9,11 +10,14 @@ import type {
   Peer,
   RoomState,
   TaskKind,
+  VoiceSettings,
+  VoiceStatus,
   VpnNode,
   VpnState,
   commands,
 } from "../bindings";
 import { CHAT_MAX, ROOM_LINK_PREFIX, parseJoinInput } from "../lib/rooms";
+import { GAIN_MAX, GAIN_MIN, SELF_PEER_ID, withPeerVolume } from "../lib/voice";
 import { parseSubscriptionUrls, validateSubscriptionPath } from "../lib/vpn";
 import type { MockBus } from "./bus";
 
@@ -138,6 +142,40 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
         : room.peers.filter((p) => p.peerId !== peer.peerId),
     };
     bus.emit("roomPeer", { peer: { ...peer }, joined });
+  };
+
+  // ---- voice ----
+  let voiceSettings = defaultVoiceSettings();
+  let status: VoiceStatus = { active: false, selfMuted: false, mode: voiceSettings.mode, micTest: false };
+  let voiceTimer: ReturnType<typeof setInterval> | null = null;
+  let micTimer: ReturnType<typeof setInterval> | null = null;
+  const setStatus = (patch: Partial<VoiceStatus>) => {
+    const next = { ...status, ...patch };
+    if (JSON.stringify(next) === JSON.stringify(status)) return;
+    status = next;
+    bus.emit("voiceStatus", { ...status });
+  };
+  const stopVoice = () => {
+    if (voiceTimer) clearInterval(voiceTimer);
+    voiceTimer = null;
+    setStatus({ active: false });
+  };
+  /** Connected peers take turns speaking; own mic is "on" unless muted. */
+  const startVoice = () => {
+    stopVoice();
+    setStatus({ active: true, mode: voiceSettings.mode });
+    let step = 0;
+    voiceTimer = setInterval(() => {
+      step += 1;
+      const peers = room?.peers.filter((p) => p.path !== "connecting") ?? [];
+      const turn = peers.length > 0 ? Math.floor(step / 3) % (peers.length + 1) : -1;
+      peers.forEach((p, i) => {
+        const on = i === turn;
+        bus.emit("voiceSpeaking", { peerId: p.peerId, speaking: on, level: on ? mockMicLevel(step) : 0 });
+      });
+      const self = !status.selfMuted && turn === peers.length;
+      bus.emit("voiceSpeaking", { peerId: SELF_PEER_ID, speaking: self, level: self ? mockMicLevel(step) : 0 });
+    }, tickMs * 2);
   };
 
   /** A friend connects: connecting → direct/relay, then says hi. */
@@ -267,10 +305,37 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       return ok(structuredClone(room));
     },
 
+    roomCreateVoice: async (password) => {
+      await wait();
+      if (room) return err("conflict", "mock: already in a room");
+      if (password !== null && password.length < 4) return err("invalidInput", "mock: password too short");
+      roomSeq += 1;
+      const code = makeCode(roomSeq);
+      room = {
+        roomId: `room-${roomSeq}`,
+        code,
+        role: "host",
+        authMode: "open",
+        kind: "voice",
+        sig: null,
+        peers: [],
+        expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString(),
+        link: `${ROOM_LINK_PREFIX}${code}`,
+        passwordProtected: password !== null,
+        localAddr: null,
+      };
+      emitRoom();
+      scheduleGuest(room.roomId, 0, tickMs * 10);
+      scheduleGuest(room.roomId, 2, tickMs * 30);
+      return ok(structuredClone(room));
+    },
+
+    // Codes starting with "VOX" are voice rooms (instance ignored); joining a
+    // game room needs an instance.
     roomJoin: async (input, instance, password) => {
       await wait();
       const inst = instance ? ctx.findInstance(instance) : undefined;
-      if (!inst) return err("notFound", `mock: instance ${instance} not found`);
+      if (instance !== null && !inst) return err("notFound", `mock: instance ${instance} not found`);
       if (room) return err("conflict", "mock: already in a room");
       const parsed = parseJoinInput(input);
       if (!parsed.ok) return err("invalidInput", "mock: bad room code");
@@ -279,6 +344,8 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       // Codes starting with "LOCK" are password-protected; the password is "secret".
       const locked = code.startsWith("LOCK");
       if (locked && password !== "secret") return err("permissionDenied", "mock: wrong room password");
+      const voice = code.startsWith("VOX");
+      if (!voice && !inst) return err("invalidInput", "mock: this is a game room, pick an instance", { kind: "game" });
       if (code.startsWith("SIG")) return err("conflict", "mock: instance does not match the host", { expected: "1.21.1 fabric" });
       roomSeq += 1;
       const roomId = `room-${roomSeq}`;
@@ -288,13 +355,13 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
         code,
         role: "guest",
         authMode: "open",
-        kind: "game",
-        sig: sigOf(inst),
+        kind: voice ? "voice" : "game",
+        sig: !voice && inst ? sigOf(inst) : null,
         peers: [hostPeer],
         expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString(),
         link: `${ROOM_LINK_PREFIX}${code}`,
         passwordProtected: locked,
-        localAddr: `127.0.0.1:${25565 + roomSeq}`,
+        localAddr: voice ? null : `127.0.0.1:${25565 + roomSeq}`,
       };
       emitRoom();
       // Hole punching succeeds a bit later.
@@ -305,6 +372,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
     roomLeave: async () => {
       await wait();
       clearTimers();
+      stopVoice();
       if (room) {
         room = null;
         emitRoom();
@@ -343,5 +411,109 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       if (friend && /\?$/.test(trimmed)) later(tickMs * 6, () => room?.roomId === roomId && bus.emit("chatMessage", peerMsg(friend, "+")));
       return ok(msg);
     },
+
+    // ---- voice ----
+    voiceDevices: async () => {
+      await wait();
+      return ok(MOCK_AUDIO_DEVICES.map((d) => ({ ...d })));
+    },
+
+    voiceSettings: async () => {
+      await wait();
+      return ok(structuredClone(voiceSettings));
+    },
+
+    voiceSetSettings: async (next) => {
+      await wait();
+      const badGain = (v: number | null) => v !== null && (v < GAIN_MIN || v > GAIN_MAX);
+      if (badGain(next.inputGain) || badGain(next.outputVolume)) return err("invalidInput", "mock: gain out of range");
+      if (next.pttKey !== null && next.pttKey.trim() === "") return err("invalidInput", "mock: empty ptt key");
+      const known = (id: string | null) => id === null || MOCK_AUDIO_DEVICES.some((d) => d.id === id);
+      if (!known(next.inputDevice) || !known(next.outputDevice)) return err("notFound", "mock: audio device not found");
+      voiceSettings = structuredClone(next);
+      if (status.active) setStatus({ mode: next.mode });
+      return ok(null);
+    },
+
+    voiceStart: async () => {
+      await wait();
+      if (!room) return err("notFound", "mock: not in a room");
+      startVoice();
+      return ok(null);
+    },
+
+    voiceStop: async () => {
+      await wait();
+      stopVoice();
+      return ok(null);
+    },
+
+    voiceSetPeerMuted: async (peerId) => {
+      await wait();
+      if (!room?.peers.some((p) => p.peerId === peerId)) return err("notFound", `mock: peer ${peerId} not found`);
+      return ok(null);
+    },
+
+    voiceSetPeerVolume: async (peerId, volume) => {
+      await wait();
+      const peer = room?.peers.find((p) => p.peerId === peerId);
+      if (!peer) return err("notFound", `mock: peer ${peerId} not found`);
+      if (volume !== null && (volume < GAIN_MIN || volume > GAIN_MAX)) return err("invalidInput", "mock: volume out of range");
+      voiceSettings = withPeerVolume(voiceSettings, peer, volume ?? 1);
+      return ok(null);
+    },
+
+    voiceSetSelfMuted: async (muted) => {
+      await wait();
+      setStatus({ selfMuted: muted });
+      return ok(null);
+    },
+
+    voiceStatus: async () => {
+      await wait();
+      return ok({ ...status });
+    },
+
+    voiceMicTest: async (enabled) => {
+      await wait();
+      if (micTimer) clearInterval(micTimer);
+      micTimer = null;
+      if (enabled) {
+        let i = 0;
+        micTimer = setInterval(() => {
+          i += 1;
+          const level = mockMicLevel(i);
+          bus.emit("voiceSpeaking", { peerId: SELF_PEER_ID, speaking: level > 0.3, level });
+        }, tickMs);
+      } else {
+        bus.emit("voiceSpeaking", { peerId: SELF_PEER_ID, speaking: false, level: 0 });
+      }
+      setStatus({ micTest: enabled });
+      return ok(null);
+    },
   };
 }
+
+/** Deterministic "voice" level 0..1 for the mic test meter. */
+export function mockMicLevel(step: number): number {
+  const v = Math.abs(Math.sin(step * 0.7)) * (step % 5 === 0 ? 0.2 : 0.9);
+  return Math.round(v * 100) / 100;
+}
+
+export const MOCK_AUDIO_DEVICES: readonly AudioDevice[] = [
+  { id: "in-default", name: "Microphone (Realtek Audio)", direction: "input", isDefault: true },
+  { id: "in-usb", name: "USB Headset Mic", direction: "input", isDefault: false },
+  { id: "out-default", name: "Speakers (Realtek Audio)", direction: "output", isDefault: true },
+  { id: "out-usb", name: "USB Headset", direction: "output", isDefault: false },
+];
+
+export const defaultVoiceSettings = (): VoiceSettings => ({
+  mode: "pushToTalk",
+  inputDevice: null,
+  outputDevice: null,
+  pttKey: "KeyV",
+  inputGain: 1,
+  outputVolume: 1,
+  noiseSuppression: true,
+  peerVolumes: {},
+});

@@ -22,7 +22,7 @@ describe("mock commands", () => {
 
   it("falls back to notImplemented for every other command", async () => {
     const api = createMockCommands();
-    const res = await api.voiceDevices();
+    const res = await api.javaList();
     expect(res.status).toBe("error");
     expect(() => unwrap(res)).toThrow(ApiError);
   });

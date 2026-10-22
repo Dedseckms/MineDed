@@ -51,6 +51,12 @@ body {
   user-select: none;
 }
 
+/* Overlay window (#/overlay): transparent window, the panel draws its own background. */
+:root[data-overlay="true"],
+:root[data-overlay="true"] body {
+  background: transparent;
+}
+
 input,
 textarea,
 .selectable {
