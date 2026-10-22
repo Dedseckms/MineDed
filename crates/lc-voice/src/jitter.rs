@@ -12,6 +12,8 @@ pub const TARGET: usize = 2;
 pub const MAX_BUFFERED: usize = 8;
 /// Packets further than this ahead of the playout point re-anchor the stream.
 const MAX_AHEAD: i16 = 50;
+/// Pops a lone prebuffered packet waits before playout starts anyway.
+const MAX_WAITS: u32 = 3;
 /// Concealed frames before the stream is considered silent.
 const PLC_MAX: u32 = 3;
 
@@ -33,6 +35,8 @@ pub struct JitterBuffer {
     next: Option<u16>,
     playing: bool,
     missing: u32,
+    /// Pops spent prebuffering a lone packet.
+    waits: u32,
 }
 
 impl JitterBuffer {
@@ -56,11 +60,12 @@ impl JitterBuffer {
         };
         let d = seq.wrapping_sub(next) as i16;
         if d < 0 {
-            // While idle a packet from "the past" means the sender restarted
-            // (or is a reordered start of a spurt): re-anchor.
-            if !self.playing && self.buffered() == 0 {
+            // While idle, a packet from "the past" is either a reordered start
+            // of the spurt (keep both) or a restarted sender (re-anchor; any
+            // stale prebuffered packet is discarded).
+            if !self.playing && (self.buffered() == 0 || d <= -(MAX_AHEAD)) {
                 self.anchor(seq, payload);
-            } else if !self.playing && d > -(MAX_AHEAD) {
+            } else if !self.playing {
                 for _ in 0..(-d) {
                     self.slots.push_front(None);
                 }
@@ -92,6 +97,7 @@ impl JitterBuffer {
         self.next = Some(seq);
         self.playing = false;
         self.missing = 0;
+        self.waits = 0;
     }
 
     fn advance(&mut self) -> Option<Vec<u8>> {
@@ -105,8 +111,14 @@ impl JitterBuffer {
     /// Next 20 ms frame to play.
     pub fn pop(&mut self) -> Playout {
         if !self.playing {
-            if self.slots.len() >= TARGET && self.buffered() > 0 {
+            if self.buffered() == 0 {
+                return Playout::Silence;
+            }
+            self.waits += 1;
+            // A lone packet does not wait forever for its successor.
+            if self.slots.len() >= TARGET || self.waits > MAX_WAITS {
                 self.playing = true;
+                self.waits = 0;
             } else {
                 return Playout::Silence;
             }
@@ -230,6 +242,30 @@ mod tests {
         jb.push(30_000, p(9));
         jb.push(30_001, p(10));
         assert_eq!(jb.pop(), Playout::Packet(p(9)));
+    }
+
+    #[test]
+    fn stale_packet_then_restarted_sender() {
+        // Regression (qa B2): stale seq from the previous stream, then the
+        // sender restarts at a lower seq.
+        let mut jb = JitterBuffer::new();
+        jb.push(1453, p(0));
+        let mut played = 0;
+        for s in 1000..1010u16 {
+            jb.push(s, p(s as u8));
+            if matches!(jb.pop(), Playout::Packet(_)) {
+                played += 1;
+            }
+        }
+        assert!(played >= 8, "{played}");
+    }
+
+    #[test]
+    fn lone_packet_does_not_wait_forever() {
+        let mut jb = JitterBuffer::new();
+        jb.push(7, p(7));
+        let out = drain(&mut jb, 5);
+        assert!(out.contains(&Playout::Packet(p(7))));
     }
 
     #[test]

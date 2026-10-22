@@ -83,7 +83,6 @@ struct Shared {
     /// Last status sent to the observer.
     status: Mutex<Option<VoiceStatus>>,
     speaker: u8,
-    seq_start: u16,
 }
 
 impl Shared {
@@ -242,7 +241,6 @@ impl CpalVoiceEngine {
             tracker: Mutex::new(SpeakingTracker::new()),
             status: Mutex::new(None),
             speaker: rnd as u8,
-            seq_start: (rnd >> 8) as u16,
         };
         Self {
             inner: Arc::new(Inner {
@@ -492,6 +490,9 @@ async fn tick_loop(
         .checked_sub(MIN_INTERVAL)
         .unwrap_or_else(Instant::now);
     let mut watchdog = Watchdog::new(Instant::now());
+    // Fresh sequence per start: peers re-anchor instead of treating the new
+    // stream as late packets of the previous one.
+    let seq_start = RandomState::new().hash_one(Instant::now()) as u16;
     loop {
         let (ctl, mic_test) = shared.control();
         let capturing = ctl.gate != Gate::Off || mic_test;
@@ -505,7 +506,7 @@ async fn tick_loop(
                     p.set_input_rate(rate);
                     p
                 }
-                None => match TxPipeline::new(rate, shared.speaker, shared.seq_start) {
+                None => match TxPipeline::new(rate, shared.speaker, seq_start) {
                     Ok(p) => pipeline.insert(p),
                     Err(e) => {
                         tracing::warn!(error = %e, "voice pipeline");
