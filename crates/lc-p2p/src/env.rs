@@ -1,0 +1,153 @@
+//! What rooms need from the rest of the launcher: the local player and the
+//! instance signature. `CoreRoomEnv` adapts the core/accounts services.
+
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
+
+use async_trait::async_trait;
+use lc_accounts::{AuthProvider, Secret, UserType};
+use lc_core::InstanceService;
+use lc_types::room::InstanceSig;
+use lc_types::{AppError, AppResult, InstanceId};
+use sha2::{Digest, Sha256};
+
+/// Local player shown to peers.
+#[derive(Debug, Clone)]
+pub struct Identity {
+    pub name: String,
+    pub uuid: Option<String>,
+    /// Yggdrasil access token for hub `Authorization: Bearer`; `None` for
+    /// offline accounts.
+    pub hub_token: Option<Secret>,
+}
+
+#[async_trait]
+pub trait RoomEnv: Send + Sync {
+    /// Signature guests must match (MC version, loader, mod set).
+    async fn instance_sig(&self, instance: InstanceId) -> AppResult<InstanceSig>;
+    /// Default account; falls back to an anonymous player when none is set up.
+    async fn identity(&self) -> AppResult<Identity>;
+}
+
+/// `RoomEnv` on top of `InstanceService` + `AuthProvider`. The instance
+/// service is attached after construction because core is built with the
+/// rooms launch contributor (construction cycle).
+pub struct CoreRoomEnv {
+    auth: Arc<dyn AuthProvider>,
+    instances: OnceLock<Arc<dyn InstanceService>>,
+}
+
+impl CoreRoomEnv {
+    pub fn new(auth: Arc<dyn AuthProvider>) -> Self {
+        Self {
+            auth,
+            instances: OnceLock::new(),
+        }
+    }
+
+    /// Call once core is built. Later calls are ignored.
+    pub fn attach_instances(&self, instances: Arc<dyn InstanceService>) {
+        let _ = self.instances.set(instances);
+    }
+}
+
+#[async_trait]
+impl RoomEnv for CoreRoomEnv {
+    async fn instance_sig(&self, instance: InstanceId) -> AppResult<InstanceSig> {
+        let svc = self
+            .instances
+            .get()
+            .ok_or_else(|| AppError::internal("rooms: instance service is not attached"))?;
+        let inst = svc.get(instance).await?;
+        let mods_hash = mods_hash(&svc.game_dir(instance).join("mods")).await?;
+        Ok(InstanceSig {
+            mc: inst.mc,
+            loader: inst.loader.kind,
+            loader_version: inst.loader.version,
+            mods_hash,
+        })
+    }
+
+    async fn identity(&self) -> AppResult<Identity> {
+        match self.auth.launch_auth(None).await {
+            Ok(a) => Ok(Identity {
+                name: a.name,
+                uuid: Some(a.uuid),
+                hub_token: (a.user_type == UserType::Mojang).then_some(a.access_token),
+            }),
+            Err(e) => {
+                tracing::debug!(
+                    "rooms: no default account ({:?}), joining anonymously",
+                    e.code
+                );
+                Ok(Identity {
+                    name: "Player".into(),
+                    uuid: None,
+                    hub_token: None,
+                })
+            }
+        }
+    }
+}
+
+/// SHA-256 (hex) over the sorted SHA-256 hashes of enabled mod jars
+/// (`mods/*.jar`), one per line. A missing folder hashes like an empty one.
+pub async fn mods_hash(mods_dir: &Path) -> AppResult<String> {
+    let mut hashes = Vec::new();
+    match tokio::fs::read_dir(mods_dir).await {
+        Ok(mut rd) => {
+            while let Some(entry) = rd.next_entry().await? {
+                let path = entry.path();
+                let is_jar = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("jar"));
+                if !is_jar || !entry.file_type().await?.is_file() {
+                    continue;
+                }
+                let bytes = tokio::fs::read(&path).await?;
+                hashes.push(hex::encode(Sha256::digest(&bytes)));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    hashes.sort();
+    let mut h = Sha256::new();
+    for x in &hashes {
+        h.update(x.as_bytes());
+        h.update(b"\n");
+    }
+    Ok(hex::encode(h.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mods_hash_ignores_order_and_non_jars() {
+        let base = std::env::temp_dir().join(format!("lc-p2p-mods-{}", uuid::Uuid::new_v4()));
+        let a = base.join("a");
+        let b = base.join("b");
+        for d in [&a, &b] {
+            tokio::fs::create_dir_all(d).await.unwrap();
+        }
+        tokio::fs::write(a.join("x.jar"), b"one").await.unwrap();
+        tokio::fs::write(a.join("y.JAR"), b"two").await.unwrap();
+        tokio::fs::write(a.join("z.jar.disabled"), b"off")
+            .await
+            .unwrap();
+        tokio::fs::write(b.join("renamed.jar"), b"two")
+            .await
+            .unwrap();
+        tokio::fs::write(b.join("other.jar"), b"one").await.unwrap();
+        let ha = mods_hash(&a).await.unwrap();
+        assert_eq!(ha, mods_hash(&b).await.unwrap());
+        tokio::fs::write(b.join("extra.jar"), b"3").await.unwrap();
+        assert_ne!(ha, mods_hash(&b).await.unwrap());
+        let missing = mods_hash(&base.join("nope")).await.unwrap();
+        assert_eq!(missing, hex::encode(Sha256::digest(b"")));
+        let _ = tokio::fs::remove_dir_all(&base).await;
+    }
+}
