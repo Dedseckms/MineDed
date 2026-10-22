@@ -318,6 +318,7 @@ async fn join_room_flow() {
     assert_eq!(v["roomId"], room["roomId"]);
     assert_eq!(v["hostEndpointId"], "hostendpoint1");
     assert_eq!(v["sig"]["loader"], "fabric");
+    assert_eq!(v["kind"], "game"); // default when omitted on create
     assert_eq!(v["authMode"], "open");
     assert_eq!(v["passwordProtected"], true);
 
@@ -365,6 +366,77 @@ async fn join_room_flow() {
     )
     .await;
     assert_eq!(st, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn voice_room_without_sig() {
+    let app = app();
+    // Game rooms (explicit or default kind) still require sig.
+    for kind in [json!("game"), Value::Null] {
+        let mut body = json!({"endpointId": "h1", "authMode": "open"});
+        if !kind.is_null() {
+            body["kind"] = kind;
+        }
+        let (st, _, v) = call(
+            &app,
+            post_json("/api/v1/rooms", Some("alice"), "10.11.0.1", body),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+        assert_app_error(&v, "invalidInput");
+    }
+    // Unknown kind is rejected.
+    let body = json!({"endpointId": "h1", "kind": "video", "authMode": "open"});
+    let (st, _, v) = call(
+        &app,
+        post_json("/api/v1/rooms", Some("alice"), "10.11.0.1", body),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_app_error(&v, "invalidInput");
+
+    // Voice room: no sig on create; join returns kind=voice and no sig key.
+    // A sig sent anyway is dropped. Same anonymous/open rules as game rooms.
+    for (i, body) in [
+        json!({"endpointId": "h1", "kind": "voice", "authMode": "open", "maxPeers": 3}),
+        json!({"endpointId": "h2", "kind": "voice", "authMode": "open",
+               "sig": {"mc": "1.21.1", "loader": "vanilla", "modsHash": ""}}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (st, _, room) = call(
+            &app,
+            post_json("/api/v1/rooms", None, &format!("10.11.1.{i}"), body),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED, "{room}");
+        let uri = format!("/api/v1/rooms/{}/join", room["code"].as_str().unwrap());
+        let (st, _, j) = call(
+            &app,
+            post_json(&uri, None, "10.11.2.1", json!({"endpointId": "g"})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{j}");
+        assert_eq!(j["kind"], "voice");
+        assert!(j.as_object().unwrap().get("sig").is_none(), "{j}");
+        for k in [
+            "roomId",
+            "peerToken",
+            "hostEndpointId",
+            "authMode",
+            "relayUrls",
+            "passwordProtected",
+        ] {
+            assert!(!j[k].is_null(), "missing {k}: {j}");
+        }
+    }
+
+    // Yggdrasil voice room still requires a bearer to create.
+    let body = json!({"endpointId": "h3", "kind": "voice", "authMode": "yggdrasil"});
+    let (st, _, v) = call(&app, post_json("/api/v1/rooms", None, "10.11.3.1", body)).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    assert_app_error(&v, "authRequired");
 }
 
 #[tokio::test]

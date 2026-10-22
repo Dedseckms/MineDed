@@ -25,6 +25,15 @@ pub enum AuthMode {
     Open,
 }
 
+/// `game` rooms carry an instance signature and a game tunnel; `voice` = chat/voice only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoomKind {
+    #[default]
+    Game,
+    Voice,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceSig {
@@ -49,7 +58,11 @@ pub enum Loader {
 #[serde(rename_all = "camelCase")]
 pub struct CreateRoom {
     pub endpoint_id: String,
-    pub sig: InstanceSig,
+    #[serde(default)]
+    pub kind: RoomKind,
+    /// Required for `game` rooms; ignored (dropped) for `voice` rooms.
+    #[serde(default)]
+    pub sig: Option<InstanceSig>,
     pub auth_mode: AuthMode,
     #[serde(default = "default_max_peers")]
     pub max_peers: u8,
@@ -62,12 +75,19 @@ fn default_max_peers() -> u8 {
 }
 
 impl CreateRoom {
-    pub fn validate(&self) -> Result<(), ApiError> {
+    /// Validates fields and normalizes `sig` (dropped for voice rooms).
+    pub fn validate(&mut self) -> Result<(), ApiError> {
         validate_endpoint_id(&self.endpoint_id)?;
         if !(2..=16).contains(&self.max_peers) {
             return Err(ApiError::invalid_input("maxPeers must be 2..=16"));
         }
-        let s = &self.sig;
+        if self.kind == RoomKind::Voice {
+            self.sig = None;
+            return Ok(());
+        }
+        let Some(s) = &self.sig else {
+            return Err(ApiError::invalid_input("sig is required for game rooms"));
+        };
         let lv = s.loader_version.as_deref().unwrap_or("");
         if s.mc.is_empty() || s.mc.len() > 64 || s.mods_hash.len() > 128 || lv.len() > 64 {
             return Err(ApiError::invalid_input("sig fields are empty or too long"));
@@ -161,7 +181,8 @@ pub struct Room {
     pub code: String,
     pub owner: String,
     pub host: Peer,
-    pub sig: InstanceSig,
+    pub kind: RoomKind,
+    pub sig: Option<InstanceSig>,
     pub auth_mode: AuthMode,
     pub max_peers: u8,
     pub password_protected: bool,
@@ -194,7 +215,8 @@ pub struct Joined {
     pub room_id: Uuid,
     pub peer_token: String,
     pub host_endpoint_id: String,
-    pub sig: InstanceSig,
+    pub kind: RoomKind,
+    pub sig: Option<InstanceSig>,
     pub auth_mode: AuthMode,
     pub password_protected: bool,
 }
@@ -311,6 +333,7 @@ impl RoomStore {
                 code,
                 owner: who.user_id.clone(),
                 host,
+                kind: req.kind,
                 sig: req.sig,
                 auth_mode: req.auth_mode,
                 max_peers: req.max_peers,
@@ -411,6 +434,7 @@ impl RoomStore {
             room_id: room.id,
             peer_token: token,
             host_endpoint_id: room.host.endpoint_id.clone(),
+            kind: room.kind,
             sig: room.sig.clone(),
             auth_mode: room.auth_mode,
             password_protected: room.password_protected,
