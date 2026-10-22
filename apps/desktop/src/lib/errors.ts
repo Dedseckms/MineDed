@@ -17,6 +17,7 @@ const ERROR_CODE_MAP = {
   invalidInput: true,
   conflict: true,
   permissionDenied: true,
+  rateLimited: true,
   notImplemented: true,
   internal: true,
 } satisfies Record<ErrorCode, true>;

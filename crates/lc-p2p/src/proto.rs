@@ -20,11 +20,19 @@ pub enum ControlMsg {
         protocol: u32,
         name: String,
         uuid: Option<String>,
-        /// Hub-issued token proving room membership.
+        /// Hub-issued token proving room membership; the host verifies it with
+        /// its `hostToken` (format in `server/openapi/hub.yaml`, joinRoom).
         peer_token: String,
+        /// Base64url HMAC-SHA256(key = password, msg = TLS-exported keying
+        /// material, context = room id). `None` for rooms without a password.
+        #[serde(default)]
+        password_proof: Option<String>,
     },
     Welcome {
         peers: Vec<String>,
+        /// Display names, same order as `peers`.
+        #[serde(default)]
+        peer_names: Vec<String>,
     },
     Ping {
         nonce: u64,
@@ -36,6 +44,11 @@ pub enum ControlMsg {
         id: String,
         text: String,
         sent_at: String,
+        /// Original sender when the host forwards a guest's message.
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        from_name: Option<String>,
     },
     VoiceState {
         speaking: bool,
