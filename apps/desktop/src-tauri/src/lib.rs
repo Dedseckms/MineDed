@@ -34,6 +34,7 @@ fn build_state(app: &tauri::AppHandle) -> Result<state::AppState, Box<dyn std::e
         settings_store,
         &settings,
         observer.clone(),
+        observer.clone(),
         observer,
     )?)
 }
