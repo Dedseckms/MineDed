@@ -130,6 +130,53 @@ mod tests {
     }
 
     #[test]
+    fn codec_fuzz_never_panics_in_debug() {
+        let mut seed = 0x1234_5678u32;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let mut panics = 0;
+        let mut enc = OpusEncoder::new().unwrap();
+        let mut dec = OpusDecoder::new().unwrap();
+        let mut out = [0f32; FRAME];
+        for k in 0..600 {
+            let amp = (rnd() % 1000) as f32 / 1000.0;
+            let frame: Vec<f32> = (0..FRAME)
+                .map(|i| {
+                    let noise = (rnd() % 2001) as f32 / 1000.0 - 1.0;
+                    if k % 3 == 0 {
+                        noise * amp
+                    } else {
+                        amp * ((i * (k % 50 + 1)) as f32 * 0.01).sin()
+                    }
+                })
+                .collect();
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let p = enc.encode(&frame).unwrap().to_vec();
+                let mut p2 = p.clone();
+                if k % 5 == 0 && p2.len() > 2 {
+                    let idx = (rnd() as usize) % (p2.len() - 1) + 1;
+                    p2[idx] ^= rnd() as u8;
+                }
+                dec.decode(&p2, &mut out);
+                if k % 7 == 0 {
+                    dec.conceal(&mut out);
+                    dec.decode_fec(&p, &mut out);
+                }
+            }));
+            if r.is_err() {
+                panics += 1;
+                enc = OpusEncoder::new().unwrap();
+                dec = OpusDecoder::new().unwrap();
+            }
+        }
+        assert_eq!(panics, 0);
+    }
+
+    #[test]
     fn plc_and_garbage_do_not_panic() {
         let mut dec = OpusDecoder::new().unwrap();
         let mut out = [1f32; FRAME];

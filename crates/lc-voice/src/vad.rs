@@ -1,5 +1,10 @@
-//! Energy VAD: frame RMS against a minimum-statistics noise floor, plus
-//! hangover so word endings are not clipped.
+//! Energy VAD: frame RMS against a tracked noise floor, plus hangover so word
+//! endings are not clipped.
+//!
+//! The floor is seeded from the quietest of the first frames, follows quieter
+//! frames immediately and rises only slowly (1 dB/s), so a steady voice or
+//! sound keeps the gate open for a long time while constant background noise
+//! is still learned eventually.
 
 use crate::dsp::{dbfs, rms};
 
@@ -9,26 +14,25 @@ const MARGIN_DB: f32 = 12.0;
 const MIN_THRESHOLD_DB: f32 = -50.0;
 /// Frames kept open after speech stops (300 ms).
 pub const HANGOVER: u32 = 15;
-/// Noise floor = minimum frame level over the last `BLOCKS × BLOCK` frames (3 s).
-const BLOCK: u32 = 50;
-const BLOCKS: usize = 3;
+/// Floor seeding window (500 ms).
+const SEED_FRAMES: u32 = 25;
+/// Highest initial floor.
+const SEED_MAX_DB: f32 = -40.0;
+/// Upward drift of the floor per 20 ms frame (1 dB/s).
+const FLOOR_RISE_DB: f32 = 0.02;
 
 #[derive(Debug, Clone)]
 pub struct Vad {
-    block_mins: [f32; BLOCKS],
-    block_idx: usize,
-    cur_min: f32,
-    cur_len: u32,
+    floor_db: f32,
+    seeded: u32,
     hang: u32,
 }
 
 impl Default for Vad {
     fn default() -> Self {
         Self {
-            block_mins: [-100.0; BLOCKS],
-            block_idx: 0,
-            cur_min: f32::MAX,
-            cur_len: 0,
+            floor_db: 0.0,
+            seeded: 0,
             hang: 0,
         }
     }
@@ -39,26 +43,25 @@ impl Vad {
         Self::default()
     }
 
-    fn floor(&self) -> f32 {
-        self.block_mins.iter().copied().fold(self.cur_min, f32::min)
-    }
-
     /// Feeds one frame, returns whether the gate is open.
     pub fn update(&mut self, frame: &[f32]) -> bool {
         let db = dbfs(rms(frame));
-        let threshold = (self.floor() + MARGIN_DB).max(MIN_THRESHOLD_DB);
-        let speech = db > threshold;
-
-        self.cur_min = self.cur_min.min(db);
-        self.cur_len += 1;
-        if self.cur_len >= BLOCK {
-            self.block_mins[self.block_idx] = self.cur_min;
-            self.block_idx = (self.block_idx + 1) % BLOCKS;
-            self.cur_min = f32::MAX;
-            self.cur_len = 0;
+        if self.seeded < SEED_FRAMES {
+            // Capped so talking right from the start is not taken for noise.
+            let seed = db.min(SEED_MAX_DB);
+            self.floor_db = if self.seeded == 0 {
+                seed
+            } else {
+                self.floor_db.min(seed)
+            };
+            self.seeded += 1;
+        } else if db < self.floor_db {
+            self.floor_db = db;
+        } else {
+            self.floor_db += FLOOR_RISE_DB;
         }
-
-        if speech {
+        let threshold = (self.floor_db + MARGIN_DB).max(MIN_THRESHOLD_DB);
+        if db > threshold {
             self.hang = HANGOVER;
             true
         } else if self.hang > 0 {
@@ -94,17 +97,30 @@ mod tests {
     }
 
     #[test]
-    fn steady_noise_is_learned() {
+    fn steady_voice_keeps_gate_open() {
+        let mut vad = Vad::new();
+        for _ in 0..50 {
+            vad.update(&tone(0.001));
+        }
+        // 20 s of steady loud sound (humming, singing) stays open.
+        let open = (0..1000).filter(|_| vad.update(&tone(0.3))).count();
+        assert_eq!(open, 1000);
+    }
+
+    #[test]
+    fn talking_from_the_first_frame_opens() {
+        let mut vad = Vad::new();
+        let open = (0..100).filter(|_| vad.update(&tone(0.3))).count();
+        assert_eq!(open, 100);
+    }
+
+    #[test]
+    fn background_noise_from_start_is_learned() {
         let mut vad = Vad::new();
         let noise = tone(0.02); // ~-37 dBFS fan noise
-        assert!(vad.update(&noise));
-        for _ in 0..(BLOCK as usize * (BLOCKS + 1)) {
-            vad.update(&noise);
-        }
-        // After adaptation the noise no longer opens the gate…
-        let open = (0..50).filter(|_| vad.update(&noise)).count();
+        let open = (0..100).filter(|_| vad.update(&noise)).count();
         assert_eq!(open, 0);
-        // …but louder speech still does.
+        // Speech over the noise opens.
         assert!(vad.update(&tone(0.3)));
     }
 }

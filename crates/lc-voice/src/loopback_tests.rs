@@ -3,52 +3,60 @@
 
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use lc_p2p::DatagramTransport;
-use lc_types::AppResult;
-use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
 use crate::dsp::{rms, FRAME};
 use crate::engine::rx_loop;
 use crate::mixer::Mixer;
 use crate::tx::{Gate, TxControl, TxPipeline};
+use mock::pair;
 
-/// One side of an in-memory link; `send` lands in the other side's `recv`.
-struct MockLink {
-    me: String,
-    tx: mpsc::UnboundedSender<(String, Vec<u8>)>,
-    rx: AsyncMutex<mpsc::UnboundedReceiver<(String, Vec<u8>)>>,
-}
+pub(crate) mod mock {
+    use std::sync::Arc;
 
-fn pair() -> (Arc<MockLink>, Arc<MockLink>) {
-    let (atx, arx) = mpsc::unbounded_channel();
-    let (btx, brx) = mpsc::unbounded_channel();
-    let a = MockLink {
-        me: "peer-a".into(),
-        tx: btx,
-        rx: AsyncMutex::new(arx),
-    };
-    let b = MockLink {
-        me: "peer-b".into(),
-        tx: atx,
-        rx: AsyncMutex::new(brx),
-    };
-    (Arc::new(a), Arc::new(b))
-}
+    use async_trait::async_trait;
+    use lc_p2p::DatagramTransport;
+    use lc_types::AppResult;
+    use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
-#[async_trait]
-impl DatagramTransport for MockLink {
-    async fn send(&self, _to: Option<&str>, payload: &[u8]) -> AppResult<()> {
-        let _ = self.tx.send((self.me.clone(), payload.to_vec()));
-        Ok(())
+    /// One side of an in-memory link; `send` lands in the other side's
+    /// `recv`. Dropping one side closes the other's `recv`.
+    pub struct MockLink {
+        me: String,
+        tx: mpsc::UnboundedSender<(String, Vec<u8>)>,
+        rx: AsyncMutex<mpsc::UnboundedReceiver<(String, Vec<u8>)>>,
     }
 
-    async fn recv(&self) -> Option<(String, Vec<u8>)> {
-        self.rx.lock().await.recv().await
+    pub fn pair() -> (Arc<MockLink>, Arc<MockLink>) {
+        let (atx, arx) = mpsc::unbounded_channel();
+        let (btx, brx) = mpsc::unbounded_channel();
+        let a = MockLink {
+            me: "peer-a".into(),
+            tx: btx,
+            rx: AsyncMutex::new(arx),
+        };
+        let b = MockLink {
+            me: "peer-b".into(),
+            tx: atx,
+            rx: AsyncMutex::new(brx),
+        };
+        (Arc::new(a), Arc::new(b))
     }
 
-    fn max_datagram_size(&self) -> usize {
-        1200
+    #[async_trait]
+    impl DatagramTransport for MockLink {
+        async fn send(&self, _to: Option<&str>, payload: &[u8]) -> AppResult<()> {
+            let _ = self.tx.send((self.me.clone(), payload.to_vec()));
+            Ok(())
+        }
+
+        async fn recv(&self) -> Option<(String, Vec<u8>)> {
+            self.rx.lock().await.recv().await
+        }
+
+        fn max_datagram_size(&self) -> usize {
+            1200
+        }
     }
 }
 
