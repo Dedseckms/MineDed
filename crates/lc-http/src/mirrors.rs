@@ -5,18 +5,36 @@ use url::Url;
 /// BMCLAPI root (https://bmclapidoc.bangbang93.com).
 pub const BMCLAPI: &str = "https://bmclapi2.bangbang93.com";
 
-/// Maps an official Mojang URL onto BMCLAPI, or `None` for other hosts.
+/// `(host, path prefix replaced, BMCLAPI prefix)`; see BMCLAPI docs.
+const BMCLAPI_MAP: &[(&str, &str, &str)] = &[
+    ("piston-meta.mojang.com", "", ""),
+    ("launchermeta.mojang.com", "", ""),
+    ("piston-data.mojang.com", "", ""),
+    ("launcher.mojang.com", "", ""),
+    ("libraries.minecraft.net", "", "/maven"),
+    ("resources.download.minecraft.net", "", "/assets"),
+    ("meta.fabricmc.net", "", "/fabric-meta"),
+    ("maven.fabricmc.net", "", "/maven"),
+    ("maven.minecraftforge.net", "", "/maven"),
+    ("files.minecraftforge.net", "/maven", "/maven"),
+    ("maven.neoforged.net", "/releases", "/maven"),
+];
+
+/// Maps an official Mojang / Fabric / Forge / NeoForge URL onto BMCLAPI, or
+/// `None` for other hosts.
 pub fn bmclapi_for(original: &Url) -> Option<Url> {
-    let prefix = match original.host_str()? {
-        "piston-meta.mojang.com"
-        | "launchermeta.mojang.com"
-        | "piston-data.mojang.com"
-        | "launcher.mojang.com" => "",
-        "libraries.minecraft.net" => "/maven",
-        "resources.download.minecraft.net" => "/assets",
-        _ => return None,
-    };
-    let mut url = Url::parse(&format!("{BMCLAPI}{prefix}{}", original.path())).ok()?;
+    let host = original.host_str()?;
+    let path = original.path();
+    let (_, strip, prefix) = BMCLAPI_MAP.iter().find(|(h, strip, _)| {
+        *h == host
+            && (strip.is_empty()
+                || path == *strip
+                || path
+                    .strip_prefix(strip)
+                    .is_some_and(|rest| rest.starts_with('/')))
+    })?;
+    let rest = &path[strip.len()..];
+    let mut url = Url::parse(&format!("{BMCLAPI}{prefix}{rest}")).ok()?;
     url.set_query(original.query());
     Some(url)
 }
@@ -87,11 +105,34 @@ mod tests {
                 "https://resources.download.minecraft.net/ab/abcdef?x=1",
                 "https://bmclapi2.bangbang93.com/assets/ab/abcdef?x=1",
             ),
+            (
+                "https://meta.fabricmc.net/v2/versions/loader/1.21.1",
+                "https://bmclapi2.bangbang93.com/fabric-meta/v2/versions/loader/1.21.1",
+            ),
+            (
+                "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.16.0/a.jar",
+                "https://bmclapi2.bangbang93.com/maven/net/fabricmc/fabric-loader/0.16.0/a.jar",
+            ),
+            (
+                "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
+                "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/maven-metadata.xml",
+            ),
+            (
+                "https://files.minecraftforge.net/maven/net/minecraftforge/forge/x.jar",
+                "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/x.jar",
+            ),
+            (
+                "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.1/a.jar",
+                "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/21.1.1/a.jar",
+            ),
         ];
         for (from, to) in cases {
             assert_eq!(bmclapi_for(&u(from)).unwrap().as_str(), to, "{from}");
         }
         assert!(bmclapi_for(&u("https://api.modrinth.com/v2/project/x")).is_none());
+        // Prefix must match on a segment boundary.
+        assert!(bmclapi_for(&u("https://maven.neoforged.net/releasesX/a")).is_none());
+        assert!(bmclapi_for(&u("https://files.minecraftforge.net/other/a")).is_none());
         // Modrinth/CurseForge have no mirrors: only `Route::Auto` applies.
         for host in [
             "api.modrinth.com",

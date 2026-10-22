@@ -1,0 +1,3 @@
+# Sidecar executables are fetched by fetch-mihomo.{ps1,sh}, never committed.
+mihomo-*
+!fetch-mihomo.*

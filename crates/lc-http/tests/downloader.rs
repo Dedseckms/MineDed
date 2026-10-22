@@ -14,7 +14,9 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use lc_http::{DownloadReq, Downloader, DownloaderConfig, HttpDownloader, ResourceKind};
+use lc_http::{
+    DownloadReq, Downloader, DownloaderConfig, HttpDownloader, ResourceKind, SystemProxyMode,
+};
 use lc_runtime::{CancelToken, ProgressSink};
 use lc_types::settings::{ProxyCfg, ProxyKind};
 use lc_types::task::TaskEvent;
@@ -233,6 +235,7 @@ fn downloader() -> HttpDownloader {
         backoff_base: Duration::from_millis(5),
         connect_timeout: Duration::from_secs(5),
         read_timeout: Duration::from_secs(5),
+        system_proxy: SystemProxyMode::Off,
         ..DownloaderConfig::default()
     })
     .unwrap()
@@ -554,6 +557,7 @@ async fn per_host_limit_is_respected() {
     let d = HttpDownloader::new(DownloaderConfig {
         max_parallel: 16,
         max_per_host: 2,
+        system_proxy: SystemProxyMode::Off,
         ..DownloaderConfig::default()
     })
     .unwrap();
@@ -735,6 +739,7 @@ async fn get_bytes_rejects_oversized_body() {
         max_body_bytes: 1000,
         attempts_per_url: 2,
         backoff_base: Duration::from_millis(5),
+        system_proxy: SystemProxyMode::Off,
         ..DownloaderConfig::default()
     })
     .unwrap();
