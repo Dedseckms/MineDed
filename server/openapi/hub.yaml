@@ -258,7 +258,8 @@ paths:
         Messages are JSON objects with a `t` field:
         - server → client: `peer_joined {peerId,name}`, `peer_left {peerId}`, `kick {peerId,reason}`,
           `chat {id,fromPeer,fromName,text,sentAt}`, `host_endpoint {endpointId}`, `closed {}`
-        - client → server: `chat {id,text}`, `ping {nonce}`
+        - client → server: `chat {id,text}`, `ping {nonce}`, `leave {}` (guest frees its slot),
+          `kick {peerId,reason}` (host only)
       security: []
       parameters:
         - { name: roomId, in: path, required: true, schema: { type: string, format: uuid } }
