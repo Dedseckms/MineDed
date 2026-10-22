@@ -25,13 +25,16 @@
 - `POST /api/v1/rooms` — Bearer обязателен, проверка `POST /authserver/validate` в Drasl
   (+ `GET /minecraftservices/minecraft/profile` для id/имени), кэш 60 с.
 - `POST /api/v1/rooms/{code}/join` — публичный для `authMode=open`, Bearer для `yggdrasil`.
+  Считаются только живые участники (WS открыт или ≤ 60 с после join без WS); `peerToken` =
+  `<exp>.<HMAC-SHA256(hostToken, …)>`, живёт 10 мин.
 - `DELETE /api/v1/rooms/{roomId}` — Bearer = Yggdrasil-токен владельца или `hostToken`.
-- `GET /api/v1/rooms/{roomId}/ws?token=` — presence + fallback-чат.
+- `GET /api/v1/rooms/{roomId}/ws?token=` — presence + fallback-чат; закрытие WS, `leave` или
+  `kick` от хоста освобождают место.
 - TTL комнаты 6 ч (`HUB_ROOM_TTL_SECS`), продлевается, пока хост подключён к WS;
   лимиты: 200 комнат всего, 3 на пользователя.
 - Rate limit по IP (из `X-Real-IP`, его перезаписывает Caddy): create 6/мин (burst 5),
-  join 20/мин (burst 10), ws 30/мин, delete 30/мин; чат 60 сообщений/мин на сокет. 429 +
-  `Retry-After`. `/mirrors`, `/skins*` пока 501.
+  join 20/мин (burst 10), ws 60/мин (burst 20), delete 30/мин; чат 60 сообщений/мин на сокет.
+  429 с кодом `rateLimited` + `Retry-After`. `/mirrors`, `/skins*` пока 501.
 
 ## iroh-relay
 

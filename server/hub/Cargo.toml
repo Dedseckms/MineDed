@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "hub"
 description = "Rooms, signaling, mirrors list and skin library API. Owner: server-ops. API contract: server/openapi/hub.yaml"
 version.workspace = true
@@ -17,6 +17,10 @@ uuid.workspace = true
 hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
 http-body-util.workspace = true
+# peerToken MAC (hub.yaml joinRoom).
+hmac = "0.12.1"
+sha2 = "0.10.9"
+base64 = "0.22.1"
 
 [dev-dependencies]
 tower.workspace = true

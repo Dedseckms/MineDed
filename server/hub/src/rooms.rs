@@ -91,6 +91,53 @@ pub struct Peer {
     pub token: String,
     pub endpoint_id: String,
     pub name: String,
+    /// Last (re)join; a guest without WS stays a member for [`JOIN_GRACE`].
+    joined_at: Instant,
+    /// Open WebSocket connections.
+    sockets: usize,
+}
+
+impl Peer {
+    fn is_live(&self, now: Instant) -> bool {
+        self.sockets > 0 || now.saturating_duration_since(self.joined_at) <= JOIN_GRACE
+    }
+}
+
+/// A guest that never connects the WS keeps its slot this long after join.
+pub const JOIN_GRACE: Duration = Duration::from_secs(60);
+/// `peerToken` lifetime (hub.yaml joinRoom).
+pub const PEER_TOKEN_TTL_SECS: u64 = 600;
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// `peerToken` = `<exp>.<base64url-nopad(HMAC-SHA256(hostToken,
+/// "lc-peer/1|roomId|endpointId|exp"))>`; the host verifies it offline.
+pub fn peer_token(host_token: &str, room_id: Uuid, endpoint_id: &str, exp: u64) -> String {
+    use base64::Engine;
+    let msg = format!("lc-peer/1|{room_id}|{endpoint_id}|{exp}");
+    let mac = hmac_sha256(host_token.as_bytes(), msg.as_bytes());
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac);
+    format!("{exp}.{b64}")
+}
+
+fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    // HMAC accepts keys of any length, so `new_from_slice` never fails.
+    Hmac::<sha2::Sha256>::new_from_slice(key)
+        .map(|mut m| {
+            m.update(msg);
+            m.finalize().into_bytes().to_vec()
+        })
+        .unwrap_or_default()
+}
+
+fn token_exp(token: &str) -> Option<u64> {
+    token.split_once('.')?.0.parse().ok()
 }
 
 #[derive(Debug)]
@@ -220,6 +267,8 @@ impl RoomStore {
             token: new_token("rh_"),
             endpoint_id: req.endpoint_id,
             name: who.name.clone(),
+            joined_at: Instant::now(),
+            sockets: 0,
         };
         let expires_at = SystemTime::now() + self.limits.ttl;
         let created = Created {
@@ -257,8 +306,20 @@ impl RoomStore {
         inner.rooms.get(id).map(|r| r.auth_mode)
     }
 
-    /// Joins by code. Re-joining with the same endpoint returns the same token.
+    /// Joins by code. Only live members count toward `maxPeers` (see [`Peer::is_live`]).
+    /// Re-joining with the same endpoint keeps the slot and issues a fresh token.
     pub fn join(&self, code: &str, endpoint_id: String, name: String) -> Result<Joined, ApiError> {
+        self.join_at(code, endpoint_id, name, Instant::now(), unix_now())
+    }
+
+    fn join_at(
+        &self,
+        code: &str,
+        endpoint_id: String,
+        name: String,
+        now: Instant,
+        unix: u64,
+    ) -> Result<Joined, ApiError> {
         let mut inner = self.lock();
         let id = *inner
             .by_code
@@ -268,8 +329,21 @@ impl RoomStore {
             .rooms
             .get_mut(&id)
             .ok_or_else(|| ApiError::not_found("room not found"))?;
-        let token = match room.peers.iter().find(|p| p.endpoint_id == endpoint_id) {
-            Some(p) => p.token.clone(),
+        // Stale guests (joined, never connected, grace over) free their slot.
+        room.peers
+            .retain(|p| p.is_live(now) || p.endpoint_id == endpoint_id);
+        let token = peer_token(
+            &room.host.token,
+            room.id,
+            &endpoint_id,
+            unix + PEER_TOKEN_TTL_SECS,
+        );
+        match room.peers.iter_mut().find(|p| p.endpoint_id == endpoint_id) {
+            Some(p) => {
+                p.token = token.clone();
+                p.joined_at = now;
+                p.name = name;
+            }
             None => {
                 if room.peers.len() + 1 >= usize::from(room.max_peers) {
                     return Err(
@@ -277,17 +351,16 @@ impl RoomStore {
                             .detail("maxPeers", room.max_peers.to_string()),
                     );
                 }
-                let peer = Peer {
+                room.peers.push(Peer {
                     peer_id: Uuid::new_v4(),
-                    token: new_token("rp_"),
+                    token: token.clone(),
                     endpoint_id,
                     name,
-                };
-                let t = peer.token.clone();
-                room.peers.push(peer);
-                t
+                    joined_at: now,
+                    sockets: 0,
+                });
             }
-        };
+        }
         Ok(Joined {
             room_id: room.id,
             peer_token: token,
@@ -338,6 +411,9 @@ impl RoomStore {
         let (p, is_host) = if room.host.token == token {
             (&room.host, true)
         } else {
+            if token_exp(token)? < unix_now() {
+                return None;
+            }
             (room.peers.iter().find(|p| p.token == token)?, false)
         };
         Some(Member {
@@ -349,15 +425,54 @@ impl RoomStore {
         })
     }
 
-    pub fn host_socket(&self, room_id: Uuid, connected: bool) {
+    /// Tracks a member's WS. Returns `false` if the member is gone (left/kicked/closed).
+    /// When a guest's last socket closes, the guest leaves and its slot is freed.
+    pub fn socket(&self, room_id: Uuid, peer_id: Uuid, is_host: bool, connected: bool) -> bool {
         let mut inner = self.lock();
-        if let Some(r) = inner.rooms.get_mut(&room_id) {
+        let Some(r) = inner.rooms.get_mut(&room_id) else {
+            return false;
+        };
+        if is_host {
             if connected {
                 r.host_sockets += 1;
             } else {
                 r.host_sockets = r.host_sockets.saturating_sub(1);
             }
+            return true;
         }
+        let Some(i) = r.peers.iter().position(|p| p.peer_id == peer_id) else {
+            return false;
+        };
+        if connected {
+            r.peers[i].sockets += 1;
+        } else {
+            r.peers[i].sockets = r.peers[i].sockets.saturating_sub(1);
+            if r.peers[i].sockets == 0 {
+                r.peers.remove(i);
+            }
+        }
+        true
+    }
+
+    /// Removes a guest (leave or host kick). Returns `true` if it was a member.
+    pub fn remove_peer(&self, room_id: Uuid, peer_id: Uuid) -> bool {
+        let mut inner = self.lock();
+        let Some(r) = inner.rooms.get_mut(&room_id) else {
+            return false;
+        };
+        let before = r.peers.len();
+        r.peers.retain(|p| p.peer_id != peer_id);
+        r.peers.len() != before
+    }
+
+    /// Live members including the host (for tests and diagnostics).
+    pub fn live_members(&self, room_id: Uuid) -> usize {
+        let now = Instant::now();
+        self.lock()
+            .rooms
+            .get(&room_id)
+            .map(|r| 1 + r.peers.iter().filter(|p| p.is_live(now)).count())
+            .unwrap_or(0)
     }
 
     /// Removes expired rooms. A room whose host is connected over WS is kept alive.
@@ -455,19 +570,91 @@ mod tests {
             StatusCode::TOO_MANY_REQUESTS
         );
 
-        let j1 = s.join(&a.code, "g1".into(), "G".into()).unwrap();
-        let j2 = s.join(&a.code, "g1".into(), "G".into()).unwrap();
-        assert_eq!(j1.peer_token, j2.peer_token);
+        // Re-join keeps the slot; a second guest does not fit (maxPeers=2 incl. host).
+        s.join(&a.code, "g1".into(), "G".into()).unwrap();
+        s.join(&a.code, "g1".into(), "G".into()).unwrap();
         let full = s.join(&a.code, "g2".into(), "G".into()).err().unwrap();
         assert_eq!(full.status, StatusCode::CONFLICT);
 
         // Host connected keeps the room alive past its deadline.
-        s.host_socket(a.room_id, true);
+        let host = s.member(a.room_id, &a.host_token).unwrap();
+        assert!(s.socket(a.room_id, host.peer_id, true, true));
         assert_eq!(s.reap_at(Instant::now() + Duration::from_secs(61)), 2);
         assert_eq!(s.len(), 1);
-        s.host_socket(a.room_id, false);
+        s.socket(a.room_id, host.peer_id, true, false);
         assert_eq!(s.reap_at(Instant::now() + Duration::from_secs(200)), 1);
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn peer_token_format_and_binding() {
+        let s = RoomStore::new(limits());
+        let a = s.create(req(), &who("a")).unwrap();
+        let j = s.join(&a.code, "guest1".into(), "G".into()).unwrap();
+        let (exp, mac) = j.peer_token.split_once('.').unwrap();
+        let exp: u64 = exp.parse().unwrap();
+        let now = unix_now();
+        assert!(exp >= now + PEER_TOKEN_TTL_SECS - 5 && exp <= now + PEER_TOKEN_TTL_SECS + 5);
+        assert_eq!(mac.len(), 43); // 32 bytes, base64url without padding
+        assert!(mac
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+        assert_eq!(
+            j.peer_token,
+            peer_token(&a.host_token, a.room_id, "guest1", exp)
+        );
+        assert_ne!(
+            j.peer_token,
+            peer_token(&a.host_token, a.room_id, "guest2", exp)
+        );
+        // RFC 4231 test case 2.
+        let kat: String = hmac_sha256(b"Jefe", b"what do ya want for nothing?")
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            kat,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        assert!(s.member(a.room_id, &j.peer_token).is_some());
+        assert!(s.member(a.room_id, "1.AAAA").is_none());
+    }
+
+    #[test]
+    fn only_live_members_count() {
+        let s = RoomStore::new(limits());
+        let a = s.create(req(), &who("a")).unwrap(); // maxPeers 2 = host + 1 guest
+        let t0 = Instant::now();
+        let u = unix_now();
+        // Join/leave x10 through the WS lifecycle never hits 409.
+        for i in 0..10 {
+            let j = s
+                .join_at(&a.code, format!("g{i}"), "G".into(), t0, u)
+                .unwrap();
+            let m = s.member(a.room_id, &j.peer_token).unwrap();
+            assert!(s.socket(a.room_id, m.peer_id, false, true));
+            assert_eq!(s.live_members(a.room_id), 2);
+            assert!(s.socket(a.room_id, m.peer_id, false, false)); // WS close frees the slot
+            assert_eq!(s.live_members(a.room_id), 1);
+        }
+        // Leave/kick frees the slot too.
+        let j = s.join_at(&a.code, "k".into(), "G".into(), t0, u).unwrap();
+        let m = s.member(a.room_id, &j.peer_token).unwrap();
+        assert!(s.remove_peer(a.room_id, m.peer_id));
+        assert!(s.member(a.room_id, &j.peer_token).is_none());
+        // Joined without WS: holds the slot for the grace period only.
+        s.join_at(&a.code, "idle".into(), "G".into(), t0, u)
+            .unwrap();
+        let busy = s.join_at(
+            &a.code,
+            "x".into(),
+            "G".into(),
+            t0 + Duration::from_secs(30),
+            u,
+        );
+        assert_eq!(busy.err().unwrap().status, StatusCode::CONFLICT);
+        let later = t0 + JOIN_GRACE + Duration::from_secs(1);
+        assert!(s.join_at(&a.code, "x".into(), "G".into(), later, u).is_ok());
     }
 
     #[test]

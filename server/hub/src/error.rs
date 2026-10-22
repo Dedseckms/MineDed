@@ -59,16 +59,10 @@ impl ApiError {
         Self::new(StatusCode::NOT_FOUND, "notFound", message)
     }
 
-    /// HTTP 429: no dedicated `ErrorCode` exists for rate limiting, so the code
-    /// is `permissionDenied` with `details.reason = "rateLimited"` and a `Retry-After` header.
+    /// HTTP 429, code `rateLimited`, with `details.retryAfter` and a `Retry-After` header.
     pub fn rate_limited(retry_after_secs: u64) -> Self {
-        let mut e = Self::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "permissionDenied",
-            "rate limited",
-        )
-        .detail("reason", "rateLimited")
-        .detail("retryAfter", retry_after_secs.to_string());
+        let mut e = Self::new(StatusCode::TOO_MANY_REQUESTS, "rateLimited", "rate limited")
+            .detail("retryAfter", retry_after_secs.to_string());
         e.retry_after = Some(retry_after_secs);
         e
     }
