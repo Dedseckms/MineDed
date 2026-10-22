@@ -118,6 +118,8 @@ struct PeerEntry {
     conn: Option<Connection>,
     /// Control stream writer (bounded).
     tx: Option<mpsc::Sender<String>>,
+    /// Host side, yggdrasil rooms: normalised uuid from the verified peer token.
+    ban_uuid: Option<String>,
 }
 
 #[derive(Default)]
@@ -553,21 +555,25 @@ impl P2pRooms {
         if protocol != PROTOCOL_VERSION {
             return reject(&conn, &mut send, reasons::PROTOCOL).await;
         }
-        let token_ok = wire::verify_peer_token(
+        let Some(token_uuid) = wire::verify_peer_token(
             &peer_token,
             host.host_token.expose(),
             s.room_id,
             &remote,
             unix_now(),
-        );
-        if !token_ok {
+        ) else {
             return reject(&conn, &mut send, reasons::BAD_TOKEN).await;
-        }
-        // Profile uuids are only meaningful when the server checks them.
-        let uuid_key = uuid
+        };
+        // Ban identity: the hub-verified uuid from the token (never Hello's),
+        // only in yggdrasil rooms where it means something.
+        let uuid_key = token_uuid
             .as_deref()
             .filter(|_| s.auth_mode == RoomAuthMode::Yggdrasil)
             .map(normalize_uuid);
+        let uuid = match (&uuid_key, token_uuid) {
+            (Some(_), Some(verified)) => Some(verified),
+            _ => uuid,
+        };
         let banned = {
             let b = lock(&host.banned);
             b.contains(&remote) || uuid_key.as_ref().is_some_and(|u| b.contains(u))
@@ -628,6 +634,7 @@ impl P2pRooms {
                     peer: peer.clone(),
                     conn: Some(conn.clone()),
                     tx: Some(tx),
+                    ban_uuid: uuid_key,
                 },
             );
             if !p.order.contains(&remote) {
@@ -741,10 +748,8 @@ impl P2pRooms {
         {
             let mut b = lock(&host.banned);
             b.insert(peer_id.to_owned());
-            if s.auth_mode == RoomAuthMode::Yggdrasil {
-                if let Some(u) = &entry.peer.uuid {
-                    b.insert(normalize_uuid(u));
-                }
+            if let Some(u) = &entry.ban_uuid {
+                b.insert(u.clone());
             }
         }
         if let Some(tx) = &entry.tx {
@@ -868,6 +873,7 @@ impl P2pRooms {
                 },
                 conn: Some(conn.clone()),
                 tx: Some(tx),
+                ban_uuid: None,
             },
         );
         apply_welcome(&mut peers, welcome.0, welcome.1, &my_id, &host_key);
@@ -1488,6 +1494,7 @@ fn apply_welcome(
                 },
                 conn: None,
                 tx: None,
+                ban_uuid: None,
             },
         );
     }
