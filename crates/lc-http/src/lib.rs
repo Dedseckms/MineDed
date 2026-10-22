@@ -9,8 +9,9 @@ pub mod mirrors;
 mod progress;
 mod route;
 mod stub;
+mod sysproxy;
 
-pub use config::{default_user_agent, DownloaderConfig};
+pub use config::{default_user_agent, DownloaderConfig, SystemProxyMode};
 pub use contract::{DownloadReq, Downloader, ResourceKind, Route};
 pub use downloader::HttpDownloader;
 pub use stub::StubDownloader;

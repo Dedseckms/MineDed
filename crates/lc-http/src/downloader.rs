@@ -5,7 +5,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use futures_util::{StreamExt, TryStreamExt};
@@ -19,14 +19,17 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Semaphore;
 use url::Url;
 
-use crate::config::{redacted_proxy, DownloaderConfig};
+use crate::config::{redacted_proxy, DownloaderConfig, SystemProxyMode};
 use crate::contract::{DownloadReq, Downloader, ResourceKind, Route};
 use crate::errors::{self, AttemptError};
 use crate::mirrors;
 use crate::progress::Progress;
 use crate::route::{self, HostMemory};
+use crate::sysproxy::{self, SystemProxy};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(8);
+/// How often the OS proxy settings are re-read.
+const SYSTEM_RECHECK: Duration = Duration::from_secs(15);
 const HASH_BUF: usize = 64 * 1024;
 /// Target of the client handed out for `Route::Proxied` while no proxy is
 /// configured: the discard port on loopback, so every request fails fast.
@@ -39,8 +42,11 @@ pub struct HttpDownloader {
     cfg: DownloaderConfig,
     /// Never uses a proxy (system/env proxies ignored too).
     direct: reqwest::Client,
-    /// Clients that depend on the manual proxy; swapped by `set_manual_proxy`.
+    /// Clients that depend on the effective proxy; rebuilt whenever a proxy
+    /// source changes (`set_vpn_proxy`, `set_manual_proxy`, OS settings).
     routed: RwLock<Routed>,
+    /// Inputs of `routed`. Lock order: `sources` before `routed`.
+    sources: Mutex<Sources>,
     /// Hosts that `Route::Auto` currently sends to the proxy first.
     memory: Arc<HostMemory>,
     /// `client(Route::Proxied)` without a proxy: every request fails.
@@ -55,10 +61,39 @@ pub struct HttpDownloader {
 
 #[derive(Clone)]
 struct Routed {
-    /// Every request through the manual proxy; `None` when none is set.
+    /// Every request through the effective proxy; `None` when none is set.
     proxy: Option<reqwest::Client>,
     /// Direct, except hosts remembered as "proxy first".
     auto: reqwest::Client,
+    /// Present when the effective proxy is the OS one: its bypass rules.
+    system: Option<Arc<SystemProxy>>,
+}
+
+impl Routed {
+    /// The proxy client for `url`, unless the target bypasses it.
+    fn proxy_for(&self, url: &Url) -> Option<reqwest::Client> {
+        if self.system.as_ref().is_some_and(|s| s.bypasses(url)) {
+            return None;
+        }
+        self.proxy.clone()
+    }
+}
+
+/// Proxy sources in priority order: VPN, manual, system.
+struct Sources {
+    vpn: Option<Url>,
+    manual: Option<ProxyCfg>,
+    system: Option<SystemProxy>,
+    /// Last OS proxy lookup (`SystemProxyMode::Detect` only).
+    system_checked: Option<Instant>,
+}
+
+/// Which source the effective proxy came from (for logs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxySource {
+    Vpn,
+    Manual,
+    System,
 }
 
 /// Which way one attempt goes.
@@ -83,10 +118,35 @@ impl HttpDownloader {
         cfg.max_parallel = cfg.max_parallel.max(1);
         cfg.max_per_host = cfg.max_per_host.clamp(1, cfg.max_parallel);
         cfg.attempts_per_url = cfg.attempts_per_url.max(1);
-        let proxy = cfg.proxy.take();
+        let (system, system_checked) = match &cfg.system_proxy {
+            SystemProxyMode::Detect => (sysproxy::detect(), Some(Instant::now())),
+            SystemProxyMode::Off => (None, None),
+            SystemProxyMode::Fixed(url) => (
+                Some(SystemProxy {
+                    url: url.clone(),
+                    bypass: Vec::new(),
+                }),
+                None,
+            ),
+        };
+        let mut sources = Sources {
+            vpn: None,
+            manual: cfg.proxy.take(),
+            system,
+            system_checked,
+        };
         let memory = Arc::new(HostMemory::new(cfg.proxy_first_ttl));
         let direct = build_client(&cfg, None)?;
-        let routed = build_routed(&cfg, proxy.as_ref(), &memory, &direct)?;
+        let routed = match build_routed(&cfg, &sources, &memory, &direct) {
+            Ok(r) => r,
+            // A broken OS proxy must not prevent startup.
+            Err(_) if sources.manual.is_none() => {
+                tracing::warn!("system proxy rejected; ignoring it");
+                sources.system = None;
+                build_routed(&cfg, &sources, &memory, &direct)?
+            }
+            Err(e) => return Err(e),
+        };
         let unconfigured = build_client(
             &cfg,
             Some(
@@ -102,6 +162,7 @@ impl HttpDownloader {
             proxied_warned: AtomicBool::new(false),
             direct,
             routed: RwLock::new(routed),
+            sources: Mutex::new(sources),
             memory,
             unconfigured,
             cfg,
@@ -113,8 +174,9 @@ impl HttpDownloader {
         self.prefer_mirrors.store(prefer, Ordering::Relaxed);
     }
 
-    /// `get_bytes` with an explicit route. `Route::Proxied` fails with
-    /// `Network` when no proxy is configured; `Route::Auto` without a proxy
+    /// `get_bytes` with an explicit route. The proxy is the built-in VPN,
+    /// else the manual proxy, else the OS system proxy. `Route::Proxied` fails
+    /// with `Network` when there is none; `Route::Auto` without a proxy
     /// behaves like `Route::Direct`.
     pub async fn get_bytes_via(
         &self,
@@ -146,16 +208,67 @@ impl HttpDownloader {
     }
 
     fn routed(&self) -> Routed {
+        self.refresh_system_proxy();
         self.routed
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
+    /// Re-reads the OS proxy at most every [`SYSTEM_RECHECK`] and rebuilds the
+    /// clients when it changed.
+    fn refresh_system_proxy(&self) {
+        if self.cfg.system_proxy != SystemProxyMode::Detect {
+            return;
+        }
+        let mut s = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+        if s.system_checked
+            .is_some_and(|t| t.elapsed() < SYSTEM_RECHECK)
+        {
+            return;
+        }
+        s.system_checked = Some(Instant::now());
+        let now = sysproxy::detect().filter(|p| url_target(&p.url).is_ok());
+        if now == s.system {
+            return;
+        }
+        let prev = std::mem::replace(&mut s.system, now);
+        if !self.apply(&s) {
+            s.system = prev;
+        }
+    }
+
+    /// Rebuilds the proxy-dependent clients from `s`. On failure (malformed
+    /// proxy) logs and keeps the previous clients; returns whether it applied.
+    fn apply(&self, s: &Sources) -> bool {
+        match build_routed(&self.cfg, s, &self.memory, &self.direct) {
+            Ok(routed) => {
+                *self.routed.write().unwrap_or_else(PoisonError::into_inner) = routed;
+                match effective(s) {
+                    Some((source, desc)) => {
+                        tracing::info!(?source, proxy = %desc, "proxy route updated");
+                    }
+                    None => tracing::info!("no proxy configured"),
+                }
+                true
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "proxy rejected; keeping previous route");
+                false
+            }
+        }
+    }
+
     /// Ordered `(leg, client)` pairs a request to `url` goes through.
     fn legs(&self, url: &Url, route: Route) -> AppResult<Vec<(Leg, reqwest::Client)>> {
-        let proxy = self.routed().proxy;
+        let routed = self.routed();
         let direct = (Leg::Direct, self.direct.clone());
+        let proxy = routed.proxy_for(url);
+        if proxy.is_none() && routed.proxy.is_some() {
+            // Target bypasses the OS proxy (loopback/LAN/bypass list): direct
+            // is the only route, even for `Proxied`.
+            return Ok(vec![direct]);
+        }
         Ok(match (route, proxy) {
             (Route::Direct, _) | (Route::Auto, None) => vec![direct],
             (Route::Proxied, Some(p)) => vec![(Leg::Proxy, p)],
@@ -634,7 +747,8 @@ impl Downloader for HttpDownloader {
 
     /// `Direct` never uses a proxy. `Auto` is direct except for hosts
     /// currently remembered as "proxy first". `Proxied` goes through the
-    /// manual proxy; without one, every request of the returned client fails.
+    /// effective proxy (VPN, else manual, else OS); without one, every request
+    /// of the returned client fails.
     fn client(&self, route: Route) -> reqwest::Client {
         match route {
             Route::Direct => self.direct.clone(),
@@ -665,17 +779,29 @@ impl Downloader for HttpDownloader {
     }
 
     fn set_manual_proxy(&self, proxy: Option<ProxyCfg>) {
-        match build_routed(&self.cfg, proxy.as_ref(), &self.memory, &self.direct) {
-            Ok(routed) => {
-                *self.routed.write().unwrap_or_else(PoisonError::into_inner) = routed;
-                match &proxy {
-                    Some(p) => tracing::info!(proxy = %redacted_proxy(p), "manual proxy applied"),
-                    None => tracing::info!("manual proxy cleared"),
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "manual proxy rejected; keeping previous client");
-            }
+        // Validate even when a higher-priority source hides it for now.
+        if let Some(Err(e)) = proxy.as_ref().map(proxy_target) {
+            tracing::warn!(error = %e, "manual proxy rejected; keeping previous one");
+            return;
+        }
+        let mut s = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+        let prev = std::mem::replace(&mut s.manual, proxy);
+        if !self.apply(&s) {
+            s.manual = prev;
+        }
+    }
+
+    /// The VPN's local mixed-port proxy, preferred over the manual and OS
+    /// proxies. Malformed URLs are rejected (logged, previous route kept).
+    fn set_vpn_proxy(&self, proxy: Option<Url>) {
+        if let Some(Err(e)) = proxy.as_ref().map(url_target) {
+            tracing::warn!(error = %e, "VPN proxy rejected; keeping previous one");
+            return;
+        }
+        let mut s = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+        let prev = std::mem::replace(&mut s.vpn, proxy);
+        if !self.apply(&s) {
+            s.vpn = prev;
         }
     }
 }
@@ -690,34 +816,88 @@ fn build_client(
         .read_timeout(cfg.read_timeout);
     b = match proxy {
         Some(p) => b.proxy(p),
-        // `None` means direct: ignore HTTP(S)_PROXY / system proxy settings.
+        // `None` means direct: reqwest must not pick up HTTP(S)_PROXY or the
+        // OS proxy on its own; those are explicit fallbacks (`Sources`).
         None => b.no_proxy(),
     };
     b.build()
         .map_err(|e| AppError::internal(format!("cannot build HTTP client: {e}")))
 }
 
-/// Proxy-dependent clients for the given manual proxy.
+/// The effective proxy source and a log-safe description of it.
+fn effective(s: &Sources) -> Option<(ProxySource, String)> {
+    if let Some(u) = &s.vpn {
+        Some((ProxySource::Vpn, sysproxy::redacted(u)))
+    } else if let Some(p) = &s.manual {
+        Some((ProxySource::Manual, redacted_proxy(p)))
+    } else {
+        s.system
+            .as_ref()
+            .map(|p| (ProxySource::System, sysproxy::redacted(&p.url)))
+    }
+}
+
+/// Proxy-dependent clients for the effective proxy of `s`.
 fn build_routed(
     cfg: &DownloaderConfig,
-    proxy: Option<&ProxyCfg>,
+    s: &Sources,
     memory: &Arc<HostMemory>,
     direct: &reqwest::Client,
 ) -> AppResult<Routed> {
-    let Some(p) = proxy else {
+    let (target, system) = if let Some(u) = &s.vpn {
+        (url_target(u)?, None)
+    } else if let Some(p) = &s.manual {
+        (proxy_target(p)?, None)
+    } else if let Some(sp) = &s.system {
+        (url_target(&sp.url)?, Some(Arc::new(sp.clone())))
+    } else {
         return Ok(Routed {
             proxy: None,
             auto: direct.clone(),
+            system: None,
         });
     };
-    let target = proxy_target(p)?;
-    let all = reqwest::Proxy::all(target.url.as_str()).map_err(|_| invalid_proxy(p))?;
-    let memory = memory.clone();
     let url = target.url.clone();
-    let auto = reqwest::Proxy::custom(move |dest| memory.is_proxy_first(dest).then(|| url.clone()));
+    let proxy = match &system {
+        None => reqwest::Proxy::all(url.as_str())
+            .map_err(|e| AppError::internal(format!("cannot build proxy: {e}")))?,
+        Some(sp) => {
+            let (sp, url) = (sp.clone(), url.clone());
+            reqwest::Proxy::custom(move |dest| (!sp.bypasses(dest)).then(|| url.clone()))
+        }
+    };
+    let (memory, bypass) = (memory.clone(), system.clone());
+    let auto = reqwest::Proxy::custom(move |dest| {
+        let use_proxy =
+            memory.is_proxy_first(dest) && !bypass.as_ref().is_some_and(|b| b.bypasses(dest));
+        use_proxy.then(|| url.clone())
+    });
     Ok(Routed {
-        proxy: Some(build_client(cfg, Some(target.apply(all)))?),
+        proxy: Some(build_client(cfg, Some(target.apply(proxy)))?),
         auto: build_client(cfg, Some(target.apply(auto)))?,
+        system,
+    })
+}
+
+/// Target for a ready proxy URL (VPN or OS proxy). Credentials, if any, stay
+/// in the URL (reqwest applies them) and never reach logs or errors.
+fn url_target(url: &Url) -> AppResult<ProxyTarget> {
+    let invalid = || {
+        AppError::new(ErrorCode::InvalidInput, "invalid proxy URL")
+            .detail("proxy", sysproxy::redacted(url))
+    };
+    // reqwest silently treats unknown schemes as "no proxy".
+    if !matches!(
+        url.scheme(),
+        "http" | "https" | "socks4" | "socks4a" | "socks5" | "socks5h"
+    ) || url.host_str().is_none_or(str::is_empty)
+    {
+        return Err(invalid());
+    }
+    reqwest::Proxy::all(url.as_str()).map_err(|_| invalid())?;
+    Ok(ProxyTarget {
+        url: url.clone(),
+        http_auth: None,
     })
 }
 
@@ -887,6 +1067,13 @@ async fn verified_len(
 mod tests {
     use super::*;
 
+    fn no_sys() -> DownloaderConfig {
+        DownloaderConfig {
+            system_proxy: SystemProxyMode::Off,
+            ..DownloaderConfig::default()
+        }
+    }
+
     fn proxy(kind: ProxyKind, host: &str) -> ProxyCfg {
         ProxyCfg {
             kind,
@@ -911,7 +1098,7 @@ mod tests {
     fn unverified_requests_never_prefer_mirrors() {
         let d = HttpDownloader::new(DownloaderConfig {
             prefer_mirrors: true,
-            ..DownloaderConfig::default()
+            ..no_sys()
         })
         .unwrap();
         let orig = Url::parse("https://piston-meta.mojang.com/a.json").unwrap();
@@ -958,7 +1145,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_manual_proxy_swaps_client() {
-        let d = HttpDownloader::new(DownloaderConfig::default()).unwrap();
+        let d = HttpDownloader::new(no_sys()).unwrap();
         d.set_manual_proxy(Some(proxy(ProxyKind::Socks5, "127.0.0.1")));
         d.set_manual_proxy(Some(proxy(ProxyKind::Http, "bad host/")));
         d.set_manual_proxy(None);
@@ -968,7 +1155,7 @@ mod tests {
 
     #[test]
     fn auto_without_proxy_is_direct_only() {
-        let d = HttpDownloader::new(DownloaderConfig::default()).unwrap();
+        let d = HttpDownloader::new(no_sys()).unwrap();
         let u = Url::parse("https://api.modrinth.com/v2/x").unwrap();
         let legs: Vec<Leg> = d
             .legs(&u, Route::Auto)

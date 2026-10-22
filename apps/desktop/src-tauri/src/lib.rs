@@ -33,6 +33,7 @@ fn build_state(app: &tauri::AppHandle) -> Result<state::AppState, Box<dyn std::e
         Paths::new(root),
         settings_store,
         &settings,
+        observer.clone(),
         observer,
     )?)
 }
@@ -45,13 +46,29 @@ pub fn run() {
         .setup(move |app| {
             builder.mount_events(app);
             let state = build_state(app.handle())?;
+            if let Some(vpn) = state.mihomo.clone() {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = vpn.restore().await {
+                        eprintln!("vpn restore failed: {e}");
+                    }
+                });
+            }
             app.manage(state);
             Ok(())
         })
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(e) = result {
-        eprintln!("fatal: failed to run tauri application: {e}");
-        std::process::exit(1);
+    match result {
+        Ok(app) => app.run(|handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(vpn) = handle.state::<state::AppState>().mihomo.as_ref() {
+                    vpn.kill_now();
+                }
+            }
+        }),
+        Err(e) => {
+            eprintln!("fatal: failed to run tauri application: {e}");
+            std::process::exit(1);
+        }
     }
 }

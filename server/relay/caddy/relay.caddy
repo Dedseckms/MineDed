@@ -1,0 +1,25 @@
+# Site block for the owner's host Caddy (2.6.2). Not active until the owner adds
+#   import /opt/relay/caddy/*.caddy
+# to /etc/caddy/Caddyfile (next to the skinserver import), validates and reloads.
+# Requires DNS A record relay.dedseckms.ru -> the owner's external IP.
+# Ports must match /opt/relay/.env (HUB_PORT, RELAY_HTTP_PORT).
+relay.dedseckms.ru {
+	# hub: rooms API + room WebSocket.
+	handle /api/v1/* {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy 127.0.0.1:18080 {
+			# hub rate-limits by X-Real-IP: overwrite so clients cannot spoof it.
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	# iroh-relay: /relay (WebSocket upgrade), /ping, /generate_204, /healthz.
+	handle {
+		reverse_proxy 127.0.0.1:13340 {
+			flush_interval -1
+		}
+	}
+}

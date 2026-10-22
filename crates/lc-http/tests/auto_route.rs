@@ -12,7 +12,9 @@ use axum::extract::{OriginalUri, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use axum::Router;
-use lc_http::{DownloadReq, Downloader, DownloaderConfig, HttpDownloader, ResourceKind, Route};
+use lc_http::{
+    DownloadReq, Downloader, DownloaderConfig, HttpDownloader, ResourceKind, Route, SystemProxyMode,
+};
 use lc_runtime::{CancelToken, ProgressSink};
 use lc_types::settings::{ProxyCfg, ProxyKind};
 use lc_types::task::TaskEvent;
@@ -140,6 +142,7 @@ fn downloader() -> HttpDownloader {
         connect_timeout: Duration::from_secs(2),
         read_timeout: Duration::from_millis(500),
         request_timeout: Duration::from_millis(500),
+        system_proxy: SystemProxyMode::Off,
         ..DownloaderConfig::default()
     })
     .unwrap()
@@ -261,6 +264,7 @@ async fn memory_expires() {
             username: None,
             password: None,
         }),
+        system_proxy: SystemProxyMode::Off,
         ..DownloaderConfig::default()
     })
     .unwrap();
@@ -426,4 +430,99 @@ async fn proxy_password_not_in_errors() {
         .await
         .unwrap_err();
     assert!(!format!("{err:?}").contains("pr0xy-secret"), "{err:?}");
+}
+
+/// Forward proxy that answers every request with its own name.
+async fn named_proxy(name: &'static str) -> (Hits, SocketAddr) {
+    let hits = Hits::default();
+    let h = hits.clone();
+    let app = Router::new().fallback(move || {
+        let h = h.clone();
+        async move {
+            h.inc();
+            name
+        }
+    });
+    serve(app, hits).await
+}
+
+#[tokio::test]
+async fn proxy_priority_vpn_then_manual_then_system() {
+    let (vpn_hits, vpn) = named_proxy("vpn").await;
+    let (_, manual) = named_proxy("manual").await;
+    let (_, system) = named_proxy("system").await;
+    let d = HttpDownloader::new(DownloaderConfig {
+        attempts_per_url: 1,
+        system_proxy: SystemProxyMode::Fixed(Url::parse(&format!("http://{system}")).unwrap()),
+        ..DownloaderConfig::default()
+    })
+    .unwrap();
+    // Not resolvable: direct always fails, so `Auto` reaches the proxy leg.
+    let target = Url::parse("http://upstream.invalid/v").unwrap();
+    let via = |route| {
+        let (d, target) = (&d, target.clone());
+        async move {
+            let body = d
+                .get_bytes_via(&target, ResourceKind::Other, route)
+                .await
+                .unwrap_or_else(|e| panic!("{route:?} {e:?}"));
+            String::from_utf8(body).unwrap()
+        }
+    };
+    assert_eq!(via(Route::Proxied).await, "system");
+    assert_eq!(via(Route::Auto).await, "system");
+
+    d.set_manual_proxy(Some(ProxyCfg {
+        kind: ProxyKind::Http,
+        host: manual.ip().to_string(),
+        port: manual.port(),
+        username: None,
+        password: None,
+    }));
+    assert_eq!(via(Route::Proxied).await, "manual");
+
+    d.set_vpn_proxy(Some(Url::parse(&format!("http://{vpn}")).unwrap()));
+    assert_eq!(via(Route::Proxied).await, "vpn");
+    assert_eq!(via(Route::Auto).await, "vpn");
+    // The `Proxied` client follows the switch as well.
+    let text = d
+        .client(Route::Proxied)
+        .get(target.clone())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(text, "vpn");
+    assert_eq!(vpn_hits.get(), 3);
+
+    // Malformed VPN URL is rejected; the previous route stays.
+    d.set_vpn_proxy(Some(Url::parse("ftp://127.0.0.1:1").unwrap()));
+    assert_eq!(via(Route::Proxied).await, "vpn");
+
+    d.set_vpn_proxy(None);
+    assert_eq!(via(Route::Proxied).await, "manual");
+    d.set_manual_proxy(None);
+    assert_eq!(via(Route::Proxied).await, "system");
+
+    // Local targets never go through the OS proxy.
+    let (local_hits, local) = html_host().await;
+    let err = d
+        .get_bytes_via(
+            &url(local, "/v.json"),
+            ResourceKind::VersionMeta,
+            Route::Auto,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Blocked);
+    assert_eq!(local_hits.get(), 1);
+    // ...and `Proxied` to such a target goes direct instead of failing.
+    let body = d
+        .get_bytes_via(&url(local, "/page"), ResourceKind::Other, Route::Proxied)
+        .await
+        .unwrap();
+    assert_eq!(body, BLOCK_PAGE.as_bytes());
+    assert_eq!(local_hits.get(), 2);
 }

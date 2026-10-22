@@ -71,6 +71,14 @@ impl ProgressSink for PrintSink {
     }
 }
 
+struct NoRoomObs;
+
+impl lc_p2p::RoomObserver for NoRoomObs {
+    fn on_state(&self, _state: Option<lc_types::room::RoomState>) {}
+    fn on_peer(&self, _peer: lc_types::room::Peer, _joined: bool) {}
+    fn on_chat(&self, _message: lc_types::voice::ChatMessage) {}
+}
+
 fn sink() -> PrintSink {
     PrintSink {
         id: TaskId::new(),
@@ -88,7 +96,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(JsonSettingsStore::new(root.join("settings.json")));
     let settings = store.get().await?;
     let obs = Arc::new(Obs::default());
-    let state = AppState::real(Paths::new(&root), store, &settings, obs.clone())?;
+    let state = AppState::real(
+        Paths::new(&root),
+        store,
+        &settings,
+        obs.clone(),
+        Arc::new(NoRoomObs),
+    )?;
 
     let accounts = state.accounts.list().await?;
     if !accounts.iter().any(|a| a.name == "SmokeTest") {

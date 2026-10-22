@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "hub"
 description = "Rooms, signaling, mirrors list and skin library API. Owner: server-ops. API contract: server/openapi/hub.yaml"
 version.workspace = true
@@ -7,14 +7,25 @@ license.workspace = true
 publish = false
 
 [dependencies]
+async-trait.workspace = true
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net", "signal"] }
+uuid.workspace = true
+# Plain-HTTP client for Drasl on the internal Docker network (no TLS stack needed).
+hyper = { version = "1.12.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
+http-body-util.workspace = true
+# peerToken MAC (hub.yaml joinRoom).
+hmac = "0.12.1"
+sha2 = "0.10.9"
+base64 = "0.22.1"
 
 [dev-dependencies]
 tower.workspace = true
-http-body-util.workspace = true
+tokio-tungstenite = "0.29.0"
+futures-util = "0.3"
 
 [lints]
 workspace = true

@@ -30,6 +30,7 @@ import {
   searchCatalog,
   seedInstalled,
 } from "./content";
+import { createNetMocks } from "./net";
 import { paletteFromSeed, seedCapes, seedSkins, skinDataUrl } from "./skins";
 
 export { mockBus };
@@ -727,6 +728,16 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       t.cancelled = true;
       return ok(null);
     },
+
+    // ---- vpn, rooms, chat ----
+    ...createNetMocks({
+      bus,
+      tickMs,
+      wait,
+      findInstance,
+      runTask,
+      selfName: () => (accounts.find((a) => a.isDefault) ?? accounts[0])?.name ?? "Player",
+    }),
   };
   return impl;
 }

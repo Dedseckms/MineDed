@@ -8,13 +8,31 @@ license.workspace = true
 [dependencies]
 lc-types.workspace = true
 lc-runtime.workspace = true
+lc-http.workspace = true
+lc-core.workspace = true
+lc-accounts.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "macros", "fs"] }
+tokio-util.workspace = true
+iroh = "=1.4.1"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+hex = "0.4.3"
+base64 = "0.22"
+socket2 = { version = "0.6", features = ["all"] }
+chrono = { version = "0.4.41", default-features = false, features = ["clock", "std"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time", "macros", "rt-multi-thread"] }
+iroh = { version = "=1.4.1", features = ["test-utils"] }
+axum.workspace = true
 
 [lints]
 workspace = true

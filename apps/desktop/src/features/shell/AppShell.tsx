@@ -6,20 +6,26 @@ import { isMock } from "../../api/client";
 import { BRAND_MARK } from "../../brand";
 import { useAccounts, useAppVersion } from "../../api/queries";
 import { Icon, type IconName } from "../../components/ui/Icon";
+import { Toaster } from "../../components/ui/Toaster";
 import { Badge } from "../../components/ui/feedback";
 import { useApplyAppearance, useMotionPrefs } from "../../hooks/useAppearance";
 import { useBackendSync } from "../../hooks/useBackendSync";
 import { SECTIONS, type Section, useNavStore } from "../../stores/navStore";
+import { useRoomStore } from "../../stores/roomStore";
 import { AccountsScreen } from "../accounts/AccountsScreen";
 import { InstancesScreen } from "../instances/InstancesScreen";
 import { PlayScreen } from "../play/PlayScreen";
 import { SettingsScreen } from "../settings/SettingsScreen";
+import { MultiplayerScreen } from "../rooms/MultiplayerScreen";
 import { SkinsScreen } from "../skins/SkinsScreen";
+import { VpnScreen } from "../vpn/VpnScreen";
 import { TaskCenter } from "./TaskCenter";
 
 const ICONS: Record<Section, IconName> = {
   play: "play",
   instances: "layers",
+  multiplayer: "users",
+  vpn: "shield",
   skins: "shirt",
   accounts: "user",
   settings: "settings",
@@ -28,6 +34,8 @@ const ICONS: Record<Section, IconName> = {
 const SCREENS: Record<Section, ComponentType> = {
   play: PlayScreen,
   instances: InstancesScreen,
+  multiplayer: MultiplayerScreen,
+  vpn: VpnScreen,
   skins: SkinsScreen,
   accounts: AccountsScreen,
   settings: SettingsScreen,
@@ -38,6 +46,7 @@ function Sidebar() {
   const section = useNavStore((s) => s.section);
   const go = useNavStore((s) => s.go);
   const version = useAppVersion();
+  const unread = useRoomStore((s) => s.unread);
   return (
     <nav aria-label={t("nav.label")} className="flex w-56 shrink-0 flex-col border-r border-border bg-surface px-3 py-4">
       <div className="mb-6 flex items-center gap-2 px-3">
@@ -69,6 +78,11 @@ function Sidebar() {
                 <span className="relative flex items-center gap-3">
                   <Icon name={ICONS[s]} />
                   {t(`nav.${s}`)}
+                  {s === "multiplayer" && unread > 0 && !active ? (
+                    <Badge tone="accent">
+                      <span aria-label={t("rooms.chat.unread", { n: unread })}>{unread > 99 ? "99+" : unread}</span>
+                    </Badge>
+                  ) : null}
                 </span>
               </button>
             </li>
@@ -147,6 +161,7 @@ export function AppShell() {
           </main>
         </div>
       </div>
+      <Toaster />
     </MotionConfig>
   );
 }

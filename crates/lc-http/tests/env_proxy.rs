@@ -1,4 +1,5 @@
-//! `proxy: None` must mean direct even when `HTTP_PROXY` is set.
+//! Environment proxy (`HTTP(S)_PROXY`) is the OS-level fallback: never used by
+//! `Route::Direct`, used by `Route::Auto` only after the direct attempt failed.
 //! Lives in its own test binary (one process, one test) because it mutates
 //! the process environment.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -7,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::Router;
-use lc_http::{Downloader, DownloaderConfig, HttpDownloader, ResourceKind};
+use lc_http::{Downloader, DownloaderConfig, HttpDownloader, ResourceKind, Route};
 use url::Url;
 
 /// Restores the previous value of an environment variable on drop.
@@ -34,7 +35,7 @@ impl Drop for EnvGuard {
 }
 
 #[tokio::test]
-async fn none_proxy_ignores_env() {
+async fn env_proxy_is_auto_fallback_only() {
     // A fake forward proxy that counts every request it sees.
     let hits = Arc::new(AtomicUsize::new(0));
     let counter = hits.clone();
@@ -49,32 +50,45 @@ async fn none_proxy_ignores_env() {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let _guard = EnvGuard::set("HTTP_PROXY", &format!("http://{addr}"));
-    let _guard_lc = EnvGuard::set("http_proxy", &format!("http://{addr}"));
+    let proxy = format!("http://{addr}");
+    let _g = [
+        EnvGuard::set("HTTP_PROXY", &proxy),
+        EnvGuard::set("http_proxy", &proxy),
+        EnvGuard::set("HTTPS_PROXY", &proxy),
+        EnvGuard::set("https_proxy", &proxy),
+        EnvGuard::set("NO_PROXY", ""),
+        EnvGuard::set("no_proxy", ""),
+    ];
     let target = Url::parse("http://upstream.invalid/x").unwrap();
-
-    // Control: a default reqwest client honours the variable, so the test is meaningful.
-    let via_env = reqwest::Client::new()
-        .get(target.clone())
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    assert_eq!(via_env, "via-proxy");
-    assert_eq!(hits.load(Ordering::SeqCst), 1);
 
     let d = HttpDownloader::new(DownloaderConfig {
         attempts_per_url: 1,
         ..DownloaderConfig::default()
     })
     .unwrap();
-    let err = d.get_bytes(&target, ResourceKind::Other).await.unwrap_err();
+
+    // Direct never consults the environment.
+    let err = d
+        .get_bytes_via(&target, ResourceKind::Other, Route::Direct)
+        .await
+        .unwrap_err();
     assert!(err.details.unwrap().contains_key("url"));
     assert_eq!(
         hits.load(Ordering::SeqCst),
-        1,
-        "downloader must not use env proxy"
+        0,
+        "direct must not use env proxy"
     );
+
+    // Auto: direct fails (unresolvable host), then the env proxy answers.
+    let body = d.get_bytes(&target, ResourceKind::Other).await.unwrap();
+    assert_eq!(body, b"via-proxy");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    // Proxied goes straight to it.
+    let body = d
+        .get_bytes_via(&target, ResourceKind::Other, Route::Proxied)
+        .await
+        .unwrap();
+    assert_eq!(body, b"via-proxy");
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
 }

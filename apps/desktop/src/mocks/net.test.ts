@@ -1,0 +1,152 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ChatMessage, RoomPeerEvent, RoomStateEvent, TaskEvent, VpnState } from "../bindings";
+import { unwrap } from "../api/client";
+import { createMockBus } from "./bus";
+import { createMockCommands } from "./index";
+import { MOCK_NODES, mockLatency } from "./net";
+
+const channel = (events: TaskEvent[]) =>
+  ({ onmessage: (e: TaskEvent) => events.push(e) }) as unknown as Parameters<
+    ReturnType<typeof createMockCommands>["vpnRefresh"]
+  >[0];
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+
+describe("mock vpn", () => {
+  it("subscription → refresh task → nodes → mode → select → ping", async () => {
+    const bus = createMockBus();
+    const states: VpnState[] = [];
+    bus.on("vpnState", (s) => states.push(s));
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+
+    expect(unwrap(await api.vpnState())).toMatchObject({ mode: "off", running: false, subscriptionUpdated: null });
+    expect((await api.vpnRefresh(channel([]))).status).toBe("error");
+    expect((await api.vpnSetMode("launcherOnly")).status).toBe("error");
+    expect((await api.vpnSetSubscription(["ftp://nope"])).status).toBe("error");
+
+    unwrap(await api.vpnSetSubscription(["https://sub.example/abc"]));
+    const events: TaskEvent[] = [];
+    const id = unwrap(await api.vpnRefresh(channel(events)));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(events.at(-1)).toEqual({ type: "finished", id, error: null });
+    const nodes = unwrap(await api.vpnNodes());
+    expect(nodes).toHaveLength(MOCK_NODES.length);
+    expect(nodes.filter((n) => n.selected)).toHaveLength(1);
+
+    const on = unwrap(await api.vpnSetMode("launcherAndGame"));
+    expect(on).toMatchObject({ running: true, node: nodes[0]?.name });
+    const target = nodes[2]?.name ?? "";
+    unwrap(await api.vpnSelect(target));
+    expect(states.at(-1)?.node).toBe(target);
+    expect((await api.vpnSelect("nope")).status).toBe("error");
+
+    const pinged = unwrap(await api.vpnTestLatency());
+    expect(pinged.map((n) => n.latencyMs)).toEqual(MOCK_NODES.map((n) => mockLatency(n.name, 1)));
+    expect(unwrap(await api.vpnSetMode("off"))).toMatchObject({ running: false, node: null });
+  });
+
+  it("file import validates the path; a blocked subscription host emits net://blocked", async () => {
+    const bus = createMockBus();
+    const blocked: string[] = [];
+    bus.on("netBlocked", (p) => blocked.push(p.host));
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+    expect((await api.vpnImportSubscriptionFile("relative.yaml")).status).toBe("error");
+    const missing = await api.vpnImportSubscriptionFile("C:\\missing.yaml");
+    expect(missing.status === "error" && missing.error.code).toBe("notFound");
+    unwrap(await api.vpnImportSubscriptionFile("C:\\subs\\my.yaml"));
+    expect(unwrap(await api.vpnNodes()).length).toBeGreaterThan(0);
+
+    unwrap(await api.vpnSetSubscription(["https://blocked.example/sub"]));
+    const events: TaskEvent[] = [];
+    unwrap(await api.vpnRefresh(channel(events)));
+    await vi.advanceTimersByTimeAsync(500);
+    const last = events.at(-1);
+    expect(last?.type === "finished" && last.error?.code).toBe("blocked");
+    expect(blocked).toEqual(["sub.blocked.invalid"]);
+  });
+
+  it("latency is deterministic and sometimes times out", () => {
+    const all = MOCK_NODES.flatMap((n) => [1, 2, 3].map((r) => mockLatency(n.name, r)));
+    expect(all.some((v) => v === null)).toBe(true);
+    expect(all.filter((v) => v !== null).every((v) => v !== null && v >= 30 && v < 500)).toBe(true);
+    expect(mockLatency("x", 4)).toBe(mockLatency("x", 4));
+  });
+});
+
+describe("mock rooms", () => {
+  it("host: create → friends join (connecting → direct/relay) → chat → kick → leave", async () => {
+    const bus = createMockBus();
+    const peers: RoomPeerEvent[] = [];
+    const states: RoomStateEvent[] = [];
+    const chat: ChatMessage[] = [];
+    bus.on("roomPeer", (e) => peers.push(e));
+    bus.on("roomState", (s) => states.push(s));
+    bus.on("chatMessage", (m) => chat.push(m));
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+
+    expect((await api.roomCreate("nope", "open", null)).status).toBe("error");
+    expect((await api.roomCreate("inst-fabric", "open", "abc")).status).toBe("error");
+    const room = unwrap(await api.roomCreate("inst-fabric", "yggdrasil", "secret"));
+    expect(room).toMatchObject({ role: "host", authMode: "yggdrasil", passwordProtected: true, localAddr: null, peers: [] });
+    expect(room.code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+    expect(room.link).toBe(`mineup://join/${room.code}`);
+    expect(room.sig).toMatchObject({ mc: "1.21.1", loader: "fabric" });
+    expect((await api.roomCreate("inst-fabric", "open", null)).status).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const current = unwrap(await api.roomState());
+    expect(current?.peers.map((p) => p.path)).toEqual(["direct", "relay"]);
+    expect(peers[0]?.peer.path).toBe("connecting");
+    expect(chat.length).toBeGreaterThan(0);
+
+    const mine = unwrap(await api.chatSend("  hello?  "));
+    expect(mine).toMatchObject({ text: "hello?", fromName: "Steve_42" });
+    expect(chat.some((m) => m.id === mine.id)).toBe(true);
+    expect((await api.chatSend("   ")).status).toBe("error");
+
+    const kicked = current?.peers[0]?.peerId ?? "";
+    unwrap(await api.roomKick(kicked));
+    expect(peers.at(-1)).toMatchObject({ joined: false, peer: { peerId: kicked } });
+    expect(unwrap(await api.roomState())?.peers).toHaveLength(1);
+
+    unwrap(await api.roomLeave());
+    expect(states.at(-1)).toBeNull();
+    expect(unwrap(await api.roomState())).toBeNull();
+    expect((await api.chatSend("hi")).status).toBe("error");
+  });
+
+  it("guest: join by link, password and sig checks, localAddr, no kick rights", async () => {
+    const bus = createMockBus();
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+    const err = async (p: Promise<{ status: string; error?: { code: string } }>) => {
+      const r = await p;
+      return r.status === "error" ? r.error?.code : "ok";
+    };
+    expect(await err(api.roomJoin("bad code!", "inst-fabric", null))).toBe("invalidInput");
+    expect(await err(api.roomJoin("0000-0000", "inst-fabric", null))).toBe("notFound");
+    expect(await err(api.roomJoin("LOCK-1234", "inst-fabric", null))).toBe("permissionDenied");
+    expect(await err(api.roomJoin("SIGX-1234", "inst-fabric", null))).toBe("conflict");
+
+    const room = unwrap(await api.roomJoin("mineup://join/lock-1234", "inst-fabric", "secret"));
+    expect(room).toMatchObject({ role: "guest", code: "LOCK-1234", passwordProtected: true });
+    expect(room.localAddr).toMatch(/^127\.0\.0\.1:\d+$/);
+    expect(room.peers[0]?.path).toBe("relay");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(unwrap(await api.roomState())?.peers[0]).toMatchObject({ path: "direct", rttMs: 31 });
+    expect(await err(api.roomKick(room.peers[0]?.peerId ?? ""))).toBe("permissionDenied");
+    unwrap(await api.roomLeave());
+  });
+
+  it("leaving cancels pending simulated joins", async () => {
+    const bus = createMockBus();
+    const peers: RoomPeerEvent[] = [];
+    bus.on("roomPeer", (e) => peers.push(e));
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+    unwrap(await api.roomCreate("inst-fabric", "open", null));
+    unwrap(await api.roomLeave());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(peers).toEqual([]);
+  });
+});
