@@ -15,11 +15,17 @@ impl RoomService for StubRooms {
         &self,
         _instance: InstanceId,
         _auth_mode: RoomAuthMode,
+        _password: Option<String>,
     ) -> AppResult<RoomState> {
         Err(AppError::not_implemented("RoomService::create"))
     }
 
-    async fn join(&self, _code: &str, _instance: InstanceId) -> AppResult<RoomState> {
+    async fn join(
+        &self,
+        _code: &str,
+        _instance: InstanceId,
+        _password: Option<String>,
+    ) -> AppResult<RoomState> {
         Err(AppError::not_implemented("RoomService::join"))
     }
 

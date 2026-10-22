@@ -12,12 +12,12 @@ use url::Url;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Route {
     Direct,
-    /// Through the proxy: the manual proxy now, mihomo's mixed-port once the
-    /// built-in VPN exists (TODO lead+net). Without a proxy requests fail.
+    /// Through the proxy: the built-in VPN if running, else the manual proxy.
+    /// Without a proxy requests fail.
     Proxied,
     /// Direct first; on timeout / network error / `Blocked` / hash mismatch /
     /// spoofed response (HTML block page instead of expected data) retry via the
-    /// proxy (manual proxy from settings, later the built-in VPN). The host is
+    /// proxy (built-in VPN, else manual proxy, else the OS system proxy). The host is
     /// then remembered as "proxy first" for a while.
     Auto,
 }
@@ -70,4 +70,9 @@ pub trait Downloader: Send + Sync {
     /// of `Route::Proxied` (until the built-in VPN provides its own proxy).
     /// Takes effect for requests started after the call.
     fn set_manual_proxy(&self, proxy: Option<ProxyCfg>);
+
+    /// Local proxy of the built-in VPN (mihomo mixed-port), `None` when off.
+    /// When set it is the preferred proxy for `Auto` fallback and `Proxied`,
+    /// ahead of the manual proxy. Default: ignored (test doubles).
+    fn set_vpn_proxy(&self, _proxy: Option<Url>) {}
 }

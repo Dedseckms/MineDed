@@ -63,6 +63,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             // net
             vpn::vpn_state,
             vpn::vpn_set_subscription,
+            vpn::vpn_import_subscription_file,
             vpn::vpn_refresh,
             vpn::vpn_set_mode,
             vpn::vpn_nodes,

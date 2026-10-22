@@ -23,6 +23,15 @@ pub async fn vpn_set_subscription(state: State<'_, AppState>, urls: Vec<String>)
 
 #[tauri::command]
 #[specta::specta]
+pub async fn vpn_import_subscription_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<()> {
+    state.vpn.import_subscription_file(&path).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn vpn_refresh(
     app: AppHandle,
     state: State<'_, AppState>,

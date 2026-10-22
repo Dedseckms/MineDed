@@ -52,13 +52,14 @@ export const commands = {
 	capeSet: (account: AccountId, capeId: string | null) => typedError<null, AppError>(__TAURI_INVOKE("cape_set", { account, capeId })),
 	vpnState: () => typedError<VpnState, AppError>(__TAURI_INVOKE("vpn_state")),
 	vpnSetSubscription: (urls: string[]) => typedError<null, AppError>(__TAURI_INVOKE("vpn_set_subscription", { urls })),
+	vpnImportSubscriptionFile: (path: string) => typedError<null, AppError>(__TAURI_INVOKE("vpn_import_subscription_file", { path })),
 	vpnRefresh: (onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("vpn_refresh", { onEvent })),
 	vpnSetMode: (mode: VpnMode) => typedError<VpnState, AppError>(__TAURI_INVOKE("vpn_set_mode", { mode })),
 	vpnNodes: () => typedError<VpnNode[], AppError>(__TAURI_INVOKE("vpn_nodes")),
 	vpnSelect: (node: string) => typedError<null, AppError>(__TAURI_INVOKE("vpn_select", { node })),
 	vpnTestLatency: () => typedError<VpnNode[], AppError>(__TAURI_INVOKE("vpn_test_latency")),
-	roomCreate: (instance: InstanceId, authMode: RoomAuthMode) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create", { instance, authMode })),
-	roomJoin: (code: string, instance: InstanceId) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_join", { code, instance })),
+	roomCreate: (instance: InstanceId, authMode: RoomAuthMode, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create", { instance, authMode, password })),
+	roomJoin: (code: string, instance: InstanceId, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_join", { code, instance, password })),
 	roomLeave: () => typedError<null, AppError>(__TAURI_INVOKE("room_leave")),
 	roomState: () => typedError<{
 	roomId: RoomId,
@@ -70,6 +71,11 @@ export const commands = {
 	peers: Peer[],
 	/**  RFC 3339. */
 	expiresAt: string,
+	/**  `mineup://join/<code>`. */
+	link: string,
+	passwordProtected: boolean,
+	/**  Guest only: local `127.0.0.1:<port>` to add as a server in the game. */
+	localAddr: string | null,
 } | null, AppError>(__TAURI_INVOKE("room_state")),
 	roomKick: (peerId: string) => typedError<null, AppError>(__TAURI_INVOKE("room_kick", { peerId })),
 	chatSend: (text: string) => typedError<ChatMessage, AppError>(__TAURI_INVOKE("chat_send", { text })),
@@ -454,7 +460,7 @@ export type ResolvePlan = {
 
 /**  How the host's integrated server checks players. */
 export type RoomAuthMode = 
-/**  Our Yggdrasil with Mojang fallback (MS + own-server accounts, skins work). */
+/**  Own Yggdrasil server accounts only; skins work. */
 "yggdrasil" | 
 /**  No checks; offline accounts allowed, no skins for them. */
 "open";
@@ -478,6 +484,11 @@ export type RoomState = {
 	peers: Peer[],
 	/**  RFC 3339. */
 	expiresAt: string,
+	/**  `mineup://join/<code>`. */
+	link: string,
+	passwordProtected: boolean,
+	/**  Guest only: local `127.0.0.1:<port>` to add as a server in the game. */
+	localAddr: string | null,
 };
 
 export type RoomStateEvent = RoomState | null;
@@ -658,7 +669,10 @@ export type VoiceSpeakingPayload = {
 export type VpnMode = "off" | 
 /**  mihomo mixed-port; only launcher HTTP goes through it. No admin rights. */
 "launcherOnly" | 
-/**  mihomo TUN with per-process rules for the launcher and its Java. Needs elevation. */
+/**
+ *  Same mixed-port, plus the game's Java is pointed at it via JVM proxy
+ *  properties (`-DsocksProxyHost` etc.). No TUN, no admin rights.
+ */
 "launcherAndGame";
 
 export type VpnNode = {

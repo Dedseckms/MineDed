@@ -9,7 +9,8 @@ pub enum VpnMode {
     Off,
     /// mihomo mixed-port; only launcher HTTP goes through it. No admin rights.
     LauncherOnly,
-    /// mihomo TUN with per-process rules for the launcher and its Java. Needs elevation.
+    /// Same mixed-port, plus the game's Java is pointed at it via JVM proxy
+    /// properties (`-DsocksProxyHost` etc.). No TUN, no admin rights.
     LauncherAndGame,
 }
 

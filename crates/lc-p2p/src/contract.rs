@@ -9,10 +9,23 @@ use lc_types::{AppResult, InstanceId};
 
 #[async_trait]
 pub trait RoomService: Send + Sync {
-    /// Registers a room in hub, starts the iroh endpoint, waits for the LAN port.
-    async fn create(&self, instance: InstanceId, auth_mode: RoomAuthMode) -> AppResult<RoomState>;
-    /// Validates `InstanceSig` against the local instance, connects to the host.
-    async fn join(&self, code: &str, instance: InstanceId) -> AppResult<RoomState>;
+    /// Registers a room in hub, starts the iroh endpoint, waits for the LAN port
+    /// ("Open to LAN"). `password` is checked by the host over P2P, never sent to hub.
+    async fn create(
+        &self,
+        instance: InstanceId,
+        auth_mode: RoomAuthMode,
+        password: Option<String>,
+    ) -> AppResult<RoomState>;
+    /// `code` is a room code or a `mineup://join/<code>` link. Validates
+    /// `InstanceSig` against the local instance, connects to the host and opens
+    /// a local TCP port (`RoomState::local_addr`) tunnelled to the host's world.
+    async fn join(
+        &self,
+        code: &str,
+        instance: InstanceId,
+        password: Option<String>,
+    ) -> AppResult<RoomState>;
     async fn leave(&self) -> AppResult<()>;
     async fn state(&self) -> AppResult<Option<RoomState>>;
     /// Host only.

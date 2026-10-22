@@ -13,8 +13,9 @@ pub async fn room_create(
     state: State<'_, AppState>,
     instance: InstanceId,
     auth_mode: RoomAuthMode,
+    password: Option<String>,
 ) -> AppResult<RoomState> {
-    state.rooms.create(instance, auth_mode).await
+    state.rooms.create(instance, auth_mode, password).await
 }
 
 #[tauri::command]
@@ -23,8 +24,9 @@ pub async fn room_join(
     state: State<'_, AppState>,
     code: String,
     instance: InstanceId,
+    password: Option<String>,
 ) -> AppResult<RoomState> {
-    state.rooms.join(&code, instance).await
+    state.rooms.join(&code, instance, password).await
 }
 
 #[tauri::command]

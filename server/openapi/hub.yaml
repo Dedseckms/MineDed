@@ -161,6 +161,7 @@ paths:
                 sig: { $ref: "#/components/schemas/InstanceSig" }
                 authMode: { type: string, enum: [yggdrasil, open] }
                 maxPeers: { type: integer, minimum: 2, maximum: 16, default: 8 }
+                passwordProtected: { type: boolean, default: false, description: The host checks the password itself over P2P; hub never sees it }
       responses:
         "201":
           description: Created
@@ -183,6 +184,8 @@ paths:
       tags: [rooms]
       operationId: joinRoom
       summary: Guest joins by code and gets a peer token
+      description: Auth is optional so offline-account friends can join; rate-limited per IP.
+      security: [{}, { bearer: [] }]
       parameters:
         - { name: code, in: path, required: true, schema: { type: string } }
       requestBody:
@@ -201,7 +204,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [roomId, peerToken, hostEndpointId, sig, authMode, relayUrls]
+                required: [roomId, peerToken, hostEndpointId, sig, authMode, relayUrls, passwordProtected]
                 properties:
                   roomId: { type: string, format: uuid }
                   peerToken: { type: string }
@@ -209,6 +212,7 @@ paths:
                   sig: { $ref: "#/components/schemas/InstanceSig" }
                   authMode: { type: string, enum: [yggdrasil, open] }
                   relayUrls: { type: array, items: { type: string, format: uri } }
+                  passwordProtected: { type: boolean }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }

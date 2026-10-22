@@ -25,7 +25,7 @@ pub enum PathKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum RoomAuthMode {
-    /// Our Yggdrasil with Mojang fallback (MS + own-server accounts, skins work).
+    /// Own Yggdrasil server accounts only; skins work.
     Yggdrasil,
     /// No checks; offline accounts allowed, no skins for them.
     Open,
@@ -67,4 +67,9 @@ pub struct RoomState {
     pub peers: Vec<Peer>,
     /// RFC 3339.
     pub expires_at: String,
+    /// `mineup://join/<code>`.
+    pub link: String,
+    pub password_protected: bool,
+    /// Guest only: local `127.0.0.1:<port>` to add as a server in the game.
+    pub local_addr: Option<String>,
 }

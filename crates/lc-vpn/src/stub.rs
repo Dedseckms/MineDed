@@ -27,6 +27,12 @@ impl VpnController for StubVpn {
         Err(AppError::not_implemented("VpnController::set_subscription"))
     }
 
+    async fn import_subscription_file(&self, _path: &str) -> AppResult<()> {
+        Err(AppError::not_implemented(
+            "VpnController::import_subscription_file",
+        ))
+    }
+
     async fn refresh(&self, _sink: &dyn ProgressSink) -> AppResult<()> {
         Err(AppError::not_implemented("VpnController::refresh"))
     }
