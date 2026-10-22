@@ -3,16 +3,21 @@
 //! Threads/tasks while active (voice started or mic test on):
 //! - `voice-audio` thread owning the cpal streams; the output callback pulls
 //!   mixed audio from [`Mixer`] (decoding happens there, clocked by the device);
-//! - a tokio tick task (10 ms): capture → [`TxPipeline`] → `send`, speaking
-//!   indicators;
-//! - a tokio rx task: `recv` → [`Mixer::push_datagram`];
+//! - a tokio tick task (10 ms, 50 ms when nothing is captured): capture →
+//!   [`TxPipeline`] → `send`, speaking indicators, output watchdog;
+//! - a tokio rx task: `recv` → [`Mixer::push_datagram`]; when the room closes
+//!   it stops voice;
 //! - `voice-ptt` thread polling the PTT key (PushToTalk mode only).
 //!
 //! Nothing runs while voice is stopped and the mic test is off.
 
 use std::collections::hash_map::RandomState;
+use std::future::Future;
 use std::hash::BuildHasher;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::ops::Deref;
+use std::pin::Pin;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -23,7 +28,7 @@ use lc_types::voice::{AudioDevice, VoiceMode, VoiceSettings, VoiceStatus};
 use lc_types::{AppError, AppResult, ErrorCode};
 use tokio::task::JoinHandle;
 
-use crate::audio::{list_devices, AudioIo, CaptureQueue, IoConfig};
+use crate::audio::{list_devices, AudioIo, CaptureQueue, IoConfig, OutputHealth};
 use crate::contract::{VoiceEngine, VoiceObserver};
 use crate::mixer::Mixer;
 use crate::ptt::{self, PttError, PttWatcher};
@@ -35,11 +40,24 @@ use crate::tx::{Gate, TxControl, TxPipeline};
 pub const SELF_PEER_ID: &str = "self";
 
 const TICK: Duration = Duration::from_millis(10);
+/// Tick when nothing is captured (mode Off, no mic test).
+const IDLE_TICK: Duration = Duration::from_millis(50);
 const REPORT: Duration = Duration::from_millis(50);
+/// No output callback for this long → the output device is reopened.
+const STALL: Duration = Duration::from_millis(500);
+/// Minimum pause between reopen attempts (grows with failed attempts).
+const REOPEN_BACKOFF: Duration = Duration::from_secs(2);
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// Opens audio devices; replaced by a device-less opener in tests.
+type Opener = Arc<
+    dyn Fn(IoConfig, Arc<CaptureQueue>, Arc<Mutex<Mixer>>, Arc<OutputHealth>) -> AppResult<AudioIo>
+        + Send
+        + Sync,
+>;
 
 /// Per-frame state read by the tick task.
 #[derive(Debug, Clone, Copy)]
@@ -53,12 +71,12 @@ struct Live {
     active: bool,
 }
 
-/// State shared with the background tasks (no back-reference to the engine,
-/// so dropping the engine stops everything).
+/// State shared with the background tasks.
 struct Shared {
     observer: Arc<dyn VoiceObserver>,
     mixer: Arc<Mutex<Mixer>>,
     capture: Arc<CaptureQueue>,
+    health: Arc<OutputHealth>,
     live: Mutex<Live>,
     ptt: Mutex<Option<PttWatcher>>,
     tracker: Mutex<SpeakingTracker>,
@@ -167,18 +185,40 @@ impl Drop for Run {
     }
 }
 
-/// Real voice engine. Construct once; see the module docs for its threads.
-pub struct CpalVoiceEngine {
+fn same_transport(a: &Arc<dyn DatagramTransport>, b: &Arc<dyn DatagramTransport>) -> bool {
+    std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b))
+}
+
+/// Engine state; background tasks hold a `Weak` to it.
+pub struct Inner {
     file: SettingsFile,
     settings: Mutex<VoiceSettings>,
     shared: Arc<Shared>,
     run: tokio::sync::Mutex<Run>,
+    opener: Opener,
+}
+
+/// Real voice engine. Construct once; see the module docs for its threads.
+pub struct CpalVoiceEngine {
+    inner: Arc<Inner>,
+}
+
+impl Deref for CpalVoiceEngine {
+    type Target = Inner;
+
+    fn deref(&self) -> &Inner {
+        &self.inner
+    }
 }
 
 impl CpalVoiceEngine {
     /// Loads `<root>/voice.json` (defaults if missing). Cheap: no device or
     /// thread is touched until `start` / `mic_test`.
     pub fn new(paths: &Paths, observer: Arc<dyn VoiceObserver>) -> Self {
+        Self::with_opener(paths, observer, Arc::new(AudioIo::open))
+    }
+
+    fn with_opener(paths: &Paths, observer: Arc<dyn VoiceObserver>, opener: Opener) -> Self {
         let file = SettingsFile::new(paths);
         let settings = file.load();
         let mut mixer = Mixer::new();
@@ -189,6 +229,7 @@ impl CpalVoiceEngine {
             observer,
             mixer: Arc::new(Mutex::new(mixer)),
             capture: Arc::new(CaptureQueue::new()),
+            health: Arc::new(OutputHealth::default()),
             live: Mutex::new(Live {
                 gate: Gate::Off,
                 self_muted: false,
@@ -204,19 +245,24 @@ impl CpalVoiceEngine {
             seq_start: (rnd >> 8) as u16,
         };
         Self {
-            file,
-            settings: Mutex::new(settings),
-            shared: Arc::new(shared),
-            run: tokio::sync::Mutex::new(Run {
-                io: None,
-                tick: None,
-                rx: None,
-                transport: None,
-                mic_test: false,
+            inner: Arc::new(Inner {
+                file,
+                settings: Mutex::new(settings),
+                shared: Arc::new(shared),
+                run: tokio::sync::Mutex::new(Run {
+                    io: None,
+                    tick: None,
+                    rx: None,
+                    transport: None,
+                    mic_test: false,
+                }),
+                opener,
             }),
         }
     }
+}
 
+impl Inner {
     fn current(&self) -> VoiceSettings {
         lock(&self.settings).clone()
     }
@@ -259,7 +305,7 @@ impl CpalVoiceEngine {
 
     /// Brings threads/devices in line with the wanted state. Returns a
     /// non-fatal warning (listen-only, PTT fallback) when something degraded.
-    async fn reconcile(&self, run: &mut Run) -> AppResult<Option<AppError>> {
+    async fn reconcile(self: &Arc<Self>, run: &mut Run) -> AppResult<Option<AppError>> {
         let s = self.current();
         let active = run.transport.is_some() || run.mic_test;
         {
@@ -285,8 +331,14 @@ impl CpalVoiceEngine {
         };
         if run.io.as_ref().map(|io| &io.config) != Some(&want) {
             run.io = None;
-            let (capture, mixer) = (self.shared.capture.clone(), self.shared.mixer.clone());
-            let io = tokio::task::spawn_blocking(move || AudioIo::open(want, capture, mixer))
+            self.shared.health.failed.store(false, Ordering::Relaxed);
+            let (capture, mixer, health) = (
+                self.shared.capture.clone(),
+                self.shared.mixer.clone(),
+                self.shared.health.clone(),
+            );
+            let opener = self.opener.clone();
+            let io = tokio::task::spawn_blocking(move || opener(want, capture, mixer, health))
                 .await
                 .map_err(|e| AppError::internal(format!("audio open: {e}")))??;
             run.io = Some(io);
@@ -298,6 +350,7 @@ impl CpalVoiceEngine {
             run.tick = Some(tokio::spawn(tick_loop(
                 self.shared.clone(),
                 run.transport.clone(),
+                Arc::downgrade(self),
             )));
         }
         self.shared.publish_status();
@@ -308,6 +361,44 @@ impl CpalVoiceEngine {
         self.file.save(&s).await?;
         *lock(&self.settings) = s;
         Ok(())
+    }
+
+    /// The room closed (`recv` returned `None`): stop voice for it.
+    async fn on_transport_closed(self: &Arc<Self>, transport: &Arc<dyn DatagramTransport>) {
+        let mut run = self.run.lock().await;
+        let current = run
+            .transport
+            .as_ref()
+            .is_some_and(|t| same_transport(t, transport));
+        if !current {
+            return;
+        }
+        run.transport = None;
+        // This runs inside the rx task: detach instead of aborting itself.
+        drop(run.rx.take());
+        if let Some(t) = run.tick.take() {
+            t.abort();
+        }
+        lock(&self.shared.mixer).clear_streams();
+        if let Err(e) = self.reconcile(&mut run).await {
+            tracing::warn!(error = %e, "voice: reconcile after room close");
+        }
+    }
+
+    /// Watchdog: the output stream stopped calling back; reopen devices.
+    /// Boxed with an explicit `Send` type: it is spawned from the tick task,
+    /// which `reconcile` itself spawns (breaks the opaque-type cycle).
+    fn reopen_io(self: Arc<Self>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            let mut run = self.run.lock().await;
+            if run.transport.is_none() && !run.mic_test {
+                return;
+            }
+            run.io = None;
+            if let Err(e) = self.reconcile(&mut run).await {
+                tracing::warn!(error = %e, "voice: reopening audio devices failed");
+            }
+        })
     }
 }
 
@@ -341,10 +432,57 @@ fn warn_to_result(w: Option<AppError>) -> AppResult<()> {
     }
 }
 
-/// Capture → encode → send, plus speaking reports.
-async fn tick_loop(shared: Arc<Shared>, transport: Option<Arc<dyn DatagramTransport>>) {
-    let mut iv = tokio::time::interval(TICK);
-    iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+/// Detects a stalled output stream (no callbacks, or a stream error).
+struct Watchdog {
+    beats: u64,
+    last_beat: Instant,
+    last_reopen: Option<Instant>,
+    attempts: u32,
+}
+
+impl Watchdog {
+    fn new(now: Instant) -> Self {
+        Self {
+            beats: 0,
+            last_beat: now,
+            last_reopen: None,
+            attempts: 0,
+        }
+    }
+
+    /// True when the devices should be reopened now.
+    fn check(&mut self, health: &OutputHealth, now: Instant) -> bool {
+        let beats = health.beats.load(Ordering::Relaxed);
+        if beats != self.beats {
+            self.beats = beats;
+            self.last_beat = now;
+            if !health.failed.load(Ordering::Relaxed) {
+                self.attempts = 0;
+                return false;
+            }
+        }
+        let stalled =
+            health.failed.load(Ordering::Relaxed) || now.duration_since(self.last_beat) >= STALL;
+        let backoff = REOPEN_BACKOFF * self.attempts.min(5);
+        let due = self
+            .last_reopen
+            .is_none_or(|at| now.duration_since(at) >= backoff);
+        if stalled && due {
+            self.attempts += 1;
+            self.last_reopen = Some(now);
+            self.last_beat = now;
+            return true;
+        }
+        false
+    }
+}
+
+/// Capture → encode → send, plus speaking reports and the output watchdog.
+async fn tick_loop(
+    shared: Arc<Shared>,
+    transport: Option<Arc<dyn DatagramTransport>>,
+    engine: Weak<Inner>,
+) {
     let mut pipeline: Option<TxPipeline> = None;
     let mut buf = Vec::with_capacity(4096);
     let mut last_report = Instant::now();
@@ -353,53 +491,68 @@ async fn tick_loop(shared: Arc<Shared>, transport: Option<Arc<dyn DatagramTransp
     let mut last_publish = Instant::now()
         .checked_sub(MIN_INTERVAL)
         .unwrap_or_else(Instant::now);
+    let mut watchdog = Watchdog::new(Instant::now());
     loop {
-        iv.tick().await;
+        let (ctl, mic_test) = shared.control();
+        let capturing = ctl.gate != Gate::Off || mic_test;
+        tokio::time::sleep(if capturing { TICK } else { IDLE_TICK }).await;
         buf.clear();
         shared.capture.drain_into(&mut buf);
-        let rate = shared.capture.rate();
-        let pipe = match pipeline.as_mut() {
-            Some(p) => {
-                p.set_input_rate(rate);
-                p
-            }
-            None => match TxPipeline::new(rate, shared.speaker, shared.seq_start) {
-                Ok(p) => pipeline.insert(p),
-                Err(e) => {
-                    tracing::warn!(error = %e, "voice pipeline");
-                    return;
+        if capturing {
+            let rate = shared.capture.rate();
+            let pipe = match pipeline.as_mut() {
+                Some(p) => {
+                    p.set_input_rate(rate);
+                    p
                 }
-            },
-        };
-        pipe.push_samples(&buf);
-        let (ctl, mic_test) = shared.control();
-        while let Some(frame) = pipe.next_frame(&ctl) {
-            if mic_test {
-                lock(&shared.mixer).push_loopback(&frame.pcm);
-            }
-            if let (Some(t), Some(d)) = (&transport, frame.datagram.as_deref()) {
-                if d.len() <= t.max_datagram_size() {
-                    let _ = t.send(None, d).await;
+                None => match TxPipeline::new(rate, shared.speaker, shared.seq_start) {
+                    Ok(p) => pipeline.insert(p),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "voice pipeline");
+                        return;
+                    }
+                },
+            };
+            pipe.push_samples(&buf);
+            while let Some(frame) = pipe.next_frame(&ctl) {
+                if mic_test {
+                    lock(&shared.mixer).push_loopback(&frame.pcm);
                 }
+                if let (Some(t), Some(d)) = (&transport, frame.datagram.as_deref()) {
+                    if d.len() <= t.max_datagram_size() {
+                        let _ = t.send(None, d).await;
+                    }
+                }
+                speaking |= frame.speaking;
+                level = level.max(frame.level);
             }
-            speaking |= frame.speaking;
-            level = level.max(frame.level);
         }
         let now = Instant::now();
-        if now.duration_since(last_report) >= REPORT.min(MIN_INTERVAL) {
-            shared.report(speaking, level, mic_test, now);
-            if let Some(t) = &transport {
-                // Room-wide voice state (`ControlMsg::VoiceState`), throttled.
-                let state = (speaking, ctl.self_muted);
-                if published != Some(state) && now.duration_since(last_publish) >= MIN_INTERVAL {
-                    let _ = t.set_voice_state(state.0, state.1).await;
-                    published = Some(state);
-                    last_publish = now;
-                }
+        if now.duration_since(last_report) < REPORT.min(MIN_INTERVAL) {
+            continue;
+        }
+        shared.report(speaking, level, mic_test, now);
+        if let Some(t) = &transport {
+            // Room-wide voice state (`ControlMsg::VoiceState`), throttled.
+            let state = (speaking, ctl.self_muted);
+            if published != Some(state) && now.duration_since(last_publish) >= MIN_INTERVAL {
+                let _ = t.set_voice_state(state.0, state.1).await;
+                published = Some(state);
+                last_publish = now;
             }
-            last_report = now;
-            speaking = false;
-            level = 0.0;
+        }
+        last_report = now;
+        speaking = false;
+        level = 0.0;
+        if watchdog.check(&shared.health, now) {
+            tracing::warn!(
+                attempt = watchdog.attempts,
+                panics = shared.health.panics.load(Ordering::Relaxed),
+                "voice output stalled, reopening audio devices"
+            );
+            if let Some(engine) = engine.upgrade() {
+                tokio::spawn(engine.reopen_io());
+            }
         }
     }
 }
@@ -408,6 +561,16 @@ async fn tick_loop(shared: Arc<Shared>, transport: Option<Arc<dyn DatagramTransp
 pub(crate) async fn rx_loop(transport: Arc<dyn DatagramTransport>, mixer: Arc<Mutex<Mixer>>) {
     while let Some((from, data)) = transport.recv().await {
         lock(&mixer).push_datagram(&from, &data);
+    }
+}
+
+async fn rx_task(transport: Arc<dyn DatagramTransport>, engine: Weak<Inner>) {
+    let Some(mixer) = engine.upgrade().map(|e| e.shared.mixer.clone()) else {
+        return;
+    };
+    rx_loop(transport.clone(), mixer).await;
+    if let Some(engine) = engine.upgrade() {
+        engine.on_transport_closed(&transport).await;
     }
 }
 
@@ -436,7 +599,7 @@ impl VoiceEngine for CpalVoiceEngine {
         let mut run = self.run.lock().await;
         let active = run.transport.is_some() || run.mic_test;
         if active {
-            warn_to_result(self.reconcile(&mut run).await?)
+            warn_to_result(self.inner.reconcile(&mut run).await?)
         } else {
             let r = self.apply_gate(&s, false).map_err(ptt_error);
             self.shared.publish_status();
@@ -446,21 +609,22 @@ impl VoiceEngine for CpalVoiceEngine {
 
     /// Errors after a successful start carry `details.listenOnly` (no
     /// microphone) or `details.fallback` (PTT → VAD); voice keeps running.
+    /// Voice stops by itself when the transport closes.
     async fn start(&self, transport: Arc<dyn DatagramTransport>) -> AppResult<()> {
         let mut run = self.run.lock().await;
         run.abort_tasks();
         lock(&self.shared.mixer).clear_streams();
-        run.rx = Some(tokio::spawn(rx_loop(
+        run.rx = Some(tokio::spawn(rx_task(
             transport.clone(),
-            self.shared.mixer.clone(),
+            Arc::downgrade(&self.inner),
         )));
         run.transport = Some(transport);
-        match self.reconcile(&mut run).await {
+        match self.inner.reconcile(&mut run).await {
             Ok(w) => warn_to_result(w),
             Err(e) => {
                 run.transport = None;
                 run.abort_tasks();
-                let _ = self.reconcile(&mut run).await;
+                let _ = self.inner.reconcile(&mut run).await;
                 Err(e)
             }
         }
@@ -476,7 +640,7 @@ impl VoiceEngine for CpalVoiceEngine {
         lock(&self.shared.mixer).clear_streams();
         let resets = lock(&self.shared.tracker).reset();
         self.shared.emit(resets);
-        self.reconcile(&mut run).await.map(|_| ())
+        self.inner.reconcile(&mut run).await.map(|_| ())
     }
 
     async fn set_peer_muted(&self, peer_id: &str, muted: bool) -> AppResult<()> {
@@ -516,11 +680,11 @@ impl VoiceEngine for CpalVoiceEngine {
         if !enabled {
             lock(&self.shared.mixer).clear_loopback();
         }
-        match self.reconcile(&mut run).await {
+        match self.inner.reconcile(&mut run).await {
             Ok(w) => warn_to_result(w),
             Err(e) => {
                 run.mic_test = false;
-                let _ = self.reconcile(&mut run).await;
+                let _ = self.inner.reconcile(&mut run).await;
                 Err(e)
             }
         }
@@ -529,20 +693,41 @@ impl VoiceEngine for CpalVoiceEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+
     use super::*;
+    use crate::loopback_tests::mock::pair;
 
     struct NullObserver;
     impl VoiceObserver for NullObserver {
         fn on_speaking(&self, _payload: VoiceSpeakingPayload) {}
     }
 
+    fn temp(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("lc-voice-engine-{tag}-{}", std::process::id()))
+    }
+
     fn engine(tag: &str) -> (CpalVoiceEngine, std::path::PathBuf) {
-        let dir =
-            std::env::temp_dir().join(format!("lc-voice-engine-{tag}-{}", std::process::id()));
+        let dir = temp(tag);
         (
             CpalVoiceEngine::new(&Paths::new(&dir), Arc::new(NullObserver)),
             dir,
         )
+    }
+
+    /// Engine with fake devices that never call back; counts opens.
+    fn headless(
+        tag: &str,
+        observer: Arc<dyn VoiceObserver>,
+    ) -> (CpalVoiceEngine, Arc<AtomicUsize>) {
+        let opens = Arc::new(AtomicUsize::new(0));
+        let counter = opens.clone();
+        let opener: Opener = Arc::new(move |cfg, _, _, _| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(AudioIo::headless(cfg))
+        });
+        let e = CpalVoiceEngine::with_opener(&Paths::new(temp(tag)), observer, opener);
+        (e, opens)
     }
 
     #[tokio::test]
@@ -597,8 +782,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_changes_are_published_once() {
-        let dir =
-            std::env::temp_dir().join(format!("lc-voice-engine-status-{}", std::process::id()));
+        let dir = temp("status");
         let rec = Arc::new(StatusRecorder::default());
         let e = CpalVoiceEngine::new(&Paths::new(&dir), rec.clone());
         e.set_self_muted(true).await.unwrap();
@@ -609,5 +793,67 @@ mod tests {
         assert!(seen[0].self_muted && !seen[1].self_muted);
         assert!(e.status().await.unwrap() == seen[1]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    async fn wait_until(mut f: impl FnMut() -> bool) -> bool {
+        for _ in 0..200 {
+            if f() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn room_close_stops_voice() {
+        let rec = Arc::new(StatusRecorder::default());
+        let (e, _) = headless("close", rec.clone());
+        let (a, b) = pair();
+        e.start(b).await.unwrap();
+        assert!(e.status().await.unwrap().active);
+        assert!(e.run.lock().await.io.is_some());
+        drop(a); // room closed → recv() returns None
+        assert!(wait_until(|| !e.shared.status().active).await);
+        let run = e.run.lock().await;
+        assert!(run.io.is_none() && run.tick.is_none() && run.transport.is_none());
+        drop(run);
+        let seen = lock(&rec.0).clone();
+        assert!(seen.first().is_some_and(|s| s.active));
+        assert!(seen.last().is_some_and(|s| !s.active));
+    }
+
+    #[tokio::test]
+    async fn stalled_output_is_reopened() {
+        let (e, opens) = headless("stall", Arc::new(NullObserver));
+        let (_a, b) = pair();
+        e.start(b).await.unwrap();
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        // Fake devices never call back → watchdog reopens after ~500 ms.
+        assert!(wait_until(|| opens.load(Ordering::SeqCst) >= 2).await);
+        e.stop().await.unwrap();
+        assert!(!e.status().await.unwrap().active);
+    }
+
+    #[test]
+    fn watchdog_rules() {
+        let h = OutputHealth::default();
+        let t0 = Instant::now();
+        let mut w = Watchdog::new(t0);
+        h.beats.store(5, Ordering::Relaxed);
+        assert!(!w.check(&h, t0 + Duration::from_millis(400)));
+        assert!(!w.check(&h, t0 + Duration::from_millis(800)));
+        assert!(w.check(&h, t0 + Duration::from_millis(950)));
+        // Backoff: no second attempt right away.
+        assert!(!w.check(&h, t0 + Duration::from_millis(1600)));
+        assert!(w.check(&h, t0 + Duration::from_millis(3000)));
+        // Callbacks resume → healthy.
+        h.beats.store(6, Ordering::Relaxed);
+        assert!(!w.check(&h, t0 + Duration::from_millis(3100)));
+        assert_eq!(w.attempts, 0);
+        // Stream error → immediate reopen.
+        h.failed.store(true, Ordering::Relaxed);
+        h.beats.store(7, Ordering::Relaxed);
+        assert!(w.check(&h, t0 + Duration::from_millis(3200)));
     }
 }

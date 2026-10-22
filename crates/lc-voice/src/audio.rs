@@ -2,9 +2,10 @@
 //! `Send` on every platform); dropping [`AudioIo`] closes them.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
@@ -128,6 +129,17 @@ fn find_device(input: bool, id: Option<&str>) -> AppResult<Device> {
     })
 }
 
+/// Liveness of the output stream, checked by the engine watchdog.
+#[derive(Debug, Default)]
+pub struct OutputHealth {
+    /// Incremented on every output callback.
+    pub beats: AtomicU64,
+    /// Set by the stream error callback (device lost/invalidated).
+    pub failed: AtomicBool,
+    /// Output callbacks that panicked (silence was played instead).
+    pub panics: AtomicU64,
+}
+
 /// What to open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IoConfig {
@@ -151,6 +163,7 @@ impl AudioIo {
         config: IoConfig,
         capture: Arc<CaptureQueue>,
         mixer: Arc<Mutex<Mixer>>,
+        health: Arc<OutputHealth>,
     ) -> AppResult<Self> {
         let (ready_tx, ready_rx) = mpsc::sync_channel::<AppResult<Option<AppError>>>(1);
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -158,7 +171,7 @@ impl AudioIo {
         let thread = std::thread::Builder::new()
             .name("voice-audio".into())
             .spawn(move || {
-                let output = match build_output(cfg.output.as_deref(), mixer) {
+                let output = match build_output(cfg.output.as_deref(), mixer, health) {
                     Ok(s) => s,
                     Err(e) => {
                         let _ = ready_tx.send(Err(e));
@@ -184,14 +197,27 @@ impl AudioIo {
             })
             .map_err(|e| audio_err("audio thread", e))?;
         let input_error = ready_rx
-            .recv()
-            .map_err(|_| AppError::internal("audio thread exited"))??;
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| AppError::new(ErrorCode::Io, "audio device did not open"))??;
         Ok(Self {
             config,
             input_error,
             stop: Some(stop_tx),
             thread: Some(thread),
         })
+    }
+}
+
+impl AudioIo {
+    /// No devices: for engine tests.
+    #[cfg(test)]
+    pub fn headless(config: IoConfig) -> Self {
+        Self {
+            config,
+            input_error: None,
+            stop: None,
+            thread: None,
+        }
     }
 }
 
@@ -254,17 +280,21 @@ where
         .map_err(|e| audio_err("input stream", e))
 }
 
-fn build_output(id: Option<&str>, mixer: Arc<Mutex<Mixer>>) -> AppResult<Stream> {
+fn build_output(
+    id: Option<&str>,
+    mixer: Arc<Mutex<Mixer>>,
+    health: Arc<OutputHealth>,
+) -> AppResult<Stream> {
     let device = find_device(false, id)?;
     let supported = device
         .default_output_config()
         .map_err(|e| audio_err("output config", e))?;
     let config: StreamConfig = supported.config();
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => output_stream::<f32>(&device, &config, mixer),
-        SampleFormat::I16 => output_stream::<i16>(&device, &config, mixer),
-        SampleFormat::I32 => output_stream::<i32>(&device, &config, mixer),
-        SampleFormat::U16 => output_stream::<u16>(&device, &config, mixer),
+        SampleFormat::F32 => output_stream::<f32>(&device, &config, mixer, health.clone()),
+        SampleFormat::I16 => output_stream::<i16>(&device, &config, mixer, health.clone()),
+        SampleFormat::I32 => output_stream::<i32>(&device, &config, mixer, health.clone()),
+        SampleFormat::U16 => output_stream::<u16>(&device, &config, mixer, health.clone()),
         other => Err(
             AppError::new(ErrorCode::Io, "unsupported output sample format")
                 .detail("format", format!("{other:?}")),
@@ -274,42 +304,78 @@ fn build_output(id: Option<&str>, mixer: Arc<Mutex<Mixer>>) -> AppResult<Stream>
     Ok(stream)
 }
 
+/// Output-side state living in the cpal callback.
+struct Render {
+    resampler: Resampler,
+    pending: VecDeque<f32>,
+    pulled: Vec<f32>,
+    resampled: Vec<f32>,
+}
+
+impl Render {
+    /// Fills `pending` with at least `frames` device-rate samples.
+    fn fill(&mut self, mixer: &Mutex<Mixer>, frames: usize) {
+        while self.pending.len() < frames {
+            self.pulled.clear();
+            mixer
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pull(crate::dsp::FRAME, &mut self.pulled);
+            self.resampled.clear();
+            self.resampler.process(&self.pulled, &mut self.resampled);
+            self.pending.extend(self.resampled.iter().copied());
+        }
+    }
+}
+
 fn output_stream<T>(
     device: &Device,
     config: &StreamConfig,
     mixer: Arc<Mutex<Mixer>>,
+    health: Arc<OutputHealth>,
 ) -> AppResult<Stream>
 where
     T: SizedSample + FromSample<f32>,
 {
     let channels = usize::from(config.channels.max(1));
-    let mut resampler = Resampler::new(SAMPLE_RATE, config.sample_rate);
-    let mut pending: VecDeque<f32> = VecDeque::new();
-    let mut pulled = Vec::new();
-    let mut resampled = Vec::new();
+    let mut render = Render {
+        resampler: Resampler::new(SAMPLE_RATE, config.sample_rate),
+        pending: VecDeque::new(),
+        pulled: Vec::new(),
+        resampled: Vec::new(),
+    };
+    let err_health = health.clone();
     device
         .build_output_stream(
             *config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                health.beats.fetch_add(1, Ordering::Relaxed);
                 let frames = data.len() / channels;
-                while pending.len() < frames {
-                    pulled.clear();
+                // A panic must not kill the device thread (silent stream
+                // forever): play silence and start from a clean state.
+                let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render.fill(&mixer, frames);
+                }))
+                .is_ok();
+                if !ok {
+                    health.panics.fetch_add(1, Ordering::Relaxed);
+                    render.pending.clear();
                     mixer
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
-                        .pull(crate::dsp::FRAME, &mut pulled);
-                    resampled.clear();
-                    resampler.process(&pulled, &mut resampled);
-                    pending.extend(resampled.iter().copied());
+                        .clear_streams();
                 }
                 for frame in data.chunks_exact_mut(channels) {
-                    let s = pending.pop_front().unwrap_or(0.0);
+                    let s = render.pending.pop_front().unwrap_or(0.0);
                     for out in frame {
                         *out = T::from_sample(s);
                     }
                 }
             },
-            |e| tracing::warn!(error = %e, "voice output stream error"),
+            move |e| {
+                err_health.failed.store(true, Ordering::Relaxed);
+                tracing::warn!(error = %e, "voice output stream error");
+            },
             None,
         )
         .map_err(|e| audio_err("output stream", e))
