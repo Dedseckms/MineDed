@@ -18,6 +18,7 @@ import type {
   InstanceId,
   InstancePatch,
   LoaderKind,
+  RoomAuthMode,
   SearchQuery,
   Settings,
   SkinId,
@@ -25,8 +26,12 @@ import type {
   TaskEvent,
   TaskId,
   VersionKind,
+  VpnMode,
+  VpnNode,
 } from "../bindings";
 import { nextOffset } from "../lib/content";
+import { selectNode } from "../lib/vpn";
+import { useRoomStore } from "../stores/roomStore";
 import { useTaskStore } from "../stores/taskStore";
 import { createTaskChannel } from "./channel";
 import { api, unwrap } from "./client";
@@ -50,6 +55,9 @@ export const qk = {
     ["contentVersions", source, projectId, filter] as const,
   skins: ["skins"] as const,
   capes: (account: AccountId) => ["capes", account] as const,
+  vpnState: ["vpnState"] as const,
+  vpnNodes: ["vpnNodes"] as const,
+  room: ["room"] as const,
 };
 
 // ---- queries ---------------------------------------------------------------
@@ -310,6 +318,123 @@ export function useSetCape() {
     mutationFn: async (v: { account: AccountId; capeId: string | null }) =>
       unwrap(await api.capeSet(v.account, v.capeId)),
     onSettled: (_d, _e, v) => qc.invalidateQueries({ queryKey: qk.capes(v.account) }),
+  });
+}
+
+// ---- vpn -------------------------------------------------------------------
+
+export const useVpnState = () =>
+  useQuery({ queryKey: qk.vpnState, queryFn: async () => unwrap(await api.vpnState()) });
+
+export const useVpnNodes = () =>
+  useQuery({ queryKey: qk.vpnNodes, queryFn: async () => unwrap(await api.vpnNodes()) });
+
+function useInvalidateVpn() {
+  const qc = useQueryClient();
+  return () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: qk.vpnState }),
+      qc.invalidateQueries({ queryKey: qk.vpnNodes }),
+    ]);
+}
+
+/** Replaces the subscription URL list (the refresh is a separate task). */
+export function useSetVpnSubscription() {
+  return useMutation({
+    mutationFn: async (urls: string[]) => unwrap(await api.vpnSetSubscription(urls)),
+  });
+}
+
+export function useImportVpnFile() {
+  const invalidate = useInvalidateVpn();
+  return useMutation({
+    mutationFn: async (path: string) => unwrap(await api.vpnImportSubscriptionFile(path)),
+    onSettled: invalidate,
+  });
+}
+
+export function useSetVpnMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (mode: VpnMode) => unwrap(await api.vpnSetMode(mode)),
+    onSuccess: (state) => qc.setQueryData(qk.vpnState, state),
+    onError: () => qc.invalidateQueries({ queryKey: qk.vpnState }),
+  });
+}
+
+/** Selects a node; the list is updated optimistically. */
+export function useSelectVpnNode() {
+  const qc = useQueryClient();
+  const invalidate = useInvalidateVpn();
+  return useMutation({
+    mutationFn: async (node: string) => unwrap(await api.vpnSelect(node)),
+    onMutate: async (node) => {
+      await qc.cancelQueries({ queryKey: qk.vpnNodes });
+      const prev = qc.getQueryData<VpnNode[]>(qk.vpnNodes);
+      qc.setQueryData<VpnNode[]>(qk.vpnNodes, (list) => (list ? selectNode(list, node) : list));
+      return { prev };
+    },
+    onError: (_e, _node, ctx) => {
+      if (ctx?.prev) qc.setQueryData(qk.vpnNodes, ctx.prev);
+    },
+    onSettled: invalidate,
+  });
+}
+
+export function useTestVpnLatency() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => unwrap(await api.vpnTestLatency()),
+    onSuccess: (nodes) => qc.setQueryData(qk.vpnNodes, nodes),
+  });
+}
+
+// ---- rooms & chat ----------------------------------------------------------
+
+export const useRoomState = () =>
+  useQuery({ queryKey: qk.room, queryFn: async () => unwrap(await api.roomState()) });
+
+export function useCreateRoom() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { instance: InstanceId; authMode: RoomAuthMode; password: string | null }) =>
+      unwrap(await api.roomCreate(v.instance, v.authMode, v.password)),
+    onSuccess: (state) => qc.setQueryData(qk.room, state),
+  });
+}
+
+export function useJoinRoom() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { code: string; instance: InstanceId; password: string | null }) =>
+      unwrap(await api.roomJoin(v.code, v.instance, v.password)),
+    onSuccess: (state) => qc.setQueryData(qk.room, state),
+  });
+}
+
+export function useLeaveRoom() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => unwrap(await api.roomLeave()),
+    onSuccess: () => qc.setQueryData(qk.room, null),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.room }),
+  });
+}
+
+export function useKickPeer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (peerId: string) => unwrap(await api.roomKick(peerId)),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.room }),
+  });
+}
+
+/** Sends a chat line; the returned message goes straight into the history. */
+export function useSendChat() {
+  const addOwnMessage = useRoomStore((s) => s.addOwnMessage);
+  return useMutation({
+    mutationFn: async (text: string) => unwrap(await api.chatSend(text)),
+    onSuccess: addOwnMessage,
   });
 }
 

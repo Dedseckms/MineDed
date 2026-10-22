@@ -10,7 +10,9 @@
     "instances": "Instances",
     "accounts": "Accounts",
     "settings": "Settings",
-    "skins": "Skins"
+    "skins": "Skins",
+    "multiplayer": "Multiplayer",
+    "vpn": "VPN"
   },
   "header": {
     "accountHint": "Go to accounts",
@@ -280,6 +282,17 @@
     "password": {
       "short": "At least 8 characters",
       "mismatch": "Passwords don't match"
+    },
+    "vpn": {
+      "tooMany": "16 links at most"
+    },
+    "room": {
+      "link": "The link must start with mineup://join/",
+      "code": "A room code looks like ABCD-1234",
+      "password": "Password must be 4 to 64 characters"
+    },
+    "chat": {
+      "length": "500 characters at most"
     }
   },
   "errors": {
@@ -482,5 +495,151 @@
     "selectHint": "Select a skin",
     "removeTitle": "Delete skin?",
     "removeMessage": "“{{name}}” will be removed from the library."
+  },
+  "net": {
+    "blocked": "{{host}} is unreachable — it looks blocked",
+    "blockedHint": "Turn on the built-in VPN to route downloads through it.",
+    "openVpn": "Open VPN"
+  },
+  "vpn": {
+    "intro": "Built-in VPN powered by mihomo. No admin rights needed: launcher traffic, and optionally the game, goes through the selected node.",
+    "latency": {
+      "unknown": "—",
+      "ms": "{{ms}} ms"
+    },
+    "status": {
+      "title": "Status",
+      "error": "Error",
+      "running": "On",
+      "stopped": "Off",
+      "node": "Node",
+      "noNode": "Not selected",
+      "updated": "Subscription updated",
+      "never": "Never"
+    },
+    "mode": {
+      "label": "VPN mode",
+      "off": "Off",
+      "launcherOnly": "Launcher & downloads",
+      "launcherAndGame": "Launcher + game",
+      "needNodes": "Add a subscription and fetch its nodes first."
+    },
+    "modeHint": {
+      "off": "All connections go direct.",
+      "launcherOnly": "Downloads, mod catalogs and sign-in go through the VPN; the game connects directly.",
+      "launcherAndGame": "The game also gets proxy settings (server auth, skins). Restart the game to apply."
+    },
+    "sub": {
+      "title": "Subscription",
+      "refresh": "Refresh",
+      "source": "Subscription source",
+      "byUrl": "By link",
+      "byFile": "From file",
+      "urls": "Subscription links",
+      "urlsHint": "One per line. Links are stored on this computer only.",
+      "urlsPlaceholder": "https://example.com/sub/…",
+      "save": "Save and refresh",
+      "path": "Subscription file path",
+      "pathHint": "A mihomo/Clash config (YAML) or a list of vless://, trojan://… links",
+      "pathPlaceholder": "/home/user/subscription.yaml",
+      "import": "Import"
+    },
+    "nodes": {
+      "title": "Nodes ({{n}})",
+      "label": "VPN nodes",
+      "pingAll": "Ping all",
+      "empty": "No nodes yet",
+      "emptyHint": "Add a subscription by link or from a file.",
+      "search": "Search nodes",
+      "sort": "Sort nodes",
+      "byLatency": "By ping",
+      "byName": "By name",
+      "noMatch": "Nothing found",
+      "select": "Select node"
+    }
+  },
+  "rooms": {
+    "instance": "Instance",
+    "instanceHint": "All players need the same version, loader and mods.",
+    "noInstances": "Create an instance first",
+    "password": "Room password",
+    "passwordHint": "Without a password anyone with the code can join.",
+    "create": {
+      "title": "Open world to friends",
+      "intro": "Create a room, send the code to friends, then open your world to LAN in game (Esc → Open to LAN).",
+      "submit": "Create room"
+    },
+    "authMode": {
+      "label": "Player check",
+      "yggdrasil": "Server accounts",
+      "open": "Open"
+    },
+    "authModeHint": {
+      "yggdrasil": "Only accounts of our server; everyone's skins work.",
+      "open": "No checks: offline accounts can join, but they have no skins."
+    },
+    "join": {
+      "title": "Join by code",
+      "intro": "Enter a code or link from a friend — the launcher gives you a local address to connect to.",
+      "code": "Code or link",
+      "codeHint": "E.g. ABCD-1234 or mineup://join/ABCD-1234",
+      "codePlaceholder": "ABCD-1234",
+      "submit": "Join",
+      "denied": "Wrong room password."
+    },
+    "role": {
+      "host": "You are the host",
+      "guest": "You are a guest"
+    },
+    "room": {
+      "hostTitle": "Your room",
+      "guestTitle": "Friend's room",
+      "close": "Close room",
+      "leave": "Leave",
+      "passwordProtected": "Password",
+      "expires": "Valid until {{date}}",
+      "code": "Room code",
+      "copyCode": "Copy code",
+      "localAddr": "Address for the game",
+      "localAddrHint": "In game: Multiplayer → Add Server → paste this address.",
+      "hostHint": "Start the game and open your world to LAN — the launcher picks up the port.",
+      "guestHint": "Start the same instance and connect to the address above.",
+      "toPlay": "Go to Play",
+      "closeTitle": "Close the room?",
+      "closeMessage": "Everyone will be disconnected.",
+      "leaveTitle": "Leave the room?",
+      "leaveMessage": "You will be disconnected from your friend's world."
+    },
+    "peers": {
+      "title": "Players ({{n}})",
+      "rtt": "Ping {{ms}} ms",
+      "rttUnknown": "Ping unknown",
+      "kick": "Kick",
+      "kickNamed": "Kick {{name}}",
+      "kickTitle": "Kick the player?",
+      "kickMessage": "{{name}} will be disconnected from the room.",
+      "waiting": "Waiting for friends… Send them the code or link.",
+      "none": "Nobody here yet"
+    },
+    "path": {
+      "direct": "Direct",
+      "relay": "Relay",
+      "connecting": "Connecting…"
+    },
+    "pathHint": {
+      "direct": "Direct connection (NAT traversed) — lowest latency.",
+      "relay": "Traffic goes through our relay server — higher latency.",
+      "connecting": "Establishing the connection."
+    },
+    "chat": {
+      "title": "Chat",
+      "empty": "No messages yet",
+      "you": "You",
+      "viaRelay": "via server",
+      "input": "Message",
+      "placeholder": "Write a message…",
+      "send": "Send",
+      "unread": "Unread: {{n}}"
+    }
   }
 }
