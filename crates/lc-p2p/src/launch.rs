@@ -80,7 +80,7 @@ impl GameObserver for RoomLogTap {
 
     fn on_log(&self, payload: InstanceLogPayload) {
         for line in &payload.lines {
-            self.rooms.feed_game_log(line);
+            self.rooms.feed_game_log(payload.id, line);
         }
         self.inner.on_log(payload);
     }

@@ -3,12 +3,16 @@
 //! Topology is a star: every guest holds one QUIC connection to the host
 //! (direct after hole punching, otherwise through our iroh-relay). The host
 //! forwards chat and voice datagrams between guests.
+//!
+//! Host admission (in order): hub `peerToken` bound to the guest's
+//! TLS-authenticated endpoint id, ban list, room size, password proof with a
+//! per-endpoint attempt limit.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use iroh::endpoint::{presets, Builder, Connection, Incoming, RecvStream, SendStream};
@@ -26,11 +30,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::code::{join_link, parse_code};
 use crate::contract::{DatagramTransport, RoomObserver, RoomService};
-use crate::env::RoomEnv;
+use crate::env::{Identity, RoomEnv};
 use crate::hub::{CreateRoomReq, HubClient};
-use crate::lan;
+use crate::lan::{self, LanSeen};
 use crate::proto::{ControlMsg, StreamOpen, ALPN, PROTOCOL_VERSION};
-use crate::wire::{self, Ext, MAX_LINE, MAX_OPEN_LINE};
+use crate::wire::{self, MAX_LINE, MAX_OPEN_LINE};
 
 /// Hook to adjust the iroh endpoint builder (tests: trust a self-signed relay,
 /// add address lookups). Applied after the defaults.
@@ -41,13 +45,24 @@ const MAX_CHAT_CHARS: usize = 500;
 const MAX_NAME_CHARS: usize = 32;
 const PATH_POLL: Duration = Duration::from_secs(2);
 const DGRAM_QUEUE: usize = 256;
+/// Pending control lines per peer; a peer that falls this far behind is dropped.
+const CONTROL_QUEUE: usize = 256;
+/// Wrong passwords per endpoint before the host starts refusing it.
+const MAX_PASSWORD_FAILS: u32 = 5;
+/// First lockout after `MAX_PASSWORD_FAILS`; doubles on every further failure.
+const PASSWORD_BACKOFF: Duration = Duration::from_secs(30);
+const PASSWORD_BACKOFF_MAX: Duration = Duration::from_secs(3600);
 
-/// Kick reasons on the wire (`ControlMsg::Kick::reason`).
+/// Kick / reject reasons on the wire (`ControlMsg::Kick::reason`).
 pub mod reasons {
     pub const BAD_PASSWORD: &str = "bad_password";
+    pub const BAD_TOKEN: &str = "bad_token";
+    pub const BANNED: &str = "banned";
+    pub const RATE_LIMITED: &str = "rate_limited";
     pub const ROOM_FULL: &str = "room_full";
     pub const PROTOCOL: &str = "protocol";
     pub const KICKED: &str = "kicked";
+    pub const SLOW: &str = "slow";
     pub const CLOSED: &str = "closed";
 }
 
@@ -101,8 +116,8 @@ struct PeerEntry {
     peer: Peer,
     /// `None` for peers we only know from the host's `Welcome` (guest side).
     conn: Option<Connection>,
-    /// Control stream writer.
-    tx: Option<mpsc::UnboundedSender<String>>,
+    /// Control stream writer (bounded).
+    tx: Option<mpsc::Sender<String>>,
 }
 
 #[derive(Default)]
@@ -116,6 +131,12 @@ struct HostCtx {
     hub: HubClient,
     host_token: Secret,
     password: Option<Secret>,
+    /// LAN port fixed at create time; never re-read while the room lives.
+    lan_port: u16,
+    /// Endpoint ids and (yggdrasil rooms) profile uuids kicked from this room.
+    banned: StdMutex<HashSet<String>>,
+    /// Wrong password attempts per endpoint id: (count, last failure).
+    pw_fails: StdMutex<HashMap<String, (u32, Instant)>>,
 }
 
 pub(crate) struct Session {
@@ -137,9 +158,13 @@ pub(crate) struct Session {
     host: Option<HostCtx>,
 }
 
+fn lock<T>(m: &StdMutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl Session {
     fn peers(&self) -> MutexGuard<'_, Peers> {
-        self.peers.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.peers)
     }
 
     fn state(&self) -> RoomState {
@@ -170,21 +195,33 @@ impl Session {
         }
     }
 
-    fn send_to(&self, peer_id: &str, line: &str) {
-        if let Some(tx) = self.peers().map.get(peer_id).and_then(|e| e.tx.as_ref()) {
-            let _ = tx.send(line.to_owned());
-        }
-    }
-
-    fn broadcast(&self, line: &str, except: Option<&str>) {
+    /// Queues `line` for the given peers (all when `only` is `None`), skipping
+    /// `except`. Peers whose queue is full are disconnected.
+    fn send_lines(&self, line: &str, only: Option<&str>, except: Option<&str>) {
+        let mut slow = Vec::new();
         for (id, e) in &self.peers().map {
-            if Some(id.as_str()) == except {
+            if Some(id.as_str()) == except || only.is_some_and(|o| o != id) {
                 continue;
             }
             if let Some(tx) = &e.tx {
-                let _ = tx.send(line.to_owned());
+                if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(line.to_owned()) {
+                    if let Some(c) = &e.conn {
+                        slow.push(c.clone());
+                    }
+                }
             }
         }
+        for c in slow {
+            c.close(3u32.into(), reasons::SLOW.as_bytes());
+        }
+    }
+
+    fn send_to(&self, peer_id: &str, line: &str) {
+        self.send_lines(line, Some(peer_id), None);
+    }
+
+    fn broadcast(&self, line: &str, except: Option<&str>) {
+        self.send_lines(line, None, except);
     }
 
     fn connections(&self, except: Option<&str>) -> Vec<Connection> {
@@ -206,25 +243,26 @@ pub(crate) struct Inner {
     /// Serialises create / join / leave.
     op: tokio::sync::Mutex<()>,
     session: StdMutex<Option<Arc<Session>>>,
-    /// Last LAN port seen in the game log or a LAN announcement.
-    lan_port: Arc<watch::Sender<Option<u16>>>,
+    /// Last LAN port seen in a game log or a local LAN announcement. Only
+    /// consulted by `create`.
+    lan_port: Arc<watch::Sender<Option<LanSeen>>>,
+    /// Endpoint key for the app's lifetime, so a host's ban of this launcher
+    /// survives a rejoin.
+    secret: SecretKey,
 }
 
 impl Inner {
     pub(crate) fn current(&self) -> Option<Arc<Session>> {
-        self.session
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        lock(&self.session).clone()
     }
 
     fn set_current(&self, s: Option<Arc<Session>>) {
-        *self.session.lock().unwrap_or_else(|e| e.into_inner()) = s;
+        *lock(&self.session) = s;
     }
 
     /// Takes the session out if it is still `s`.
     fn take_if(&self, s: &Arc<Session>) -> bool {
-        let mut guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = lock(&self.session);
         if guard.as_ref().is_some_and(|cur| Arc::ptr_eq(cur, s)) {
             *guard = None;
             true
@@ -259,6 +297,7 @@ impl P2pRooms {
                 op: tokio::sync::Mutex::new(()),
                 session: StdMutex::new(None),
                 lan_port: Arc::new(lan_port),
+                secret: SecretKey::generate(),
             }),
         }
     }
@@ -267,16 +306,24 @@ impl P2pRooms {
         &self.inner
     }
 
-    /// Feed game log lines of the host's game; picks up the LAN port.
-    pub fn feed_game_log(&self, line: &str) {
+    /// Feed log lines of a running game; picks up the integrated server's
+    /// LAN port (server-thread lines only, chat is ignored). The port is
+    /// used only by a later `create` for the same instance.
+    pub fn feed_game_log(&self, instance: InstanceId, line: &str) {
         if let Some(port) = lan::port_from_log_line(line) {
-            self.inner.lan_port.send_replace(Some(port));
+            self.inner.lan_port.send_replace(Some(LanSeen {
+                instance: Some(instance),
+                port,
+            }));
         }
     }
 
     /// Sets the host's LAN port explicitly (tests, manual override).
     pub fn set_lan_port(&self, port: Option<u16>) {
-        self.inner.lan_port.send_replace(port);
+        self.inner.lan_port.send_replace(port.map(|port| LanSeen {
+            instance: None,
+            port,
+        }));
     }
 
     /// Address of the local iroh endpoint while in a room (diagnostics, tests).
@@ -334,19 +381,20 @@ impl P2pRooms {
             .collect()
     }
 
-    /// Waits until a verified LAN port is known.
-    async fn wait_lan_port(&self) -> AppResult<u16> {
+    /// Waits until a verified LAN port of `instance` (or of an unknown local
+    /// game, from a LAN announcement) is known.
+    async fn wait_lan_port(&self, instance: InstanceId) -> AppResult<u16> {
         let mut rx = self.inner.lan_port.subscribe();
         let deadline = tokio::time::Instant::now() + self.inner.cfg.lan_wait;
         loop {
             let cur = *rx.borrow_and_update();
-            if let Some(port) = cur {
-                if lan::is_local_port_open(port).await {
-                    return Ok(port);
+            if let Some(seen) = cur.filter(|s| s.instance.is_none_or(|i| i == instance)) {
+                if lan::is_local_port_open(seen.port).await {
+                    return Ok(seen.port);
                 }
                 // Stale port from an earlier game session.
                 self.inner.lan_port.send_if_modified(|v| {
-                    let stale = *v == Some(port);
+                    let stale = *v == Some(seen);
                     if stale {
                         *v = None;
                     }
@@ -380,8 +428,9 @@ impl P2pRooms {
         }
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
         let hub = self.hub().await?;
-        let sig = self.inner.env.instance_sig(instance).await?;
         let me = self.inner.env.identity().await?;
+        check_host_auth_mode(auth_mode, &me)?;
+        let sig = self.inner.env.instance_sig(instance).await?;
 
         let cancel = CancellationToken::new();
         if self.inner.cfg.lan_multicast {
@@ -390,16 +439,13 @@ impl P2pRooms {
                 cancel.clone(),
             ));
         }
-        let port = match self.wait_lan_port().await {
-            Ok(p) => p,
-            Err(e) => {
-                cancel.cancel();
-                return Err(e);
-            }
-        };
-        tracing::info!("rooms: hosting LAN world on port {port}");
+        let detected = self.wait_lan_port(instance).await;
+        // Detection is over: the port is fixed for the room's lifetime.
+        cancel.cancel();
+        let lan_port = detected?;
+        tracing::info!("rooms: hosting LAN world on port {lan_port}");
 
-        let secret = SecretKey::generate();
+        let secret = self.inner.secret.clone();
         let my_id = secret.public().to_string();
         let req = CreateRoomReq {
             endpoint_id: my_id.clone(),
@@ -408,19 +454,12 @@ impl P2pRooms {
             max_peers: self.inner.cfg.max_peers,
             password_protected: password.is_some(),
         };
-        let resp = match hub.create_room(&req, me.hub_token.as_ref()).await {
-            Ok(r) => r,
-            Err(e) => {
-                cancel.cancel();
-                return Err(e);
-            }
-        };
+        let resp = hub.create_room(&req, me.hub_token.as_ref()).await?;
         let host_token = Secret::new(resp.host_token);
         let relays = self.relays(resp.relay_urls);
         let endpoint = match self.bind_endpoint(secret, &relays, true).await {
             Ok(ep) => ep,
             Err(e) => {
-                cancel.cancel();
                 let _ = hub.close_room(resp.room_id, &host_token).await;
                 return Err(e);
             }
@@ -439,7 +478,7 @@ impl P2pRooms {
             my_id: my_id.clone(),
             my_name: clean_name(&me.name),
             endpoint,
-            cancel,
+            cancel: CancellationToken::new(),
             peers: StdMutex::new(Peers {
                 order: vec![my_id],
                 map: BTreeMap::new(),
@@ -450,6 +489,9 @@ impl P2pRooms {
                 hub,
                 host_token,
                 password,
+                lan_port,
+                banned: StdMutex::new(HashSet::new()),
+                pw_fails: StdMutex::new(HashMap::new()),
             }),
         });
         self.inner.set_current(Some(session.clone()));
@@ -479,6 +521,9 @@ impl P2pRooms {
     }
 
     async fn host_handle(&self, s: Arc<Session>, incoming: Incoming) -> AppResult<()> {
+        let Some(host) = s.host.as_ref() else {
+            return Ok(());
+        };
         let hello_timeout = self.inner.cfg.hello_timeout;
         let conn = incoming
             .accept()
@@ -495,19 +540,40 @@ impl P2pRooms {
             .await
             .map_err(|_| timeout_err("hello"))??
             .ok_or_else(|| wire::proto_err("no hello"))?;
-        let (msg, ext) = wire::decode(&line)?;
         let ControlMsg::Hello {
             protocol,
             name,
             uuid,
-            peer_token: _,
-        } = msg
+            peer_token,
+            password_proof,
+        } = wire::decode(&line)?
         else {
             return reject(&conn, &mut send, reasons::PROTOCOL).await;
         };
-        // TODO(contract): verify `peer_token` once hub exposes a way to check it.
         if protocol != PROTOCOL_VERSION {
             return reject(&conn, &mut send, reasons::PROTOCOL).await;
+        }
+        let token_ok = wire::verify_peer_token(
+            &peer_token,
+            host.host_token.expose(),
+            s.room_id,
+            &remote,
+            unix_now(),
+        );
+        if !token_ok {
+            return reject(&conn, &mut send, reasons::BAD_TOKEN).await;
+        }
+        // Profile uuids are only meaningful when the server checks them.
+        let uuid_key = uuid
+            .as_deref()
+            .filter(|_| s.auth_mode == RoomAuthMode::Yggdrasil)
+            .map(normalize_uuid);
+        let banned = {
+            let b = lock(&host.banned);
+            b.contains(&remote) || uuid_key.as_ref().is_some_and(|u| b.contains(u))
+        };
+        if banned {
+            return reject(&conn, &mut send, reasons::BANNED).await;
         }
         let max_guests = usize::try_from(self.inner.cfg.max_peers.saturating_sub(1)).unwrap_or(0);
         let full = {
@@ -517,31 +583,33 @@ impl P2pRooms {
         if full {
             return reject(&conn, &mut send, reasons::ROOM_FULL).await;
         }
-        if let Some(password) = s.host.as_ref().and_then(|h| h.password.as_ref()) {
+        if let Some(password) = host.password.as_ref() {
+            if password_locked(host, &remote) {
+                return reject(&conn, &mut send, reasons::RATE_LIMITED).await;
+            }
             let ekm = ekm(&conn, s.room_id)?;
-            let ok = ext
-                .password_proof
+            let ok = password_proof
                 .as_deref()
                 .is_some_and(|p| wire::verify_password_proof(password.expose(), &ekm, p));
             if !ok {
+                note_password_failure(host, &remote);
                 return reject(&conn, &mut send, reasons::BAD_PASSWORD).await;
             }
+            lock(&host.pw_fails).remove(&remote);
         }
 
         // Accepted: introduce ourselves, then everyone gets a fresh Welcome.
-        let host_hello = wire::encode(
-            &ControlMsg::Hello {
-                protocol: PROTOCOL_VERSION,
-                name: s.my_name.clone(),
-                uuid: None,
-                peer_token: String::new(),
-            },
-            &Ext::default(),
-        )?;
+        let host_hello = wire::encode(&ControlMsg::Hello {
+            protocol: PROTOCOL_VERSION,
+            name: s.my_name.clone(),
+            uuid: None,
+            peer_token: String::new(),
+            password_proof: None,
+        })?;
         send.write_all(host_hello.as_bytes())
             .await
             .map_err(|e| net_err("control stream", e))?;
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(CONTROL_QUEUE);
         spawn_writer(send, rx);
         let peer = Peer {
             peer_id: remote.clone(),
@@ -584,7 +652,7 @@ impl P2pRooms {
         );
         tokio::spawn(host_game_streams(
             conn.clone(),
-            self.inner.lan_port.subscribe(),
+            host.lan_port,
             s.cancel.clone(),
         ));
         let control = self.clone().control_loop(s.clone(), remote.clone(), reader);
@@ -598,8 +666,25 @@ impl P2pRooms {
     }
 
     fn host_broadcast_welcome(&self, s: &Session) -> AppResult<()> {
-        let order = s.peers().order.clone();
-        let line = wire::encode(&ControlMsg::Welcome { peers: order }, &Ext::default())?;
+        let (peers, peer_names) = {
+            let p = s.peers();
+            let names = p
+                .order
+                .iter()
+                .map(|id| {
+                    if *id == s.my_id {
+                        s.my_name.clone()
+                    } else {
+                        p.map
+                            .get(id)
+                            .map(|e| e.peer.name.clone())
+                            .unwrap_or_default()
+                    }
+                })
+                .collect();
+            (p.order.clone(), names)
+        };
+        let line = wire::encode(&ControlMsg::Welcome { peers, peer_names })?;
         s.broadcast(&line, None);
         Ok(())
     }
@@ -632,18 +717,15 @@ impl P2pRooms {
 
     async fn kick_peer(&self, peer_id: &str) -> AppResult<()> {
         let s = self.require_session()?;
-        if s.role != RoomRole::Host {
+        let Some(host) = s.host.as_ref().filter(|_| s.role == RoomRole::Host) else {
             return Err(AppError::new(
                 ErrorCode::PermissionDenied,
                 "only the host can kick",
             ));
-        }
-        let line = wire::encode(
-            &ControlMsg::Kick {
-                reason: reasons::KICKED.into(),
-            },
-            &Ext::default(),
-        )?;
+        };
+        let line = wire::encode(&ControlMsg::Kick {
+            reason: reasons::KICKED.into(),
+        })?;
         let entry = {
             let mut p = s.peers();
             p.order.retain(|x| x != peer_id);
@@ -654,8 +736,19 @@ impl P2pRooms {
                 AppError::new(ErrorCode::NotFound, "no such peer").detail("peerId", peer_id)
             );
         };
+        // Banned for the room's lifetime: endpoint id, plus the profile uuid
+        // in yggdrasil rooms (a new endpoint id is free to generate).
+        {
+            let mut b = lock(&host.banned);
+            b.insert(peer_id.to_owned());
+            if s.auth_mode == RoomAuthMode::Yggdrasil {
+                if let Some(u) = &entry.peer.uuid {
+                    b.insert(normalize_uuid(u));
+                }
+            }
+        }
         if let Some(tx) = &entry.tx {
-            let _ = tx.send(line);
+            let _ = tx.try_send(line);
         }
         if let Some(conn) = entry.conn.clone() {
             tokio::spawn(async move {
@@ -688,9 +781,31 @@ impl P2pRooms {
         let me = self.inner.env.identity().await?;
         let local_sig = self.inner.env.instance_sig(instance).await?;
 
-        let secret = SecretKey::generate();
+        let secret = self.inner.secret.clone();
         let my_id = secret.public().to_string();
-        let resp = hub.join_room(&code, &my_id, me.hub_token.as_ref()).await?;
+        let resp = hub
+            .join_room(
+                &code,
+                &my_id,
+                &clean_name(&me.name),
+                me.uuid.as_deref(),
+                me.hub_token.as_ref(),
+            )
+            .await
+            .map_err(|e| {
+                if e.code == ErrorCode::AuthRequired && me.hub_token.is_none() {
+                    e.detail("reason", "yggdrasilAccountRequired")
+                } else {
+                    e
+                }
+            })?;
+        if resp.auth_mode == RoomAuthMode::Yggdrasil && me.hub_token.is_none() {
+            return Err(AppError::new(
+                ErrorCode::AuthRequired,
+                "this room needs an account on the project's Yggdrasil server",
+            )
+            .detail("reason", "yggdrasilAccountRequired"));
+        }
         check_sig(&resp.sig, &local_sig)?;
         if resp.password_protected && password.is_none() {
             return Err(
@@ -716,7 +831,7 @@ impl P2pRooms {
                 password.as_ref(),
             )
             .await;
-        let (conn, send, reader, host_name, order) = match handshake {
+        let (conn, send, reader, host_name, welcome) = match handshake {
             Ok(v) => v,
             Err(e) => {
                 endpoint.close().await;
@@ -735,7 +850,7 @@ impl P2pRooms {
         let local_addr = listener.local_addr()?;
 
         let host_key = host_id.to_string();
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(CONTROL_QUEUE);
         spawn_writer(send, rx);
         let (dgram_tx, dgram_rx) = mpsc::channel(DGRAM_QUEUE);
         let mut peers = Peers::default();
@@ -755,7 +870,7 @@ impl P2pRooms {
                 tx: Some(tx),
             },
         );
-        apply_welcome(&mut peers, order, &my_id, &host_key);
+        apply_welcome(&mut peers, welcome.0, welcome.1, &my_id, &host_key);
         let session = Arc::new(Session {
             role: RoomRole::Guest,
             room_id: resp.room_id,
@@ -802,14 +917,15 @@ impl P2pRooms {
         Ok(state)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Connects, sends `Hello` and waits for the host's `Hello` + `Welcome`.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     async fn guest_connect(
         &self,
         endpoint: &Endpoint,
         host_id: EndpointId,
         relays: &[RelayUrl],
         room_id: RoomId,
-        me: &crate::env::Identity,
+        me: &Identity,
         peer_token: &str,
         password: Option<&Secret>,
     ) -> AppResult<(
@@ -817,7 +933,7 @@ impl P2pRooms {
         SendStream,
         BufReader<RecvStream>,
         String,
-        Vec<String>,
+        (Vec<String>, Vec<String>),
     )> {
         let mut addr = EndpointAddr::new(host_id);
         for r in relays {
@@ -835,22 +951,17 @@ impl P2pRooms {
             .open_bi()
             .await
             .map_err(|e| net_err("control stream", e))?;
-        let ext = Ext {
-            password_proof: match password {
-                Some(p) => Some(wire::password_proof(p.expose(), &ekm(&conn, room_id)?)),
-                None => None,
-            },
-            ..Ext::default()
+        let password_proof = match password {
+            Some(p) => Some(wire::password_proof(p.expose(), &ekm(&conn, room_id)?)),
+            None => None,
         };
-        let hello = wire::encode(
-            &ControlMsg::Hello {
-                protocol: PROTOCOL_VERSION,
-                name: clean_name(&me.name),
-                uuid: me.uuid.clone(),
-                peer_token: peer_token.to_owned(),
-            },
-            &ext,
-        )?;
+        let hello = wire::encode(&ControlMsg::Hello {
+            protocol: PROTOCOL_VERSION,
+            name: clean_name(&me.name),
+            uuid: me.uuid.clone(),
+            peer_token: peer_token.to_owned(),
+            password_proof,
+        })?;
         send.write_all(hello.as_bytes())
             .await
             .map_err(|e| net_err("control stream", e))?;
@@ -865,16 +976,16 @@ impl P2pRooms {
                         "host closed the connection",
                     ));
                 };
-                match wire::decode(&line)?.0 {
+                match wire::decode(&line)? {
                     ControlMsg::Hello { name, .. } => host_name = clean_name(&name),
-                    ControlMsg::Welcome { peers } => return Ok(peers),
+                    ControlMsg::Welcome { peers, peer_names } => return Ok((peers, peer_names)),
                     ControlMsg::Kick { reason } => return Err(kick_error(&reason)),
                     _ => {}
                 }
             }
         };
-        let order = match tokio::time::timeout(self.inner.cfg.hello_timeout, handshake).await {
-            Ok(Ok(order)) => order,
+        let welcome = match tokio::time::timeout(self.inner.cfg.hello_timeout, handshake).await {
+            Ok(Ok(w)) => w,
             Ok(Err(e)) => {
                 conn.close(0u32.into(), b"bye");
                 return Err(e);
@@ -884,7 +995,7 @@ impl P2pRooms {
                 return Err(timeout_err("welcome"));
             }
         };
-        Ok((conn, send, reader, host_name, order))
+        Ok((conn, send, reader, host_name, welcome))
     }
 
     async fn guest_lifetime(
@@ -916,17 +1027,23 @@ impl P2pRooms {
                 Ok(Some(l)) => l,
                 Ok(None) | Err(_) => return,
             };
-            let Ok((msg, ext)) = wire::decode(&line) else {
+            let Ok(msg) = wire::decode(&line) else {
                 continue;
             };
             match msg {
                 ControlMsg::Ping { nonce } => {
-                    if let Ok(l) = wire::encode(&ControlMsg::Pong { nonce }, &Ext::default()) {
+                    if let Ok(l) = wire::encode(&ControlMsg::Pong { nonce }) {
                         s.send_to(&from, &l);
                     }
                 }
-                ControlMsg::Chat { id, text, sent_at } => {
-                    self.on_chat(&s, &from, ext, id, text, sent_at);
+                ControlMsg::Chat {
+                    id,
+                    text,
+                    sent_at,
+                    from: orig,
+                    from_name,
+                } => {
+                    self.on_chat(&s, &from, (orig, from_name), id, text, sent_at);
                 }
                 ControlMsg::VoiceState { speaking, muted } => {
                     if let Some(e) = s.peers().map.get_mut(&from) {
@@ -935,11 +1052,8 @@ impl P2pRooms {
                     }
                     self.emit_state();
                 }
-                ControlMsg::Welcome { peers } if s.role == RoomRole::Guest => {
-                    {
-                        let mut p = s.peers();
-                        apply_welcome(&mut p, peers, &s.my_id, &from);
-                    }
+                ControlMsg::Welcome { peers, peer_names } if s.role == RoomRole::Guest => {
+                    apply_welcome(&mut s.peers(), peers, peer_names, &s.my_id, &from);
                     self.emit_state();
                 }
                 ControlMsg::Hello { name, .. } if s.role == RoomRole::Guest => {
@@ -958,50 +1072,32 @@ impl P2pRooms {
         &self,
         s: &Session,
         from: &str,
-        ext: Ext,
+        (orig, orig_name): (Option<String>, Option<String>),
         id: String,
         text: String,
         sent_at: String,
     ) {
         let text: String = text.chars().take(MAX_CHAT_CHARS).collect();
-        let (from_peer, from_name) = match s.role {
-            // The host trusts only the connection identity.
-            RoomRole::Host => {
-                let name = s
-                    .peers()
-                    .map
-                    .get(from)
-                    .map(|e| e.peer.name.clone())
-                    .unwrap_or_default();
-                (from.to_owned(), name)
-            }
+        let conn_name = s
+            .peers()
+            .map
+            .get(from)
+            .map(|e| e.peer.name.clone())
+            .unwrap_or_default();
+        let (from_peer, from_name) = match (s.role, orig) {
             // Guests only talk to the host; it names the original sender.
-            RoomRole::Guest => {
-                let host_name = s
-                    .peers()
-                    .map
-                    .get(from)
-                    .map(|e| e.peer.name.clone())
-                    .unwrap_or_default();
-                match ext.from {
-                    Some(f) if f != from => (f, ext.from_name.unwrap_or_default()),
-                    _ => (from.to_owned(), host_name),
-                }
-            }
+            (RoomRole::Guest, Some(f)) if f != from => (f, orig_name.unwrap_or_default()),
+            // The host trusts only the connection identity.
+            _ => (from.to_owned(), conn_name),
         };
         if s.role == RoomRole::Host {
-            let fwd = wire::encode(
-                &ControlMsg::Chat {
-                    id: id.clone(),
-                    text: text.clone(),
-                    sent_at: sent_at.clone(),
-                },
-                &Ext {
-                    from: Some(from_peer.clone()),
-                    from_name: Some(from_name.clone()),
-                    ..Ext::default()
-                },
-            );
+            let fwd = wire::encode(&ControlMsg::Chat {
+                id: id.clone(),
+                text: text.clone(),
+                sent_at: sent_at.clone(),
+                from: Some(from_peer.clone()),
+                from_name: Some(from_name.clone()),
+            });
             if let Ok(line) = fwd {
                 s.broadcast(&line, Some(from));
             }
@@ -1100,18 +1196,13 @@ impl P2pRooms {
             sent_at: chrono::Utc::now().to_rfc3339(),
             via_relay: false,
         };
-        let line = wire::encode(
-            &ControlMsg::Chat {
-                id: msg.id.clone(),
-                text: msg.text.clone(),
-                sent_at: msg.sent_at.clone(),
-            },
-            &Ext {
-                from: Some(msg.from_peer.clone()),
-                from_name: Some(msg.from_name.clone()),
-                ..Ext::default()
-            },
-        )?;
+        let line = wire::encode(&ControlMsg::Chat {
+            id: msg.id.clone(),
+            text: msg.text.clone(),
+            sent_at: msg.sent_at.clone(),
+            from: Some(msg.from_peer.clone()),
+            from_name: Some(msg.from_name.clone()),
+        })?;
         s.broadcast(&line, None);
         Ok(msg)
     }
@@ -1209,6 +1300,69 @@ impl DatagramTransport for P2pRooms {
 
 // ------------------------------------------------------------------ helpers
 
+/// The integrated server's online mode follows the host account: a Yggdrasil
+/// host runs online mode (offline guests get "Invalid session"), an offline
+/// host runs offline mode (nobody is verified).
+fn check_host_auth_mode(mode: RoomAuthMode, me: &Identity) -> AppResult<()> {
+    let online_host = me.hub_token.is_some();
+    match (mode, online_host) {
+        (RoomAuthMode::Yggdrasil, false) => Err(AppError::new(
+            ErrorCode::InvalidInput,
+            "a yggdrasil room needs the host to play with a Yggdrasil account",
+        )
+        .detail("reason", "authModeMismatch")
+        .detail("expected", "open")),
+        (RoomAuthMode::Open, true) => Err(AppError::new(
+            ErrorCode::InvalidInput,
+            "the host plays with a Yggdrasil account, so the world runs in online mode; \
+             offline guests would fail with \"Invalid session\"",
+        )
+        .detail("reason", "authModeMismatch")
+        .detail("expected", "yggdrasil")),
+        _ => Ok(()),
+    }
+}
+
+fn password_locked(host: &HostCtx, remote: &str) -> bool {
+    let fails = lock(&host.pw_fails);
+    let Some((count, last)) = fails.get(remote) else {
+        return false;
+    };
+    if *count < MAX_PASSWORD_FAILS {
+        return false;
+    }
+    let exp = (*count - MAX_PASSWORD_FAILS).min(7);
+    let lockout = PASSWORD_BACKOFF
+        .saturating_mul(1u32 << exp)
+        .min(PASSWORD_BACKOFF_MAX);
+    last.elapsed() < lockout
+}
+
+fn note_password_failure(host: &HostCtx, remote: &str) {
+    let mut fails = lock(&host.pw_fails);
+    let e = fails
+        .entry(remote.to_owned())
+        .or_insert((0, Instant::now()));
+    e.0 = e.0.saturating_add(1);
+    e.1 = Instant::now();
+}
+
+fn normalize_uuid(u: &str) -> String {
+    let compact: String = u
+        .chars()
+        .filter(|c| *c != '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    format!("uuid:{compact}")
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 async fn shutdown(s: &Session) {
     s.cancel.cancel();
     let conns = {
@@ -1231,12 +1385,9 @@ async fn shutdown(s: &Session) {
 }
 
 async fn reject(conn: &Connection, send: &mut SendStream, reason: &str) -> AppResult<()> {
-    if let Ok(line) = wire::encode(
-        &ControlMsg::Kick {
-            reason: reason.to_owned(),
-        },
-        &Ext::default(),
-    ) {
+    if let Ok(line) = wire::encode(&ControlMsg::Kick {
+        reason: reason.to_owned(),
+    }) {
         let _ = send.write_all(line.as_bytes()).await;
         let _ = send.finish();
     }
@@ -1249,6 +1400,12 @@ async fn reject(conn: &Connection, send: &mut SendStream, reason: &str) -> AppRe
 fn kick_error(reason: &str) -> AppError {
     let (code, msg) = match reason {
         reasons::BAD_PASSWORD => (ErrorCode::PermissionDenied, "wrong room password"),
+        reasons::RATE_LIMITED => (ErrorCode::RateLimited, "too many wrong passwords"),
+        reasons::BAD_TOKEN => (ErrorCode::PermissionDenied, "room ticket rejected by host"),
+        reasons::BANNED => (
+            ErrorCode::PermissionDenied,
+            "you were kicked from this room",
+        ),
         reasons::ROOM_FULL => (ErrorCode::Conflict, "room is full"),
         reasons::PROTOCOL => (ErrorCode::Conflict, "incompatible launcher version"),
         _ => (ErrorCode::PermissionDenied, "rejected by host"),
@@ -1291,7 +1448,13 @@ fn check_sig(remote: &InstanceSig, local: &InstanceSig) -> AppResult<()> {
     Err(e)
 }
 
-fn apply_welcome(p: &mut Peers, order: Vec<String>, my_id: &str, host_key: &str) {
+fn apply_welcome(
+    p: &mut Peers,
+    order: Vec<String>,
+    names: Vec<String>,
+    my_id: &str,
+    host_key: &str,
+) {
     p.map
         .retain(|id, e| id == host_key || e.conn.is_some() || order.contains(id));
     let (path, rtt) = p
@@ -1299,16 +1462,24 @@ fn apply_welcome(p: &mut Peers, order: Vec<String>, my_id: &str, host_key: &str)
         .get(host_key)
         .map(|e| (e.peer.path, e.peer.rtt_ms))
         .unwrap_or((PathKind::Connecting, None));
-    for id in &order {
-        if id == my_id || p.map.contains_key(id) {
+    for (i, id) in order.iter().enumerate() {
+        if id == my_id {
             continue;
         }
+        let given = names.get(i).map(|n| clean_name(n));
+        if let Some(e) = p.map.get_mut(id) {
+            if let Some(name) = given {
+                e.peer.name = name;
+            }
+            continue;
+        }
+        let name = given.unwrap_or_else(|| id.chars().take(8).collect());
         p.map.insert(
             id.clone(),
             PeerEntry {
                 peer: Peer {
                     peer_id: id.clone(),
-                    name: id.chars().take(8).collect(),
+                    name,
                     uuid: None,
                     path,
                     rtt_ms: rtt,
@@ -1323,7 +1494,7 @@ fn apply_welcome(p: &mut Peers, order: Vec<String>, my_id: &str, host_key: &str)
     p.order = order;
 }
 
-fn spawn_writer(mut send: SendStream, mut rx: mpsc::UnboundedReceiver<String>) {
+fn spawn_writer(mut send: SendStream, mut rx: mpsc::Receiver<String>) {
     tokio::spawn(async move {
         while let Some(line) = rx.recv().await {
             if send.write_all(line.as_bytes()).await.is_err() {
@@ -1334,12 +1505,9 @@ fn spawn_writer(mut send: SendStream, mut rx: mpsc::UnboundedReceiver<String>) {
     });
 }
 
-/// Host: every bi-stream after the control stream is one game connection.
-async fn host_game_streams(
-    conn: Connection,
-    lan_port: watch::Receiver<Option<u16>>,
-    cancel: CancellationToken,
-) {
+/// Host: every bi-stream after the control stream is one game connection to
+/// the LAN port fixed at create time.
+async fn host_game_streams(conn: Connection, lan_port: u16, cancel: CancellationToken) {
     loop {
         let (send, recv) = tokio::select! {
             () = cancel.cancelled() => return,
@@ -1348,24 +1516,22 @@ async fn host_game_streams(
                 Err(_) => return,
             },
         };
-        let port = *lan_port.borrow();
-        tokio::spawn(serve_game_stream(send, recv, port));
+        tokio::spawn(serve_game_stream(send, recv, lan_port));
     }
 }
 
-async fn serve_game_stream(mut send: SendStream, mut recv: RecvStream, port: Option<u16>) {
+async fn serve_game_stream(mut send: SendStream, mut recv: RecvStream, port: u16) {
     let open = match wire::read_line_unbuffered(&mut recv, MAX_OPEN_LINE).await {
         Ok(l) => l,
         Err(_) => return,
     };
-    let ok = matches!(
+    if !matches!(
         serde_json::from_str::<StreamOpen>(&open),
         Ok(StreamOpen::Game)
-    );
-    let Some(port) = port.filter(|_| ok) else {
+    ) {
         let _ = send.reset(1u32.into());
         return;
-    };
+    }
     match TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
         Ok(tcp) => pipe(tcp, send, recv).await,
         Err(_) => {
@@ -1389,7 +1555,7 @@ async fn guest_tunnel(listener: TcpListener, conn: Connection, cancel: Cancellat
             let Ok((mut send, recv)) = conn.open_bi().await else {
                 return;
             };
-            let Ok(open) = wire::encode_plain(&StreamOpen::Game) else {
+            let Ok(open) = wire::encode(&StreamOpen::Game) else {
                 return;
             };
             if send.write_all(open.as_bytes()).await.is_err() {
@@ -1498,7 +1664,40 @@ mod tests {
             kick_error(reasons::BAD_PASSWORD).code,
             ErrorCode::PermissionDenied
         );
+        assert_eq!(
+            kick_error(reasons::RATE_LIMITED).code,
+            ErrorCode::RateLimited
+        );
         assert_eq!(kick_error(reasons::ROOM_FULL).code, ErrorCode::Conflict);
+    }
+
+    #[test]
+    fn host_auth_mode_must_match_account() {
+        let offline = Identity {
+            name: "a".into(),
+            uuid: None,
+            hub_token: None,
+        };
+        let online = Identity {
+            hub_token: Some(Secret::new("t")),
+            ..offline.clone()
+        };
+        assert!(check_host_auth_mode(RoomAuthMode::Open, &offline).is_ok());
+        assert!(check_host_auth_mode(RoomAuthMode::Yggdrasil, &online).is_ok());
+        let e = check_host_auth_mode(RoomAuthMode::Yggdrasil, &offline).unwrap_err();
+        assert_eq!(e.details.unwrap()["expected"], "open");
+        let e = check_host_auth_mode(RoomAuthMode::Open, &online).unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidInput);
+        assert_eq!(e.details.unwrap()["expected"], "yggdrasil");
+    }
+
+    #[test]
+    fn uuids_normalize() {
+        assert_eq!(
+            normalize_uuid("ABCD-ef"),
+            normalize_uuid("abcdef"),
+            "dashes and case are ignored"
+        );
     }
 
     #[test]
@@ -1506,6 +1705,29 @@ mod tests {
         assert_eq!(clean_name("  \u{7}Steve\n "), "Steve");
         assert_eq!(clean_name(""), "Player");
         assert_eq!(clean_name(&"x".repeat(100)).len(), MAX_NAME_CHARS);
+    }
+
+    #[test]
+    fn welcome_names_are_applied() {
+        let mut p = Peers::default();
+        apply_welcome(
+            &mut p,
+            vec!["host".into(), "me".into(), "g2".into()],
+            vec!["Hosty".into(), "Me".into(), "Alex".into()],
+            "me",
+            "host",
+        );
+        assert_eq!(p.map["host"].peer.name, "Hosty");
+        assert_eq!(p.map["g2"].peer.name, "Alex");
+        assert!(!p.map.contains_key("me"));
+        apply_welcome(
+            &mut p,
+            vec!["host".into(), "me".into()],
+            vec![],
+            "me",
+            "host",
+        );
+        assert!(!p.map.contains_key("g2"));
     }
 
     #[test]
