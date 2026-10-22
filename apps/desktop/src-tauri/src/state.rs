@@ -14,13 +14,16 @@ use lc_core::{
 };
 use lc_http::{Downloader, DownloaderConfig, HttpDownloader, StubDownloader};
 use lc_loaders::{LoaderRegistry, StubLoader};
-use lc_p2p::{DatagramTransport, RoomService, StubRooms};
+use lc_p2p::{
+    CoreRoomEnv, DatagramTransport, P2pConfig, P2pRooms, RoomLogTap, RoomObserver, RoomService,
+    StubRooms,
+};
 use lc_runtime::{MemorySettingsStore, Paths, SettingsStore};
 use lc_types::settings::Settings;
 use lc_types::version::LoaderKind;
 use lc_types::AppResult;
 use lc_voice::{StubVoice, VoiceEngine};
-use lc_vpn::{StubVpn, VpnController};
+use lc_vpn::{MihomoVpn, StubVpn, VpnController};
 
 use crate::tasks::TaskRegistry;
 
@@ -45,6 +48,8 @@ pub struct AppState {
     pub skins: Arc<dyn SkinService>,
     // net
     pub vpn: Arc<dyn VpnController>,
+    /// Concrete handle for restore on start and kill on exit.
+    pub mihomo: Option<Arc<MihomoVpn>>,
     pub rooms: Arc<dyn RoomService>,
     pub datagrams: Arc<dyn DatagramTransport>,
     // voice
@@ -52,14 +57,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Real services where implemented (core, http, accounts, skins, loaders,
-    /// content, settings);
-    /// everything else stays a stub.
+    /// Real services everywhere except voice (still a stub).
     pub fn real(
         paths: Paths,
         settings: Arc<dyn SettingsStore>,
         initial: &Settings,
         observer: Arc<dyn GameObserver>,
+        room_observer: Arc<dyn RoomObserver>,
     ) -> AppResult<Self> {
         let downloader: Arc<dyn Downloader> = Arc::new(HttpDownloader::new(
             DownloaderConfig::from_settings(initial),
@@ -71,22 +75,32 @@ impl AppState {
         );
         let skins = Arc::new(SkinsService::new(&paths, accounts.clone()));
         let loaders = Arc::new(lc_loaders::default_registry(downloader.clone()));
+        let mihomo = Arc::new(MihomoVpn::new(paths.clone(), downloader.clone()));
+        let room_env = Arc::new(CoreRoomEnv::new(accounts.clone()));
+        let p2p = P2pRooms::new(
+            P2pConfig::default(),
+            downloader.clone(),
+            settings.clone(),
+            room_env.clone(),
+            room_observer,
+        );
 
         let core = Arc::new(CoreServices::new(
             paths.clone(),
             downloader.clone(),
             accounts.clone(),
             loaders.clone(),
-            observer,
-            Vec::new(),
+            Arc::new(RoomLogTap::new(p2p.clone(), observer)),
+            vec![mihomo.clone(), p2p.launch_contributor()],
         ));
+        room_env.attach_instances(core.clone());
         let content = Arc::new(ContentServices::new(
             paths,
             downloader.clone(),
             core.clone(),
             core.clone(),
         ));
-        let rooms = Arc::new(StubRooms);
+        let rooms = Arc::new(p2p);
 
         Ok(Self {
             tasks: Arc::new(TaskRegistry::default()),
@@ -104,7 +118,8 @@ impl AppState {
             accounts: accounts.clone(),
             auth: accounts,
             skins,
-            vpn: Arc::new(StubVpn),
+            vpn: mihomo.clone(),
+            mihomo: Some(mihomo),
             rooms: rooms.clone(),
             datagrams: rooms,
             voice: Arc::new(StubVoice),
@@ -145,6 +160,7 @@ impl AppState {
             auth: accounts,
             skins: Arc::new(StubSkins),
             vpn: Arc::new(StubVpn),
+            mihomo: None,
             rooms: rooms.clone(),
             datagrams: rooms,
             voice: Arc::new(StubVoice),
