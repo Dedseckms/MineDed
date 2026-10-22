@@ -80,7 +80,7 @@ impl AppState {
             limiters: Arc::new(Limiters {
                 create: RateLimiter::per_minute(6, 5),
                 join: RateLimiter::per_minute(20, 10),
-                ws: RateLimiter::per_minute(30, 10),
+                ws: RateLimiter::per_minute(60, 20),
                 close: RateLimiter::per_minute(30, 10),
             }),
         }
@@ -206,7 +206,16 @@ async fn create_room(
 #[serde(rename_all = "camelCase")]
 struct JoinReq {
     endpoint_id: String,
+    /// Display name (offline guests); ignored when the bearer is valid.
+    #[serde(default)]
+    name: Option<String>,
+    /// Profile UUID; accepted for symmetry, the token's profile wins when authenticated.
+    #[serde(default)]
+    #[allow(dead_code)]
+    uuid: Option<String>,
 }
+
+const MAX_NAME_CHARS: usize = 16;
 
 async fn join_room(
     State(s): State<AppState>,
@@ -218,6 +227,15 @@ async fn join_room(
     limit(&s.limiters.join, ip)?;
     let req: JoinReq = parse_json(&body)?;
     validate_endpoint_id(&req.endpoint_id)?;
+    let body_name = req.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    if body_name
+        .is_some_and(|n| n.chars().count() > MAX_NAME_CHARS || n.chars().any(char::is_control))
+    {
+        return Err(ApiError::invalid_input(
+            "name must be 1..=16 printable chars",
+        ));
+    }
+    let body_name = body_name.map(str::to_owned);
     let code = normalize_code(&code).ok_or_else(|| ApiError::not_found("room not found"))?;
     let mode = s
         .rooms
@@ -235,7 +253,7 @@ async fn join_room(
         (AuthMode::Open, Some(t)) => s.validator.validate(t).await.ok().flatten(),
         (AuthMode::Open, None) => None,
     };
-    let name = who.map(|w| w.name).unwrap_or_else(|| {
+    let name = who.map(|w| w.name).or(body_name).unwrap_or_else(|| {
         let tail: String = req.endpoint_id.chars().take(4).collect();
         format!("Guest-{tail}")
     });

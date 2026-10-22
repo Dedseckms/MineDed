@@ -203,8 +203,8 @@ async fn create_room_rate_limited_per_ip() {
         .await;
     }
     assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
-    assert_app_error(&body, "permissionDenied");
-    assert_eq!(body["details"]["reason"], "rateLimited");
+    assert_app_error(&body, "rateLimited");
+    assert!(body["details"]["retryAfter"].is_string());
     assert!(headers.contains_key("retry-after"));
     // Another IP is unaffected.
     let (st, _, _) = call(
@@ -462,4 +462,82 @@ async fn ws_presence_chat_and_close() {
     let (st, _, _) = call(&app, delete_req(id, Some("alice"))).await;
     assert_eq!(st, StatusCode::NO_CONTENT);
     next_of(&mut host, "closed").await;
+}
+
+async fn serve(app: &Router) -> SocketAddr {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let svc = app
+        .clone()
+        .into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(l, svc).await.unwrap() });
+    addr
+}
+
+#[tokio::test]
+async fn ws_join_leave_x10_and_kick_free_slots() {
+    let app = app();
+    let addr = serve(&app).await;
+    // maxPeers=2: host + one live guest.
+    let room = create(&app, "open", 2).await;
+    let id = room["roomId"].as_str().unwrap();
+    let uri = format!("/api/v1/rooms/{}/join", room["code"].as_str().unwrap());
+    let url = |t: &str| format!("ws://{addr}/api/v1/rooms/{id}/ws?token={t}");
+    let (mut host, _) = tokio_tungstenite::connect_async(url(room["hostToken"].as_str().unwrap()))
+        .await
+        .unwrap();
+    next_of(&mut host, "host_endpoint").await;
+    assert_eq!(next_of(&mut host, "peer_joined").await["name"], "alice"); // host itself
+
+    for i in 0..10 {
+        let body = json!({"endpointId": format!("guest{i}"), "name": "Steve"});
+        let (st, _, j) = call(&app, post_json(&uri, None, &format!("10.4.0.{i}"), body)).await;
+        assert_eq!(st, StatusCode::OK, "iteration {i}: {j}");
+        let (mut g, _) = tokio_tungstenite::connect_async(url(j["peerToken"].as_str().unwrap()))
+            .await
+            .unwrap();
+        let joined = next_of(&mut host, "peer_joined").await;
+        assert_eq!(joined["name"], "Steve");
+        if i % 2 == 0 {
+            g.send(WsMsg::text(json!({"t": "leave"}).to_string()))
+                .await
+                .unwrap();
+        } else {
+            g.close(None).await.unwrap();
+        }
+        next_of(&mut host, "peer_left").await;
+    }
+
+    // Host kick frees the slot and closes the guest's socket.
+    let (_, _, j) = call(
+        &app,
+        post_json(&uri, None, "10.4.1.1", json!({"endpointId": "k"})),
+    )
+    .await;
+    let (mut g, _) = tokio_tungstenite::connect_async(url(j["peerToken"].as_str().unwrap()))
+        .await
+        .unwrap();
+    let pid = next_of(&mut host, "peer_joined").await["peerId"].clone();
+    let busy = call(
+        &app,
+        post_json(&uri, None, "10.4.1.2", json!({"endpointId": "x"})),
+    )
+    .await;
+    assert_eq!(busy.0, StatusCode::CONFLICT);
+    let kick = json!({"t": "kick", "peerId": pid, "reason": "bye"});
+    host.send(WsMsg::text(kick.to_string())).await.unwrap();
+    let k = next_of(&mut g, "kick").await;
+    assert_eq!(k["reason"], "bye");
+    let (st, _, _) = call(
+        &app,
+        post_json(&uri, None, "10.4.1.3", json!({"endpointId": "x"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    // Name validation.
+    let long = json!({"endpointId": "y", "name": "a".repeat(17)});
+    let (st, _, v) = call(&app, post_json(&uri, None, "10.4.1.4", long)).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_app_error(&v, "invalidInput");
 }
