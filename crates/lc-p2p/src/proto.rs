@@ -53,6 +53,9 @@ pub enum ControlMsg {
     VoiceState {
         speaking: bool,
         muted: bool,
+        /// Set by the host when relaying a guest's state to other guests.
+        #[serde(default)]
+        peer: Option<String>,
     },
     Kick {
         reason: String,
