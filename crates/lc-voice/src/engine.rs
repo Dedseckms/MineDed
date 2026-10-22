@@ -312,6 +312,10 @@ async fn tick_loop(shared: Arc<Shared>, transport: Option<Arc<dyn DatagramTransp
     let mut buf = Vec::with_capacity(4096);
     let mut last_report = Instant::now();
     let (mut speaking, mut level) = (false, 0f32);
+    let mut published: Option<(bool, bool)> = None;
+    let mut last_publish = Instant::now()
+        .checked_sub(MIN_INTERVAL)
+        .unwrap_or_else(Instant::now);
     loop {
         iv.tick().await;
         buf.clear();
@@ -347,6 +351,15 @@ async fn tick_loop(shared: Arc<Shared>, transport: Option<Arc<dyn DatagramTransp
         let now = Instant::now();
         if now.duration_since(last_report) >= REPORT.min(MIN_INTERVAL) {
             shared.report(speaking, level, mic_test, now);
+            if let Some(t) = &transport {
+                // Room-wide voice state (`ControlMsg::VoiceState`), throttled.
+                let state = (speaking, ctl.self_muted);
+                if published != Some(state) && now.duration_since(last_publish) >= MIN_INTERVAL {
+                    let _ = t.set_voice_state(state.0, state.1).await;
+                    published = Some(state);
+                    last_publish = now;
+                }
+            }
             last_report = now;
             speaking = false;
             level = 0.0;
@@ -416,7 +429,10 @@ impl VoiceEngine for CpalVoiceEngine {
 
     async fn stop(&self) -> AppResult<()> {
         let mut run = self.run.lock().await;
-        run.transport = None;
+        if let Some(t) = run.transport.take() {
+            let muted = lock(&self.shared.live).self_muted;
+            let _ = t.set_voice_state(false, muted).await;
+        }
         run.abort_tasks();
         lock(&self.shared.mixer).clear_streams();
         let resets = lock(&self.shared.tracker).reset();
