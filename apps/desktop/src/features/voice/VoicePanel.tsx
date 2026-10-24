@@ -22,6 +22,7 @@ import { toggleOverlay } from "../../lib/overlay";
 import { SELF_PEER_ID, fromPercent, keyLabel, peerVolume, toPercent, voiceStatus } from "../../lib/voice";
 import { useNavStore } from "../../stores/navStore";
 import { useVoiceStore } from "../../stores/voiceStore";
+import { BorderlessHelper } from "./BorderlessHelper";
 
 const STATUS_TONE = {
   inactive: "neutral",
@@ -190,6 +191,7 @@ export function VoiceControls() {
       <div className="flex flex-col gap-1.5 border-t border-border pt-3">
         <OverlayButton />
         <p className="text-xs text-muted">{t(system.data?.wayland ? "voice.overlay.hintWayland" : "voice.overlay.hint")}</p>
+        <BorderlessHelper />
       </div>
     </Section>
   );

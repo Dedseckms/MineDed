@@ -80,7 +80,9 @@ export function OverlayApp() {
             </li>
           ))}
         </ol>
-      ) : null}
+      ) : (
+        <p className="mt-auto border-t border-border/60 pt-1.5 text-[0.7rem] leading-snug text-muted">{t("voice.overlay.fullscreenHint")}</p>
+      )}
     </div>
   );
 }

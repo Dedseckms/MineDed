@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorKey, isNotImplemented } from "../../lib/errors";
+import { errorView, isNotImplemented } from "../../lib/errors";
 import { Button } from "./Button";
+import { ErrorDetails, ProxyHintActions } from "./ErrorDetails";
 import { Icon, type IconName } from "./Icon";
 
 type Tone = "neutral" | "accent" | "danger" | "warning" | "info";
@@ -37,19 +38,24 @@ export function ErrorMessage({
   const { t } = useTranslation();
   if (error == null) return null;
   const soft = isNotImplemented(error);
+  const view = errorView(error);
   return (
     <div
       role={soft ? "status" : "alert"}
-      className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm ${
+      className={`flex flex-col gap-2 rounded-lg border px-3 py-2 text-sm ${
         soft ? "border-warning/30 bg-warning/10 text-warning" : "border-danger/30 bg-danger/10 text-danger"
       } ${className}`}
     >
-      <span className="min-w-0 flex-1 break-words">{t(errorKey(error))}</span>
-      {onRetry ? (
-        <Button size="sm" variant="ghost" onClick={onRetry}>
-          {t("common.retry")}
-        </Button>
-      ) : null}
+      <div className="flex items-center gap-3">
+        <span className="min-w-0 flex-1 break-words">{t(view.messageKey, view.params)}</span>
+        {onRetry ? (
+          <Button size="sm" variant="ghost" onClick={onRetry}>
+            {t("common.retry")}
+          </Button>
+        ) : null}
+      </div>
+      {!soft && view.suggestProxy ? <ProxyHintActions /> : null}
+      {!soft ? <ErrorDetails view={view} /> : null}
     </div>
   );
 }
@@ -66,7 +72,7 @@ export function EmptyState({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border px-6 py-10 text-center">
+    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-panel px-6 py-10 text-center">
       {icon ? (
         <span className="grid size-10 place-items-center rounded-full bg-surface-2 text-muted" aria-hidden>
           <Icon name={icon} />

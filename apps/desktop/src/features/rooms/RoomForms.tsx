@@ -2,14 +2,21 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { InstanceId, RoomAuthMode, RoomKind } from "../../bindings";
-import { useCreateRoom, useCreateVoiceRoom, useInstances, useJoinRoom } from "../../api/queries";
+import { useAccounts, useCreateRoom, useCreateVoiceRoom, useInstances, useJoinRoom } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { ErrorMessage } from "../../components/ui/feedback";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/form";
 import { toAppError } from "../../lib/errors";
-import { ROOM_PASSWORD_MAX, parseJoinInput, passwordOrNull, validateRoomPassword } from "../../lib/rooms";
+import {
+  ROOM_PASSWORD_MAX,
+  authModeFor,
+  effectiveAuthMode,
+  parseJoinInput,
+  passwordOrNull,
+  validateRoomPassword,
+} from "../../lib/rooms";
 import { useNavStore } from "../../stores/navStore";
 
 /** Instance picker shared by both forms; defaults to the Play screen selection. */
@@ -76,7 +83,11 @@ export function CreateRoomForm() {
   const pick = useInstancePick();
   const create = useCreateRoom();
   const selectPlayInstance = useNavStore((s) => s.selectPlayInstance);
-  const [authMode, setAuthMode] = useState<RoomAuthMode>("yggdrasil");
+  const accounts = useAccounts();
+  const defaultAccount = accounts.data?.find((a) => a.isDefault) ?? accounts.data?.[0] ?? null;
+  const choice = authModeFor(defaultAccount);
+  const [picked, setAuthMode] = useState<RoomAuthMode | null>(null);
+  const authMode = effectiveAuthMode(choice, picked);
   const [password, setPassword] = useState("");
   const pwError = validateRoomPassword(password);
 
@@ -108,11 +119,16 @@ export function CreateRoomForm() {
             value={authMode}
             onChange={setAuthMode}
             options={[
-              { value: "yggdrasil", label: t("rooms.authMode.yggdrasil") },
-              { value: "open", label: t("rooms.authMode.open") },
+              { value: "yggdrasil", label: t("rooms.authMode.yggdrasil"), disabled: choice.disabled === "yggdrasil" },
+              { value: "open", label: t("rooms.authMode.open"), disabled: choice.disabled === "open" },
             ]}
           />
           <p className="text-xs text-muted">{t(`rooms.authModeHint.${authMode}`)}</p>
+          {choice.disabled ? (
+            <p className="text-xs text-muted" data-testid="auth-mode-disabled">
+              {t(`rooms.authModeDisabled.${choice.disabled}`)}
+            </p>
+          ) : null}
         </div>
         <PasswordField
           value={password}

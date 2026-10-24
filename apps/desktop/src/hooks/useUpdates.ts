@@ -5,7 +5,7 @@ import type { UpdateInfo } from "../bindings";
 import { api, unwrap } from "../api/client";
 import { subscribe } from "../api/events";
 import { useSettings, useStartTask } from "../api/queries";
-import { toAppError } from "../lib/errors";
+import { errorView, toAppError } from "../lib/errors";
 import { useTaskView } from "../stores/taskStore";
 import { useToastStore } from "../stores/toastStore";
 import { useUpdateStore } from "../stores/updateStore";
@@ -63,8 +63,9 @@ export function useInstallUpdate() {
         useToastStore.getState().push({
           tone: "danger",
           messageKey: "updates.installFailed",
-          detailKey: `errors.${error.code}`,
+          detailKey: errorView(error).messageKey,
           dedupeKey: "update:install",
+          error,
         });
     },
   });

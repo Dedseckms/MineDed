@@ -1,10 +1,12 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useMotionPrefs, useMotionPreset } from "../../hooks/useAppearance";
+import { errorView } from "../../lib/errors";
 import { TOAST_TTL_MS, type Toast, type ToastTone, useToastStore } from "../../stores/toastStore";
 import { Button } from "./Button";
+import { ErrorDetails, ProxyHintActions } from "./ErrorDetails";
 import { Icon } from "./Icon";
 
 const TONE: Record<ToastTone, string> = {
@@ -24,11 +26,15 @@ function ToastItem({ toast }: { toast: Toast }) {
   const dismiss = useToastStore((s) => s.dismiss);
   const { reduced } = useMotionPrefs();
   const preset = useMotionPreset("toast");
+  // Expanded details keep the toast on screen until it is closed.
+  const [pinned, setPinned] = useState(false);
+  const view = toast.error ? errorView(toast.error) : null;
 
   useEffect(() => {
+    if (pinned) return;
     const timer = setTimeout(() => dismiss(toast.id), TOAST_TTL_MS);
     return () => clearTimeout(timer);
-  }, [toast.id, dismiss]);
+  }, [toast.id, dismiss, pinned]);
 
   return (
     <motion.div
@@ -43,8 +49,10 @@ function ToastItem({ toast }: { toast: Toast }) {
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p className="text-sm font-medium break-words">{t(toast.messageKey, toast.params)}</p>
         {toast.detailKey && i18n.exists(toast.detailKey) ? (
-          <p className="text-xs text-muted">{t(toast.detailKey, toast.params)}</p>
+          <p className="text-xs text-muted">{t(toast.detailKey, { ...view?.params, ...toast.params })}</p>
         ) : null}
+        {view?.suggestProxy ? <ProxyHintActions onNavigate={() => dismiss(toast.id)} /> : null}
+        {view ? <ErrorDetails view={view} onToggle={(open) => open && setPinned(true)} /> : null}
         {toast.action ? (
           <div>
             <Button

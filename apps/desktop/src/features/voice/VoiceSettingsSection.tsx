@@ -21,6 +21,7 @@ import { ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { Field, Segmented, Select, Switch } from "../../components/ui/form";
 import { useDraftValue } from "../../hooks/useDraftValue";
 import { deviceValue, devicesOf, fromPercent, toPercent } from "../../lib/voice";
+import { usePrefsStore } from "../../stores/prefsStore";
 import { useVoiceStore } from "../../stores/voiceStore";
 import { PttKeyCapture } from "./PttKeyCapture";
 
@@ -85,6 +86,8 @@ function VoiceForm({ settings }: { settings: VoiceSettings }) {
   const [gain, setGain] = useDraftValue(toPercent(settings.inputGain), (p) => set({ inputGain: fromPercent(p) }));
   const [volume, setVolume] = useDraftValue(toPercent(settings.outputVolume), (p) => set({ outputVolume: fromPercent(p) }));
   const setPtt = useCallback((pttKey: string | null) => set({ pttKey }), [set]);
+  const pttSound = usePrefsStore((s) => s.pttSound);
+  const setPttSound = usePrefsStore((s) => s.setPttSound);
 
   return (
     <Section title={t("voice.settings.title")}>
@@ -107,6 +110,12 @@ function VoiceForm({ settings }: { settings: VoiceSettings }) {
         <>
           <PttKeyCapture value={settings.pttKey} onChange={setPtt} />
           <WaylandHint />
+          <Switch
+            checked={pttSound}
+            onChange={setPttSound}
+            label={t("voice.settings.pttSound")}
+            description={t("voice.settings.pttSoundHint")}
+          />
         </>
       ) : null}
 

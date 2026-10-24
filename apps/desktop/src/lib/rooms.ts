@@ -1,5 +1,5 @@
 // Pure helpers for P2P rooms and chat (no React, no backend calls).
-import type { ChatMessage, PathKind, RoomPeerEvent, RoomState } from "../bindings";
+import type { Account, ChatMessage, PathKind, RoomAuthMode, RoomPeerEvent, RoomState } from "../bindings";
 import type { ValidationKey } from "./validation";
 
 export const ROOM_LINK_PREFIX = "mineup://join/";
@@ -80,4 +80,28 @@ export function chatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+export interface AuthModeChoice {
+  /** Pre-selected mode for the default account. */
+  suggested: RoomAuthMode;
+  /** Mode the backend rejects for this account (`authModeMismatch`), if any. */
+  disabled: RoomAuthMode | null;
+}
+
+/**
+ * Room auth mode that matches the host account: the integrated server runs in
+ * online mode for Yggdrasil hosts and offline mode for offline hosts, so the
+ * other option fails on the backend with `reason = authModeMismatch`.
+ */
+export function authModeFor(account: Pick<Account, "kind"> | null | undefined): AuthModeChoice {
+  if (!account) return { suggested: "open", disabled: null };
+  return account.kind === "yggdrasil"
+    ? { suggested: "yggdrasil", disabled: "open" }
+    : { suggested: "open", disabled: "yggdrasil" };
+}
+
+/** The user's pick unless it is incompatible with the account. */
+export function effectiveAuthMode(choice: AuthModeChoice, picked: RoomAuthMode | null): RoomAuthMode {
+  return picked !== null && picked !== choice.disabled ? picked : choice.suggested;
 }

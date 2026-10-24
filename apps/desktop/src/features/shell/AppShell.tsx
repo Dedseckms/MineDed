@@ -1,10 +1,13 @@
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import type { ComponentType } from "react";
+import { type ComponentType, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { isMock } from "../../api/client";
-import { BRAND_MARK } from "../../brand";
-import { useAccounts, useAppVersion } from "../../api/queries";
+import { BRAND_LOGO_URL, BRAND_MARK } from "../../brand";
+import { useAccounts, useAppVersion, useSettings } from "../../api/queries";
+import { backdropFlags } from "../../lib/backdrop";
+import { usePttSoundCue } from "../../hooks/usePttSoundCue";
+import { AppBackground } from "../appearance/backgrounds";
 import { Icon, type IconName } from "../../components/ui/Icon";
 import { Toaster } from "../../components/ui/Toaster";
 import { Badge } from "../../components/ui/feedback";
@@ -44,6 +47,29 @@ const SCREENS: Record<Section, ComponentType> = {
   settings: SettingsScreen,
 };
 
+/** Pixel logo from `public/logo.svg`; the letter mark if it fails to load. */
+function BrandLogo() {
+  const [failed, setFailed] = useState(false);
+  if (failed)
+    return (
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-sm font-bold text-accent-fg" aria-hidden>
+        {BRAND_MARK}
+      </span>
+    );
+  return (
+    <img
+      src={BRAND_LOGO_URL}
+      alt=""
+      aria-hidden
+      width={32}
+      height={32}
+      draggable={false}
+      className="size-8 shrink-0 [image-rendering:pixelated]"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function Sidebar() {
   const { t } = useTranslation();
   const section = useNavStore((s) => s.section);
@@ -56,12 +82,10 @@ function Sidebar() {
     <nav
       aria-label={t("nav.label")}
       data-testid="sidebar"
-      className="flex w-16 shrink-0 flex-col border-r border-border bg-surface px-2 py-4 lg:w-56 lg:px-3"
+      className="shell-panel flex w-16 shrink-0 flex-col border-r border-border bg-panel px-2 py-4 lg:w-56 lg:px-3"
     >
       <div className="mb-6 flex items-center justify-center gap-2 lg:justify-start lg:px-3">
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-sm font-bold text-accent-fg" aria-hidden>
-          {BRAND_MARK}
-        </span>
+        <BrandLogo />
         <span className="sr-only text-lg font-semibold tracking-tight lg:not-sr-only">{t("app.title")}</span>
       </div>
       <ul className="flex flex-col gap-1">
@@ -141,17 +165,21 @@ export function AppShell() {
   const { t } = useTranslation();
   useApplyAppearance();
   useBackendSync();
-  const { reduced } = useMotionPrefs();
+  usePttSoundCue();
+  const { reduced, light } = useMotionPrefs();
+  const settings = useSettings();
+  const { background } = backdropFlags(settings.data, light);
   const screen = useMotionPreset("screen");
   const section = useNavStore((s) => s.section);
   const Screen = SCREENS[section];
 
   return (
     <MotionConfig reducedMotion={reduced ? "always" : "user"} transition={reduced ? INSTANT : undefined}>
-      <div className="flex h-full min-h-0 overflow-hidden">
+      {background ? <AppBackground id={background} animate={!reduced} /> : null}
+      <div className="flex h-full min-h-0 overflow-hidden bg-scrim">
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border px-4 lg:px-6">
+          <header className="shell-panel flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-panel px-4 lg:px-6">
             <h1 className="truncate text-lg font-semibold tracking-tight">{t(`nav.${section}`)}</h1>
             <div className="flex shrink-0 items-center gap-2">
               <VoiceHeaderToggle />

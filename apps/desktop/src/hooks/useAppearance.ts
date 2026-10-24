@@ -3,6 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { Settings, Theme } from "../bindings";
 import { useSettings } from "../api/queries";
 import i18n from "../i18n";
+import { type BackdropFlags, backdropFlags } from "../lib/backdrop";
 import { accentTokens } from "../lib/color";
 import { type MotionPreset, type PresetName, motionPreset } from "../lib/motion";
 
@@ -66,6 +67,17 @@ export function applyAccent(root: HTMLElement, accent: string | null | undefined
   }
 }
 
+/**
+ * Translucency flags on `root` (`data-translucent`, `data-backdrop`,
+ * `data-tinted`); `styles.css` turns them into transparent body, scrim and
+ * semi-transparent panels.
+ */
+export function applyBackdrop(root: HTMLElement, flags: Pick<BackdropFlags, "translucent" | "backdrop" | "tintedPanels">): void {
+  root.dataset.translucent = String(flags.translucent);
+  root.dataset.backdrop = String(flags.backdrop);
+  root.dataset.tinted = String(flags.tintedPanels);
+}
+
 /** Applies theme, accent, language and performance flags from settings to the document. */
 export function useApplyAppearance(): void {
   const { data: settings } = useSettings();
@@ -86,6 +98,11 @@ export function useApplyAppearance(): void {
   useEffect(() => {
     applyAccent(document.documentElement, accent, theme);
   }, [accent, theme]);
+
+  const { translucent, backdrop, tintedPanels } = backdropFlags(settings, prefs.light);
+  useEffect(() => {
+    applyBackdrop(document.documentElement, { translucent, backdrop, tintedPanels });
+  }, [translucent, backdrop, tintedPanels]);
 
   useEffect(() => {
     if (language && i18n.language !== language) void i18n.changeLanguage(language);
