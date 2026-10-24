@@ -1,4 +1,4 @@
-﻿# Rust
+# Rust
 /target/
 /target-*/
 
@@ -34,4 +34,3 @@ Thumbs.db
 /server/skinserver/.secrets
 /server/skinserver/backups/
 /server/skinserver/.env
-
