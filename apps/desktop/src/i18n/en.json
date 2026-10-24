@@ -200,6 +200,24 @@
     "accentSwatch": "Accent {{color}}",
     "accentHint": "Adjusted automatically to stay readable in both themes."
   },
+  "updates": {
+    "available": "Version {{version}} is available",
+    "current": "Installed version {{version}}",
+    "notes": "What's new",
+    "install": "Update",
+    "installVersion": "Install version {{version}}",
+    "later": "Later",
+    "restartHint": "The launcher restarts after installing",
+    "installFailed": "Could not install the update",
+    "section": "About & updates",
+    "version": "Launcher version",
+    "auto": "Check for updates on startup",
+    "autoHint": "The launcher offers new versions itself; installing only on your click",
+    "check": "Check for updates",
+    "checking": "Checking…",
+    "upToDate": "You have the latest version",
+    "checkFailed": "Could not check for updates"
+  },
   "tasks": {
     "center": "Tasks",
     "clearFinished": "Clear finished",
@@ -235,7 +253,9 @@
     "assets": "Downloading assets",
     "java": "Preparing Java",
     "copy": "Copying files",
-    "download": "Downloading files"
+    "download": "Downloading files",
+    "check": "Checking for update",
+    "install": "Installing"
   },
   "units": {
     "bps": "B/s",

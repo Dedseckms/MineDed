@@ -92,6 +92,16 @@ export function taskFraction(t: Pick<TaskView, "status" | "done" | "total">): nu
   return progressFraction(t.done, t.total);
 }
 
+/**
+ * i18n key of a progress stage. Most backends send full keys (`stages.download`);
+ * some send bare names (`download`, e.g. the self-updater), which map to `stages.<name>`.
+ */
+export function stageKey(stage: string, exists: (key: string) => boolean): string {
+  if (!stage || exists(stage)) return stage;
+  const scoped = `stages.${stage}`;
+  return exists(scoped) ? scoped : stage;
+}
+
 const UNITS = ["units.bps", "units.kbps", "units.mbps", "units.gbps"] as const;
 
 /** Human speed: value string + i18n key of the unit. */

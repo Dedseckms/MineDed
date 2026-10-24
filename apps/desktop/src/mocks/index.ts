@@ -32,8 +32,10 @@ import {
 } from "./content";
 import { createNetMocks } from "./net";
 import { paletteFromSeed, seedCapes, seedSkins, skinDataUrl } from "./skins";
+import { MOCK_CURRENT_VERSION, createUpdateMocks } from "./updates";
 
 export { mockBus };
+export { MOCK_UPDATE, mockUpdateControl } from "./updates";
 import {
   GAME_LOG_SAMPLE,
   SYSTEM_INFO,
@@ -197,7 +199,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
   const notFound = (what: string) => fail(appError("notFound", `mock: ${what} not found`));
 
   const impl: Partial<Commands> = {
-    appVersion: async () => "0.0.0-mock",
+    appVersion: async () => MOCK_CURRENT_VERSION,
 
     versionsList: async (filter) => {
       await wait();
@@ -738,6 +740,9 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       runTask,
       selfName: () => (accounts.find((a) => a.isDefault) ?? accounts[0])?.name ?? "Player",
     }),
+
+    // ---- self-update ----
+    ...createUpdateMocks({ bus, wait, runTask }),
   };
   return impl;
 }

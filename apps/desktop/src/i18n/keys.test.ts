@@ -33,6 +33,9 @@ const BACKEND_KEYS = [
   "stages.java",
   "stages.copy",
   "stages.download",
+  // Self-updater (`commands/app.rs`) sends bare `check` / `download` / `install` (see `stageKey`).
+  "stages.check",
+  "stages.install",
   "memory.reason.default",
   "memory.reason.largeModpack",
   "memory.reason.lowTotalRam",

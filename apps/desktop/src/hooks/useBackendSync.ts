@@ -12,6 +12,7 @@ import { useRoomStore } from "../stores/roomStore";
 import { useTaskStore } from "../stores/taskStore";
 import { useToastStore } from "../stores/toastStore";
 import { useVoiceStore } from "../stores/voiceStore";
+import { useUpdateSync } from "./useUpdates";
 
 /** Toast for `net://blocked`; one per host, with a shortcut to the VPN screen. */
 export function notifyNetBlocked(p: NetBlockedPayload): void {
@@ -78,7 +79,8 @@ export function applyRoomPeer(qc: QueryClient, ev: RoomPeerEvent): void {
 
 /**
  * App-wide subscriptions: task center (`tasks_list` + `tasks://changed`),
- * game state/log, account changes, VPN, rooms and chat. Mounted once in the shell.
+ * game state/log, account changes, VPN, rooms, chat and launcher updates.
+ * Mounted once in the shell.
  */
 export function useBackendSync(): void {
   const qc = useQueryClient();
@@ -88,6 +90,7 @@ export function useBackendSync(): void {
 
   const tasks = useQuery({ queryKey: qk.tasks, queryFn: async () => unwrap(await api.tasksList()) });
   useRoomSync(() => useNavStore.getState().section === "multiplayer");
+  useUpdateSync();
 
   useEffect(() => {
     if (tasks.data) syncSummaries(tasks.data);

@@ -4,7 +4,7 @@ import { Button } from "../../components/ui/Button";
 import { ProgressBar } from "../../components/ui/ProgressBar";
 import { Badge, ErrorMessage } from "../../components/ui/feedback";
 import { useCancelTask } from "../../api/queries";
-import { type TaskView, formatSpeed, taskFraction } from "../../lib/tasks";
+import { type TaskView, formatSpeed, stageKey, taskFraction } from "../../lib/tasks";
 
 /** Translates a backend-provided i18n key, with a generic fallback. */
 export function useKeyLabel() {
@@ -20,7 +20,7 @@ const STATUS_TONE = {
 } as const;
 
 export function TaskProgress({ task, compact = false }: { task: TaskView; compact?: boolean }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const label = useKeyLabel();
   const cancel = useCancelTask();
   const fraction = taskFraction(task);
@@ -35,7 +35,7 @@ export function TaskProgress({ task, compact = false }: { task: TaskView; compac
           ) : null}
           <p className="truncate text-xs text-muted">
             {task.status === "running"
-              ? label(task.stage, "stages.working")
+              ? label(stageKey(task.stage, i18n.exists.bind(i18n)), "stages.working")
               : t(`taskStatus.${task.status}`)}
           </p>
         </div>
