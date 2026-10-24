@@ -10,7 +10,8 @@ import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
 import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { isActive, useGameStore } from "../../stores/gameStore";
-import { useNavStore } from "../../stores/navStore";
+import { Tabs } from "../../components/ui/Tabs";
+import { LIBRARY_TABS, type LibraryTab, useNavStore } from "../../stores/navStore";
 import { selectVisibleTasks, useTaskStore } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 import { CloneInstanceDialog } from "./CloneInstanceDialog";
@@ -18,6 +19,7 @@ import { InstancePage } from "../content/InstancePage";
 import { CreateInstanceDialog } from "./CreateInstanceDialog";
 import { ImportDialog } from "./ImportDialog";
 import { InstanceSettingsDialog } from "./InstanceSettingsDialog";
+import { ModpackCatalog } from "./ModpackCatalog";
 
 function GameDirRow({ id }: { id: string }) {
   const { t } = useTranslation();
@@ -153,6 +155,8 @@ function InstanceLibrary() {
   const [editing, setEditing] = useState<Instance | null>(null);
   const [cloning, setCloning] = useState<Instance | null>(null);
   const [deleting, setDeleting] = useState<Instance | null>(null);
+  const tab = useNavStore((s) => s.libraryTab);
+  const setTab = useNavStore((s) => s.setLibraryTab);
   const pending = useTaskStore(
     useShallow((s) =>
       selectVisibleTasks(s).filter((x) => x.kind !== null && LIBRARY_TASKS.has(x.kind) && x.status !== "succeeded"),
@@ -176,13 +180,25 @@ function InstanceLibrary() {
         </div>
       </div>
 
+      <Tabs<LibraryTab>
+        value={tab}
+        onChange={setTab}
+        ariaLabel={t("instances.tabs.label")}
+        idPrefix="library-tab"
+        tabs={LIBRARY_TABS.map((v) => ({ value: v, label: t(`instances.tabs.${v}`) }))}
+      />
+
       {pending.map((task) => (
         <div key={task.id} className="rounded-xl border border-border bg-surface p-4">
           <TaskProgress task={task} />
         </div>
       ))}
 
-      {instances.isPending ? (
+      {tab === "catalog" ? (
+        <div role="tabpanel" aria-labelledby="library-tab-catalog">
+          <ModpackCatalog />
+        </div>
+      ) : instances.isPending ? (
         <ListSkeleton rows={4} rowClassName="h-28" className="grid gap-3 lg:grid-cols-2" />
       ) : instances.error ? (
         <ErrorMessage error={instances.error} onRetry={() => void instances.refetch()} />

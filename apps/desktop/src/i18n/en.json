@@ -88,7 +88,12 @@
     "loaderVersionHint": "The recommended build is selected by default",
     "noLoaderBuilds": "This loader has no builds for the selected Minecraft version",
     "recommended": "recommended",
-    "unstable": "beta"
+    "unstable": "beta",
+    "tabs": {
+      "label": "Instances",
+      "mine": "My instances",
+      "catalog": "Modpack catalog"
+    }
   },
   "versionKind": {
     "release": "Releases",
@@ -253,7 +258,8 @@
     "presetApply": "Applying preset",
     "accountLogin": "Signing in",
     "vpnUpdate": "Updating VPN",
-    "appUpdate": "Updating launcher"
+    "appUpdate": "Updating launcher",
+    "modpackInstall": "Installing modpack"
   },
   "taskStatus": {
     "running": "Running",
@@ -373,7 +379,7 @@
     }
   },
   "import": {
-    "button": "Import",
+    "button": "Import from file",
     "title": "Import modpack",
     "submit": "Import",
     "hint": "Supported: Modrinth .mrpack and CurseForge modpack .zip.",
@@ -423,6 +429,25 @@
     "quality": {
       "title": "Quality",
       "description": "Long render distance and nicer visuals; prepared for shaders. Needs a good GPU."
+    }
+  },
+  "modpacks": {
+    "searchPlaceholder": "Search modpacks by name or description",
+    "noResults": "No modpacks found. Try another query or reset the filters.",
+    "listLabel": "Modpack catalog",
+    "installLatest": "Install latest",
+    "installVersion": "Install version {{version}}",
+    "newInstanceHint": "The modpack is installed as a new instance, which opens automatically when it's ready.",
+    "versionsHint": "By default only versions matching the selected filters are listed",
+    "filters": {
+      "mc": "Minecraft version",
+      "loader": "Loader",
+      "anyVersion": "Any version",
+      "anyLoader": "Any loader"
+    },
+    "manual": {
+      "title": "Manual download required",
+      "hint": "The authors don't allow launchers to download these files. Open the pages, download the files and try again."
     }
   },
   "content": {

@@ -21,9 +21,11 @@ import type {
 } from "../bindings";
 import { IMPORT_EXTS, SKIN_EXTS, validateFilePath, validateNick, validateSkinName } from "../lib/validation";
 import { type MockBus, mockBus } from "./bus";
+import { pickLoaderVersion } from "../lib/content";
 import {
   filterVersions,
   findProject,
+  loaderBound,
   manualUrl,
   mockLoaderVersions,
   projectVersions,
@@ -477,7 +479,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       await wait();
       const p = findProject(source, projectId);
       if (!p) return notFound(`project ${projectId}`);
-      return ok(filterVersions(projectVersions(p), p.kind === "mod" ? filter : { ...filter, loader: null }));
+      return ok(filterVersions(projectVersions(p), loaderBound(p.kind) ? filter : { ...filter, loader: null }));
     },
 
     contentList: async (instanceId) => {
@@ -619,6 +621,63 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
               mc: mrpack ? "1.21.1" : "1.20.1",
               loader: mrpack ? { kind: "fabric", version: "0.16.14" } : { kind: "forge", version: "1.20.1-47.4.0" },
               java: { path: null, major: mrpack ? 21 : 17 },
+              memory: { ...settings.defaultMemory },
+              jvmArgs: [],
+              preset: null,
+              icon: null,
+              createdAt: new Date().toISOString(),
+              lastPlayed: null,
+              playtimeSec: 0,
+            },
+          ];
+          installed[instId] = [];
+          return null;
+        },
+      );
+      return ok(id);
+    },
+
+    // Packs flagged `manual` fail with `manualDownloadRequired` (CurseForge files
+    // with `allowModDistribution=false`); `details` carry the download pages.
+    modpackInstall: async (source, projectId, versionId, ch) => {
+      await wait();
+      const p = findProject(source, projectId);
+      if (!p || p.kind !== "modpack") return notFound(`modpack ${projectId}`);
+      const versions = projectVersions(p);
+      const v = versionId === null ? versions[0] : versions.find((x) => x.versionId === versionId);
+      if (!v) return notFound(`modpack version ${versionId ?? "latest"}`);
+      const id = runTask(
+        "instanceImport",
+        "tasks.modpackInstall",
+        ch,
+        [
+          { stage: "stages.download", total: v.size },
+          { stage: "stages.download", total: 96_000_000 },
+          { stage: "stages.libraries", total: null },
+        ],
+        () => {
+          if (p.manual) {
+            return {
+              ...appError("manualDownloadRequired", "mock: files require a manual download"),
+              details: {
+                projectId: p.projectId,
+                fileName: v.fileName,
+                url: manualUrl(p, v),
+                url2: "https://www.curseforge.com/minecraft/mc-mods/xaeros-minimap/files/4950522",
+              },
+            };
+          }
+          const mc = v.mcVersions[0] ?? "1.21.1";
+          const kind = v.loaders[0] ?? "vanilla";
+          const instId = `inst-${slug(p.title)}-${seq}`;
+          instances = [
+            ...instances,
+            {
+              id: instId,
+              name: p.title.slice(0, 64),
+              mc,
+              loader: { kind, version: kind === "vanilla" ? null : pickLoaderVersion(mockLoaderVersions(kind, mc)) },
+              java: { path: null, major: VERSIONS.find((x) => x.id === mc)?.javaMajor ?? 17 },
               memory: { ...settings.defaultMemory },
               jvmArgs: [],
               preset: null,

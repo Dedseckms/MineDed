@@ -7,6 +7,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 import type {
   AccountId,
@@ -15,6 +16,7 @@ import type {
   ContentSourceKind,
   ContentVersionRef,
   InstalledContent,
+  Instance,
   InstanceId,
   InstancePatch,
   LoaderKind,
@@ -33,6 +35,7 @@ import type {
   VpnNode,
 } from "../bindings";
 import { nextOffset } from "../lib/content";
+import { findNewInstance } from "../lib/modpacks";
 import { withPeerVolume } from "../lib/voice";
 import { selectNode } from "../lib/vpn";
 import { useRoomStore } from "../stores/roomStore";
@@ -592,4 +595,45 @@ export function useStartTask<V>(opts: StartTaskOptions<V>) {
       return unwrap(await opts.run(vars, channel));
     },
   });
+}
+
+// ---- modpacks --------------------------------------------------------------
+
+export interface ModpackInstallVars {
+  source: ContentSourceKind;
+  projectId: string;
+  /** `null` = latest version. */
+  versionId: string | null;
+}
+
+/**
+ * Installs a Modrinth/CurseForge modpack as a new instance (`modpack_install`).
+ * The task has no result, so the instance list is snapshotted before the start
+ * and the new instance is found by diffing it after a successful finish.
+ */
+export function useInstallModpack(onInstalled?: (instance: Instance) => void) {
+  const qc = useQueryClient();
+  const start = useStartTask<ModpackInstallVars & { before: InstanceId[] }>({
+    run: (v, ch) => api.modpackInstall(v.source, v.projectId, v.versionId, ch),
+    onFinished: (error, v) => {
+      if (error) return;
+      void (async () => {
+        const list = unwrap(await api.instanceList());
+        qc.setQueryData(qk.instances, list);
+        const created = findNewInstance(v.before, list);
+        if (created) onInstalled?.(created);
+      })().catch(() => qc.invalidateQueries({ queryKey: qk.instances }));
+    },
+  });
+  const mutate = start.mutate;
+  const install = useCallback(
+    (v: ModpackInstallVars) => {
+      void qc
+        .ensureQueryData({ queryKey: qk.instances, queryFn: async () => unwrap(await api.instanceList()) })
+        .catch((): Instance[] => [])
+        .then((list) => mutate({ ...v, before: list.map((i) => i.id) }));
+    },
+    [qc, mutate],
+  );
+  return { ...start, install };
 }
