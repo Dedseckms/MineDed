@@ -154,7 +154,7 @@ pub async fn instance_import(
     ))
 }
 
-/// Installs a Modrinth/CurseForge modpack as a new instance (`versionId` null = latest).
+/// Installs a Modrinth modpack as a new instance (`versionId` null = latest; CurseForge is disabled).
 #[tauri::command]
 #[specta::specta]
 pub async fn modpack_install(

@@ -1,6 +1,6 @@
 [package]
 name = "lc-content"
-description = "Modrinth/CurseForge, dependency resolution, .mrpack/CF zip, performance presets. Owner: mods."
+description = "Modrinth content, dependency resolution, .mrpack/launcher zip, performance presets. Owner: mods."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
