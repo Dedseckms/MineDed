@@ -36,6 +36,7 @@ import { paletteFromSeed, seedCapes, seedSkins, skinDataUrl } from "./skins";
 import { MOCK_CURRENT_VERSION, createUpdateMocks } from "./updates";
 
 export { mockBus };
+export { demoOverrides, parseDemoParams, runDemo } from "./demo";
 export { MOCK_UPDATE, mockUpdateControl } from "./updates";
 import {
   GAME_LOG_SAMPLE,

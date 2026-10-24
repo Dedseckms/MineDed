@@ -64,30 +64,28 @@
 
   <section id="screens" aria-labelledby="screens-h">
     <h2 id="screens-h" class="title panel" data-i18n="screensTitle">How it looks</h2>
-    <p class="note panel small" data-i18n="screensNote">Illustrations of the interface drawn with CSS, not real screenshots.</p>
-    <div class="shots">
-      <figure class="shot">
-        <div class="mock" data-scene="cherry" role="img" aria-label="Instance library illustration" data-i18n-aria="s1alt">
-          <div class="m-side"><i class="on"></i><i></i><i></i><i></i><i></i></div>
-          <div class="m-body"><div class="m-bar"></div><div class="m-grid"><b></b><b></b><b></b><b></b><b></b><b></b></div></div>
-        </div>
-        <figcaption class="panel" data-i18n="s1">Instance library</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="mock" data-scene="snowy" role="img" aria-label="Mod catalog illustration" data-i18n-aria="s2alt">
-          <div class="m-side"><i></i><i class="on"></i><i></i><i></i><i></i></div>
-          <div class="m-body"><div class="m-bar"></div><div class="m-list"><b></b><b></b><b></b><b></b></div></div>
-        </div>
-        <figcaption class="panel" data-i18n="s2">Mod catalog</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="mock" data-scene="nether" role="img" aria-label="Room with chat illustration" data-i18n-aria="s3alt">
-          <div class="m-side"><i></i><i></i><i class="on"></i><i></i><i></i></div>
-          <div class="m-body"><div class="m-bar"></div><div class="m-room"><div class="m-peers"><b></b><b></b><b></b></div><div class="m-chat"><b></b><b class="me"></b><b></b><span></span></div></div></div>
-        </div>
-        <figcaption class="panel" data-i18n="s3">Rooms, chat and voice</figcaption>
-      </figure>
-    </div>
+    <p class="note panel small" data-i18n="screensNote">Real screenshots of the launcher. Click to enlarge.</p>
+    <ul class="shots">
+      <li><figure class="shot"><button type="button" data-shot="play"><img src="screenshots/play-en.webp" alt="Play screen: instance and account picker, running game with a live log" data-i18n-alt="shPlayAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shPlay">Play</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="instances"><img src="screenshots/instances-en.webp" alt="Instance library with vanilla, Fabric and Forge instances" data-i18n-alt="shInstancesAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shInstances">Instance library</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="modpacks"><img src="screenshots/modpacks-en.webp" alt="Modpack catalog from Modrinth with filters" data-i18n-alt="shModpacksAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shModpacks">Modpack catalog</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="mods"><img src="screenshots/mods-en.webp" alt="Installed mods of a Fabric instance with updates and toggles" data-i18n-alt="shModsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shMods">Instance mods</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="catalog"><img src="screenshots/catalog-en.webp" alt="Modrinth mod catalog filtered by the instance version and loader" data-i18n-alt="shCatalogAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shCatalog">Mod catalog</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="skins"><img src="screenshots/skins-en.webp" alt="Skin library with a 3D preview and a cape" data-i18n-alt="shSkinsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shSkins">Skins in 3D</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="accounts"><img src="screenshots/accounts-en.webp" alt="Offline accounts and sign-in to the MineUP server" data-i18n-alt="shAccountsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shAccounts">Accounts</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="multiplayer"><img src="screenshots/multiplayer-en.webp" alt="Multiplayer room with a code, participants, voice panel and chat" data-i18n-alt="shMultiplayerAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shMultiplayer">Room, voice and chat</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="vpn"><img src="screenshots/vpn-en.webp" alt="VPN screen: mode, subscription and nodes sorted by ping" data-i18n-alt="shVpnAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shVpn">Built-in VPN</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="settings"><img src="screenshots/settings-en.webp" alt="Appearance settings: theme, accent colour, language and pixel backgrounds" data-i18n-alt="shSettingsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shSettings">Appearance</figcaption></figure></li>
+    </ul>
+    <dialog id="lightbox" class="lightbox" aria-labelledby="lb-caption">
+      <div class="lb-bar">
+        <p id="lb-caption"></p>
+        <button type="button" class="btn ghost" data-lb="prev" data-i18n-aria="lbPrev" aria-label="Previous">&#8592;</button>
+        <button type="button" class="btn ghost" data-lb="next" data-i18n-aria="lbNext" aria-label="Next">&#8594;</button>
+        <button type="button" class="btn ghost" data-lb="close" data-i18n-aria="lbClose" aria-label="Close">&#10005;</button>
+      </div>
+      <img id="lb-img" src="data:," alt="" width="1600" height="1000">
+    </dialog>
   </section>
 
   <section id="download" class="panel dl" aria-labelledby="download-h">

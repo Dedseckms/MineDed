@@ -17,6 +17,13 @@ const mocksAllowed: boolean =
 
 export const isMock: boolean = mocksAllowed && (import.meta.env.VITE_USE_MOCKS === "1" || !inTauri);
 
+/** Mock showcase mode for screenshots (`?demo=1`): hides mock markers, seeds a lived-in state. */
+export const isDemo: boolean =
+  isMock && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("demo");
+
+/** Version shown in demo mode (the mock one looks like a placeholder). */
+const DEMO_VERSION = "1.0.5";
+
 type MocksModule = typeof import("../mocks");
 
 let mocksPromise: Promise<MocksModule> | null = null;
@@ -32,7 +39,10 @@ function createLazyMockApi(): Commands {
   // A little latency in the browser makes loading states visible; none in tests.
   const latencyMs = import.meta.env.MODE === "test" ? 0 : 120;
   let impl: Promise<Commands> | null = null;
-  const get = () => (impl ??= loadMocks().then((m) => m.createMockCommands({}, { latencyMs })));
+  const get = () =>
+    (impl ??= loadMocks().then((m) =>
+      m.createMockCommands(isDemo ? m.demoOverrides(DEMO_VERSION) : {}, { latencyMs }),
+    ));
   // Every command returns a Promise, so each one can await the module first.
   return new Proxy({} as Commands, {
     get(_target, prop: string | symbol) {

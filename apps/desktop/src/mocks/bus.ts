@@ -23,7 +23,10 @@ export function createMockBus(): MockBus {
         set = new Set();
         handlers.set(name, set);
       }
-      const h = cb as Handler;
+      // A fresh wrapper per subscription: the same callback subscribed twice
+      // (React StrictMode effects) must not share one Set entry, or the first
+      // unsubscribe would silently drop the second subscription too.
+      const h: Handler = (payload) => (cb as Handler)(payload);
       set.add(h);
       return () => {
         set.delete(h);
