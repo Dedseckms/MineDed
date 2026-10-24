@@ -144,6 +144,35 @@ services:
     pids_limit: 32
     logging: *logging
 
+  # Static website mineup.dedseckms.ru (files: ./site from repo site/, read-only).
+  site:
+    image: busybox:1.37.0-musl
+    container_name: mineup-relay-site
+    restart: unless-stopped
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    command: ["httpd", "-f", "-p", "8080", "-h", "/site", "-c", "/etc/httpd.conf"]
+    volumes:
+      - ./site:/site:ro
+      - ./site-web/httpd.conf:/etc/httpd.conf:ro
+    ports:
+      - "127.0.0.1:${SITE_PORT:-18091}:8080"
+    networks: [relay_net]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/index.html"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 32m
+    memswap_limit: 32m
+    cpus: 0.2
+    cpu_shares: 128
+    pids_limit: 32
+    logging: *logging
+
 volumes:
   # Mirrored release files only (re-downloadable, no backup needed).
   updates_data:

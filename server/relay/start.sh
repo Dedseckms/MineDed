@@ -30,6 +30,8 @@ check_port() { # proto port container
 check_port tcp "$HUB_PORT" mineup-relay-hub
 check_port tcp "$RELAY_HTTP_PORT" mineup-relay-iroh
 check_port tcp "${UPDATES_PORT:-18090}" mineup-relay-updates-web
+check_port tcp "${SITE_PORT:-18091}" mineup-relay-site
+[ -f site/index.html ] || { echo "missing site/index.html (run deploy.ps1)"; exit 1; }
 FILES=(-f compose.yaml)
 if [ "${QAD:-0}" = 1 ]; then
   check_port udp "$QAD_PORT" mineup-relay-iroh

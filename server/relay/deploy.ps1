@@ -27,14 +27,16 @@ if (-not (Test-Path $bin)) { throw "missing $bin" }
 
 # Stage files (LF endings for shell scripts).
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("mineup-relay-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Force "$stage\hub", "$stage\iroh-relay", "$stage\caddy", "$stage\updates" | Out-Null
+New-Item -ItemType Directory -Force "$stage\hub", "$stage\iroh-relay", "$stage\caddy", "$stage\updates", "$stage\site", "$stage\site-web" | Out-Null
 foreach ($f in "compose.yaml", "compose.qad.yaml", "start.sh", "check.sh", "install.sh", "DEPLOY.md", ".env.example",
     "hub\Dockerfile", "iroh-relay\relay.toml", "iroh-relay\relay-qad.toml", "caddy\relay.caddy",
-    "updates\Dockerfile", "updates\mirror.sh", "updates\httpd.conf") {
+    "updates\Dockerfile", "updates\mirror.sh", "updates\httpd.conf", "caddy\site.caddy", "site-web\httpd.conf") {
     $text = [IO.File]::ReadAllText((Join-Path $src $f)) -replace "`r`n", "`n"
     [IO.File]::WriteAllText((Join-Path $stage $f), $text, (New-Object Text.UTF8Encoding $false))
 }
 Copy-Item $bin "$stage\hub\hub"
+# Website: repo site/ (served as-is, README excluded).
+Get-ChildItem (Join-Path $root "site") -File | Where-Object Name -ne "README.md" | Copy-Item -Destination "$stage\site"
 
 $ts = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
 $tarName = "upload-$ts.tar"
