@@ -15,7 +15,8 @@ describe("file paths", () => {
     expect(validateFilePath("", IMPORT_EXTS)).toBe("validation.required");
     expect(validateFilePath("pack.mrpack", IMPORT_EXTS)).toBe("validation.path.absolute");
     expect(validateFilePath("C:\\a\\pack.MRPACK", IMPORT_EXTS)).toBeNull();
-    expect(validateFilePath("/home/u/pack.zip", IMPORT_EXTS)).toBeNull();
+    expect(validateFilePath("/home/u/pack.mrpack", IMPORT_EXTS)).toBeNull();
+    expect(validateFilePath("/home/u/pack.zip", IMPORT_EXTS)).toBe("validation.path.ext");
     expect(validateFilePath("C:\\a\\pack.rar", IMPORT_EXTS)).toBe("validation.path.ext");
     expect(validateFilePath("C:\\a\\.png", SKIN_EXTS)).toBe("validation.path.ext");
     expect(validateFilePath("C:\\a\\b.png\\", SKIN_EXTS)).toBe("validation.path.ext");

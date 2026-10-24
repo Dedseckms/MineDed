@@ -7,15 +7,13 @@ import { useContentSearch } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { VirtualList } from "../../components/ui/VirtualList";
-import { Segmented, Select, Switch, TextInput } from "../../components/ui/form";
+import { Select, Switch, TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { useDebounced } from "../../hooks/useDebounced";
 import {
   SEARCH_KINDS,
-  SEARCH_SOURCES,
   SORTS,
   type SearchKind,
-  type SearchSource,
   buildSearchQuery,
   formatCount,
 } from "../../lib/content";
@@ -68,7 +66,7 @@ function ResultCard({
 const RESULT_ROW = 148;
 const RESULT_VIEWPORT = 640;
 
-/** Modrinth / CurseForge search with instance-aware filters and infinite scroll. */
+/** Modrinth search with instance-aware filters and infinite scroll. */
 export function Catalog({
   instance,
   installed,
@@ -84,7 +82,6 @@ export function Catalog({
   const filters = useContentStore(useShallow(selectFilters));
   const store = useContentStore(
     useShallow((s) => ({
-      setSource: s.setSource,
       setKind: s.setKind,
       setText: s.setText,
       setSort: s.setSort,
@@ -112,12 +109,6 @@ export function Catalog({
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
         <div className="flex flex-wrap items-center gap-2">
-          <Segmented<SearchSource>
-            ariaLabel={t("content.filters.source")}
-            value={filters.source}
-            onChange={store.setSource}
-            options={SEARCH_SOURCES.map((s) => ({ value: s, label: t(`content.source.${s}`) }))}
-          />
           <Select
             aria-label={t("content.filters.kind")}
             className="w-auto"

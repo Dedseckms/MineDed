@@ -15,8 +15,8 @@ import type {
 
 export const PAGE_SIZE = 12;
 
-/** Catalog sources the user can search (`local` is for manually added files). */
-export const SEARCH_SOURCES = ["modrinth", "curseForge"] as const satisfies readonly ContentSourceKind[];
+/** Catalog sources the user can search: Modrinth only (CurseForge is turned off). */
+export const SEARCH_SOURCES = ["modrinth"] as const satisfies readonly ContentSourceKind[];
 export type SearchSource = (typeof SEARCH_SOURCES)[number];
 
 export const SEARCH_KINDS = ["mod", "resourcePack", "shader", "dataPack"] as const satisfies readonly ContentKind[];
@@ -125,7 +125,8 @@ export function summarizePlan(plan: ResolvePlan): PlanSummary {
 
 // ---- export -----------------------------------------------------------------
 
-export const PACK_FORMATS = ["mrpack", "curseForgeZip", "launcherZip"] as const satisfies readonly PackFormat[];
+/** Export formats offered in the UI: Modrinth `.mrpack` only. */
+export const PACK_FORMATS = ["mrpack"] as const satisfies readonly PackFormat[];
 
 export function packExt(format: PackFormat): ".mrpack" | ".zip" {
   return format === "mrpack" ? ".mrpack" : ".zip";

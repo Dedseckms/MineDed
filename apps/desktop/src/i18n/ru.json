@@ -384,38 +384,25 @@
       "instanceRequired": "Для игровой комнаты выберите сборку (ту же версию и моды, что у хоста).",
       "relayUnreachable": "Сервер-ретранслятор недоступен. Проверьте интернет или включите VPN.",
       "rateLimited": "Слишком много попыток. Подождите немного и повторите.",
-      "rateLimitedRetry": "Слишком много попыток. Повторите через {{seconds}} с."
+      "rateLimitedRetry": "Слишком много попыток. Повторите через {{seconds}} с.",
+      "curseforgeDisabled": "CurseForge отключён: лаунчер работает только с Modrinth. Найдите сборку или мод на Modrinth."
     }
   },
   "import": {
     "button": "Импорт из файла",
     "title": "Импорт сборки",
     "submit": "Импортировать",
-    "hint": "Поддерживаются .mrpack (Modrinth) и .zip-модпаки CurseForge.",
+    "hint": "Поддерживаются только сборки Modrinth (.mrpack).",
     "path": "Файл сборки",
-    "pathHint": "Полный путь к файлу на этом компьютере",
+    "pathHint": "Полный путь к файлу .mrpack на этом компьютере",
     "pathPlaceholder": "C:\\Users\\me\\Downloads\\pack.mrpack"
   },
   "export": {
     "title": "Экспорт «{{name}}»",
-    "format": "Формат",
-    "formats": {
-      "mrpack": "Modrinth (.mrpack)",
-      "curseForgeZip": "CurseForge (.zip)",
-      "launcherZip": "Полная копия (.zip)"
-    },
-    "formatHint": {
-      "mrpack": "Список модов со ссылками и конфиги — маленький файл, открывается в любом лаунчере с поддержкой Modrinth.",
-      "curseForgeZip": "Манифест CurseForge с overrides — для приложения CurseForge и совместимых лаунчеров.",
-      "launcherZip": "Вся папка сборки вместе с мирами — для резервной копии и переноса на другой ПК."
-    },
+    "hint": "Сборка сохранится в формате Modrinth (.mrpack): список модов со ссылками и конфиги — маленький файл, открывается в любом лаунчере с поддержкой Modrinth.",
     "path": "Куда сохранить",
     "pathHint": "Полный путь вместе с именем файла",
-    "pathPlaceholder": {
-      "mrpack": "C:\\Users\\me\\Desktop\\pack.mrpack",
-      "curseForgeZip": "C:\\Users\\me\\Desktop\\pack.zip",
-      "launcherZip": "C:\\Users\\me\\Desktop\\backup.zip"
-    },
+    "pathPlaceholder": "C:\\Users\\me\\Desktop\\pack.mrpack",
     "done": "Сохранено: {{path}}"
   },
   "preset": {

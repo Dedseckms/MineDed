@@ -84,7 +84,6 @@ export function ModpackDialog({
               <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                 <span>{t("content.by", { author: project.author })}</span>
                 <span>· {t("content.downloads", { count: formatCount(project.downloads, i18n.language) })}</span>
-                <Badge>{t(`content.source.${project.source}`)}</Badge>
                 {project.categories.map((c) => (
                   <Badge key={c}>{c}</Badge>
                 ))}

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SearchQuery, TaskEvent } from "../bindings";
 import { unwrap } from "../api/client";
-import { manualLinks } from "../lib/modpacks";
+import { errorView } from "../lib/errors";
 import { createMockCommands } from "./index";
 
 const channel = (events: TaskEvent[] = []) =>
@@ -34,8 +34,8 @@ describe("mock modpacks", () => {
     expect(all.items.every((p) => p.kind === "modpack" && p.source === "modrinth")).toBe(true);
     const neo = unwrap(await api.contentSearch(query({ loader: "neoForge" })));
     expect(neo.items.map((p) => p.slug)).toEqual(["better-mc-neoforge"]);
-    const old = unwrap(await api.contentSearch(query({ source: "curseForge", mc: "1.12.2" })));
-    expect(old.items.map((p) => p.slug)).toEqual(["rlcraft"]);
+    const old = unwrap(await api.contentSearch(query({ mc: "1.12.2" })));
+    expect(old.items).toEqual([]);
     const versions = unwrap(await api.contentVersions("modrinth", "1KVo5zza", { mc: "1.21.1", loader: "fabric" }));
     expect(versions.length).toBeGreaterThan(0);
     expect(versions.every((v) => v.mcVersions.includes("1.21.1") && v.fileName.endsWith(".mrpack"))).toBe(true);
@@ -56,14 +56,11 @@ describe("mock modpacks", () => {
     expect((await api.modpackInstall("modrinth", "1KVo5zza", "bad-version", channel())).status).toBe("error");
   });
 
-  it("fails with manual download links for restricted packs", async () => {
-    const api = createMockCommands({}, { tickMs: 5 });
-    const events: TaskEvent[] = [];
-    unwrap(await api.modpackInstall("curseForge", "452013", null, channel(events)));
-    await vi.advanceTimersByTimeAsync(2000);
-    const finished = events.find((e) => e.type === "finished");
-    const error = finished?.type === "finished" ? finished.error : null;
-    expect(error?.code).toBe("manualDownloadRequired");
-    expect(manualLinks(error).length).toBe(2);
+  it("refuses CurseForge (turned off) with a known reason", async () => {
+    const api = createMockCommands();
+    const res = await api.modpackInstall("curseForge", "452013", null, channel());
+    expect(res.status === "error" && errorView(res.error).messageKey).toBe("errors.reason.curseforgeDisabled");
+    const v = await api.contentVersions("curseForge", "452013", { mc: null, loader: null });
+    expect(v.status).toBe("error");
   });
 });

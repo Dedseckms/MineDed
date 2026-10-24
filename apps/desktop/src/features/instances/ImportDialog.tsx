@@ -9,7 +9,7 @@ import { Field, TextInput } from "../../components/ui/form";
 import { ErrorMessage } from "../../components/ui/feedback";
 import { IMPORT_EXTS, validateFilePath } from "../../lib/validation";
 
-/** Imports a `.mrpack` or CurseForge zip by path; progress goes to the task list. */
+/** Imports a Modrinth `.mrpack` by path; progress goes to the task list. */
 export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const [path, setPath] = useState("");

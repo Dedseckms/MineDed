@@ -1,4 +1,4 @@
-// Mock catalog (Modrinth / CurseForge), installed content and loader versions.
+// Mock catalog (Modrinth only; CurseForge is turned off), installed content and loader versions.
 // Project data is source-provided text (not UI strings), so it stays in English.
 import type {
   ContentFilter,
@@ -22,8 +22,6 @@ export interface MockProject extends ProjectSummary {
   /** RFC 3339. */
   updated: string;
   created: string;
-  /** CurseForge `allowModDistribution=false`. */
-  manual: boolean;
 }
 
 const MODERN = ["1.21.10", "1.21.8", "1.21.5", "1.21.4", "1.21.1", "1.20.6", "1.20.4", "1.20.1"];
@@ -43,7 +41,7 @@ type Row = [
   loaders: LoaderKind[],
   categories: string,
   description: string,
-  extra?: Partial<Pick<MockProject, "requires" | "incompatible" | "mc" | "manual">>,
+  extra?: Partial<Pick<MockProject, "requires" | "incompatible" | "mc">>,
 ];
 
 function project(source: ContentSourceKind, kind: ContentKind, row: Row, i: number): MockProject {
@@ -66,7 +64,6 @@ function project(source: ContentSourceKind, kind: ContentKind, row: Row, i: numb
     incompatible: extra?.incompatible ?? [],
     updated: day((i * 7) % 90),
     created: day(200 + i * 37),
-    manual: extra?.manual ?? false,
   };
 }
 
@@ -120,30 +117,6 @@ const MR_SHADERS: Row[] = [
   ["7CJ7EJNU", "solas", "Solas Shader", "Septonious", 2_700_000, [], "fantasy", "A soft and colorful shaderpack."],
 ];
 
-const CF_MODS: Row[] = [
-  ["238222", "jei", "Just Enough Items (JEI)", "mezz", 362_000_000, ANY, "api,utility", "View Items and Recipes."],
-  ["328085", "create", "Create", "simibubi", 128_000_000, FORGES, "technology", "Aesthetic Technology that empowers the Player.", { mc: ["1.21.1", "1.20.1", "1.19.2", "1.18.2", "1.16.5"] }],
-  ["263420", "xaeros-minimap", "Xaero's Minimap", "xaero96", 141_000_000, ANY, "map", "Displays the nearby world terrain, players, mobs, entities in the corner of your screen.", { manual: true }],
-  ["220318", "biomes-o-plenty", "Biomes O' Plenty", "Forstride", 117_000_000, ANY, "world-gen", "Adds over 50 new biomes.", { requires: ["419699"] }],
-  ["419699", "terrablender", "TerraBlender", "Adubbz", 96_000_000, ANY, "library", "A library mod for adding biomes in a simple and compatible manner."],
-  ["223794", "applied-energistics-2", "Applied Energistics 2", "thetechnici4n", 89_000_000, FORGES, "technology,storage", "A Mod about Matter, Energy and using them to conjure items from thin air!"],
-  ["245755", "waystones", "Waystones", "BlayTheNinth", 102_000_000, ANY, "transportation", "Teleport back to activated waystones.", { requires: ["531761"] }],
-  ["531761", "balm", "Balm", "BlayTheNinth", 99_000_000, ANY, "library", "Abstraction layer for multiloader mods."],
-  ["60089", "mouse-tweaks", "Mouse Tweaks", "YaLTeR", 207_000_000, ANY, "utility", "Enhances inventory management by adding various functions to the mouse buttons."],
-  ["306612", "fabric-api", "Fabric API", "modmuss50", 160_000_000, FQ, "library", "Core API module providing key hooks and intercompatibility features."],
-  ["351725", "storage-drawers", "Storage Drawers", "Texelsaur", 77_000_000, FORGES, "storage", "Drawers that store items.", { manual: true }],
-];
-
-const CF_PACKS: Row[] = [
-  ["351052", "fresh-animations-cf", "Fresh Animations", "FreshLX", 6_100_000, [], "16x", "A resource pack that adds animations to mobs."],
-  ["236822", "faithful-32x-cf", "Faithful 32x", "Faithful Resource Pack", 9_500_000, [], "32x", "Doubles the resolution of the default textures."],
-];
-
-const CF_SHADERS: Row[] = [
-  ["627557", "complementary-reimagined-cf", "Complementary Shaders - Reimagined", "EminGT", 12_300_000, [], "realistic", "A shaderpack that aims to be complementary to vanilla."],
-  ["385587", "bsl-shaders-cf", "BSL Shaders", "CaptTatsu", 20_100_000, [], "semi-realistic", "Bright, soft and lively shader pack."],
-];
-
 const MR_MODPACKS: Row[] = [
   ["1KVo5zza", "fabulously-optimized", "Fabulously Optimized", "robotkoer", 14_800_000, ["fabric"], "optimization,lightweight", "Improved performance, nicer graphics and modern features, while still feeling like vanilla.", { mc: ["1.21.10", "1.21.8", "1.21.5", "1.21.4", "1.21.1", "1.20.1"] }],
   ["ZsLzSFnK", "cobblemon-fabric", "Cobblemon Official Modpack", "Cobblemon", 3_100_000, ["fabric"], "adventure,multiplayer", "The official Cobblemon modpack: catch, train and battle in Minecraft.", { mc: ["1.21.1", "1.20.1"] }],
@@ -151,21 +124,11 @@ const MR_MODPACKS: Row[] = [
   ["lR5jBg3k", "simply-optimized", "Simply Optimized", "Sky", 1_900_000, ["fabric", "quilt"], "optimization", "A simple, stable and highly compatible optimization modpack.", { mc: ["1.21.4", "1.21.1", "1.20.1"] }],
 ];
 
-const CF_MODPACKS: Row[] = [
-  ["715572", "all-the-mods-9", "All the Mods 9", "ATMTeam", 9_600_000, ["forge"], "kitchen-sink,tech,magic", "All the Mods started out as a private pack for just a few friends of ours that turned into something others wanted to play.", { mc: ["1.20.1"] }],
-  ["452013", "rlcraft", "RLCraft", "Shivaxi", 21_300_000, ["forge"], "hardcore,adventure", "A modpack specially designed to bring an incredibly hardcore and semi-realism challenge.", { mc: ["1.12.2"], manual: true }],
-  ["520914", "create-above-and-beyond", "Create: Above and Beyond", "simibubi", 6_700_000, ["forge"], "tech,quests", "An expert-ish modpack themed around Create and automation.", { mc: ["1.16.5"] }],
-];
-
 export const CATALOG: MockProject[] = [
   ...MR_MODS.map((r, i) => project("modrinth", "mod", r, i)),
   ...MR_MODPACKS.map((r, i) => project("modrinth", "modpack", r, i + 90)),
-  ...CF_MODPACKS.map((r, i) => project("curseForge", "modpack", r, i + 95)),
   ...MR_PACKS.map((r, i) => project("modrinth", "resourcePack", r, i + 30)),
   ...MR_SHADERS.map((r, i) => project("modrinth", "shader", r, i + 40)),
-  ...CF_MODS.map((r, i) => project("curseForge", "mod", r, i + 50)),
-  ...CF_PACKS.map((r, i) => project("curseForge", "resourcePack", r, i + 70)),
-  ...CF_SHADERS.map((r, i) => project("curseForge", "shader", r, i + 80)),
 ];
 
 export function findProject(source: ContentSourceKind, projectId: string): MockProject | undefined {
@@ -262,7 +225,7 @@ export function projectVersions(p: MockProject): ContentVersion[] {
           ...p.requires.map((id) => ({ projectId: id, versionId: null, kind: "required" as const })),
           ...p.incompatible.map((id) => ({ projectId: id, versionId: null, kind: "incompatible" as const })),
         ],
-        manualDownload: p.manual,
+        manualDownload: false,
       });
     }
   });
@@ -277,11 +240,6 @@ export function filterVersions(list: ContentVersion[], filter: ContentFilter): C
   );
 }
 
-export function manualUrl(p: MockProject, v: ContentVersion): string {
-  const section =
-    p.kind === "mod" ? "mc-mods" : p.kind === "shader" ? "shaders" : p.kind === "modpack" ? "modpacks" : "texture-packs";
-  return `https://www.curseforge.com/minecraft/${section}/${p.slug}/files/${hashNum(v.versionId) % 9_000_000}`;
-}
 
 // ---- installed content ------------------------------------------------------
 
@@ -319,7 +277,7 @@ export function seedInstalled(): Record<string, InstalledContent[]> {
     fileName: `addon-${String(i + 1).padStart(3, "0")}-1.20.1.jar`,
     kind: "mod" as const,
     enabled: i % 17 !== 0,
-    source: (i % 3 === 0 ? "curseForge" : "modrinth") as ContentSourceKind,
+    source: "modrinth" as ContentSourceKind,
     projectId: `big-${i}`,
     versionId: `big-${i}-v1`,
     title: `Addon ${i + 1}`,

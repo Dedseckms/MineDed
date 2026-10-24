@@ -9,13 +9,12 @@ describe("modpackStore", () => {
 
   it("updates and resets filters", () => {
     const s = useModpackStore.getState();
-    s.setSource("curseForge");
     s.setText("atm");
     s.setMc("1.20.1");
     s.setLoader("forge");
     s.setSort("updated");
     expect(selectModpackFilters(useModpackStore.getState())).toEqual({
-      source: "curseForge",
+      source: "modrinth",
       text: "atm",
       mc: "1.20.1",
       loader: "forge",

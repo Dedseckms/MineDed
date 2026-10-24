@@ -1,10 +1,9 @@
 import { create } from "zustand";
 
 import type { SortBy } from "../bindings";
-import type { SearchFilters, SearchKind, SearchSource } from "../lib/content";
+import type { SearchFilters, SearchKind } from "../lib/content";
 
 interface ContentState extends SearchFilters {
-  setSource: (source: SearchSource) => void;
   setKind: (kind: SearchKind) => void;
   setText: (text: string) => void;
   setSort: (sort: SortBy) => void;
@@ -25,7 +24,6 @@ const initial: SearchFilters = {
 /** Catalog filters; survive tab switches within the session. */
 export const useContentStore = create<ContentState>()((set) => ({
   ...initial,
-  setSource: (source) => set({ source }),
   setKind: (kind) => set({ kind }),
   setText: (text) => set({ text }),
   setSort: (sort) => set({ sort }),

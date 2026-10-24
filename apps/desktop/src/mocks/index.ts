@@ -26,7 +26,6 @@ import {
   filterVersions,
   findProject,
   loaderBound,
-  manualUrl,
   mockLoaderVersions,
   projectVersions,
   searchCatalog,
@@ -67,6 +66,10 @@ const appError = (code: AppError["code"], message: string): AppError => ({
 
 const ok = <T,>(data: T) => ({ status: "ok" as const, data });
 const fail = (error: AppError) => ({ status: "error" as const, error });
+
+/** CurseForge is turned off: the backend answers like this for any CurseForge request. */
+const curseForgeOff = () =>
+  fail({ ...appError("authRequired", "mock: CurseForge is disabled"), details: { reason: "curseforgeDisabled" } });
 
 const notImplemented = (name: string) => async () => fail(appError("notImplemented", `mock: ${name}`));
 
@@ -470,6 +473,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
 
     contentSearch: async (query) => {
       await wait();
+      if (query.source === "curseForge") return curseForgeOff();
       if (query.limit < 1 || query.limit > 100 || query.offset < 0)
         return fail(appError("invalidInput", "mock: bad paging"));
       return ok(searchCatalog(query));
@@ -477,6 +481,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
 
     contentVersions: async (source, projectId, filter) => {
       await wait();
+      if (source === "curseForge") return curseForgeOff();
       const p = findProject(source, projectId);
       if (!p) return notFound(`project ${projectId}`);
       return ok(filterVersions(projectVersions(p), loaderBound(p.kind) ? filter : { ...filter, loader: null }));
@@ -534,11 +539,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
           const other = have.find((c) => c.projectId === bad) ?? plan.install.find((x) => x.projectId === bad);
           if (other) plan.conflicts.push({ projectId: p.projectId, withProjectId: bad, reason: "incompatible" });
         }
-        if (v.manualDownload) {
-          plan.manual.push({ projectId: p.projectId, fileName: v.fileName, url: manualUrl(p, v) });
-        } else {
-          plan.install.push(v);
-        }
+        plan.install.push(v);
         for (const dep of p.requires) queue.push({ source: p.source, projectId: dep, versionId: null });
       }
       return ok(plan);
@@ -637,10 +638,9 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       return ok(id);
     },
 
-    // Packs flagged `manual` fail with `manualDownloadRequired` (CurseForge files
-    // with `allowModDistribution=false`); `details` carry the download pages.
     modpackInstall: async (source, projectId, versionId, ch) => {
       await wait();
+      if (source === "curseForge") return curseForgeOff();
       const p = findProject(source, projectId);
       if (!p || p.kind !== "modpack") return notFound(`modpack ${projectId}`);
       const versions = projectVersions(p);
@@ -656,17 +656,6 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
           { stage: "stages.libraries", total: null },
         ],
         () => {
-          if (p.manual) {
-            return {
-              ...appError("manualDownloadRequired", "mock: files require a manual download"),
-              details: {
-                projectId: p.projectId,
-                fileName: v.fileName,
-                url: manualUrl(p, v),
-                url2: "https://www.curseforge.com/minecraft/mc-mods/xaeros-minimap/files/4950522",
-              },
-            };
-          }
           const mc = v.mcVersions[0] ?? "1.21.1";
           const kind = v.loaders[0] ?? "vanilla";
           const instId = `inst-${slug(p.title)}-${seq}`;

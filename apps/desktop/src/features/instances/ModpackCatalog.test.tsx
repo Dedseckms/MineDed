@@ -54,15 +54,10 @@ describe("modpack catalog (mocks)", () => {
     expect(useNavStore.getState().openInstance).toMatch(/^inst-fabulously-optimized/);
   }, 15000);
 
-  it("shows manual download links for restricted CurseForge packs", async () => {
+  it("is Modrinth only: no source toggle, no CurseForge", async () => {
     await openCatalog();
-    fireEvent.click(await screen.findByRole("radio", { name: "CurseForge" }));
-    const list = await screen.findByRole("list", { name: "Modpack catalog" });
-    const row = (await within(list).findByRole("button", { name: "RLCraft" })).closest("[role=listitem]");
-    if (!(row instanceof HTMLElement)) throw new Error("no row");
-    fireEvent.click(within(row).getByRole("button", { name: "Install" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(await within(dialog).findByText("Manual download required", {}, { timeout: 8000 })).toBeTruthy();
-    expect(within(dialog).getAllByRole("link").length).toBe(2);
-  }, 15000);
+    await screen.findByRole("list", { name: "Modpack catalog" });
+    expect(screen.queryByRole("radio", { name: "CurseForge" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Modrinth" })).toBeNull();
+  });
 });
