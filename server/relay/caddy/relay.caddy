@@ -2,7 +2,7 @@
 #   import /opt/relay/caddy/*.caddy
 # to /etc/caddy/Caddyfile (next to the skinserver import), validates and reloads.
 # Requires DNS A record relay.dedseckms.ru -> the owner's external IP.
-# Ports must match /opt/relay/.env (HUB_PORT, RELAY_HTTP_PORT).
+# Ports must match /opt/relay/.env (HUB_PORT, RELAY_HTTP_PORT, UPDATES_PORT).
 relay.dedseckms.ru {
 	# hub: rooms API + room WebSocket.
 	handle /api/v1/* {
@@ -14,6 +14,15 @@ relay.dedseckms.ru {
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-For {remote_host}
 		}
+	}
+
+	# Update mirror (GitHub may be blocked for users): static, read-only, GET/HEAD only.
+	handle_path /updates/* {
+		@write not method GET HEAD
+		respond @write 405
+		header /latest.json Cache-Control "no-cache"
+		header /status.json Cache-Control "no-cache"
+		reverse_proxy 127.0.0.1:18090
 	}
 
 	# iroh-relay: /relay (WebSocket upgrade), /ping, /generate_204, /healthz.

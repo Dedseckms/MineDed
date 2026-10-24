@@ -1,6 +1,7 @@
 # MineUP relay stack: iroh-relay (P2P relay + QUIC address discovery) and hub (rooms API).
 # Project name is fixed: always run as `docker compose -p mineup-relay ...` (see start.sh).
-# Both services are stateless (rooms live in hub memory), so there are no volumes.
+# hub and iroh-relay are stateless (rooms live in hub memory); the only volume holds
+# mirrored update files (updates-mirror / updates-web).
 name: mineup-relay
 
 x-logging: &logging
@@ -76,6 +77,76 @@ services:
     cpu_shares: 256
     pids_limit: 64
     logging: *logging
+
+  # Update mirror: copies the latest GitHub release of GITHUB_REPO into updates_data
+  # (empty GITHUB_REPO = idle). Egress only, no published ports.
+  updates-mirror:
+    build:
+      context: ./updates
+      dockerfile: Dockerfile
+    image: mineup/updates-mirror:${UPDATES_VERSION:-0.1.0}
+    container_name: mineup-relay-updates-mirror
+    restart: unless-stopped
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      GITHUB_REPO: ${GITHUB_REPO:-}
+      UPDATES_BASE_URL: ${UPDATES_BASE_URL:-https://relay.dedseckms.ru/updates}
+      UPDATES_INTERVAL_SECS: ${UPDATES_INTERVAL_SECS:-1800}
+      UPDATES_MAX_TOTAL_MB: ${UPDATES_MAX_TOTAL_MB:-1024}
+    volumes:
+      - updates_data:/data
+    networks: [relay_net]
+    healthcheck:
+      # status.json is rewritten on every pass (idle/ok/error), so staleness = stuck loop.
+      test: ["CMD-SHELL", "find /data/www/status.json -mmin -70 | grep -q ."]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.2
+    cpu_shares: 128
+    pids_limit: 32
+    logging: *logging
+
+  # Read-only static server for the mirrored files (Caddy: /updates/* -> here).
+  updates-web:
+    image: busybox:1.37.0-musl
+    container_name: mineup-relay-updates-web
+    restart: unless-stopped
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    command: ["httpd", "-f", "-p", "8080", "-h", "/data/www", "-c", "/etc/httpd.conf"]
+    # The mirror must create the volume first so it inherits nobody-owned /data.
+    depends_on: [updates-mirror]
+    volumes:
+      - updates_data:/data:ro
+      - ./updates/httpd.conf:/etc/httpd.conf:ro
+    ports:
+      - "127.0.0.1:${UPDATES_PORT:-18090}:8080"
+    networks: [relay_net]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/status.json"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    mem_limit: 32m
+    memswap_limit: 32m
+    cpus: 0.2
+    cpu_shares: 128
+    pids_limit: 32
+    logging: *logging
+
+volumes:
+  # Mirrored release files only (re-downloadable, no backup needed).
+  updates_data:
 
 networks:
   relay_net:
