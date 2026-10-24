@@ -5,6 +5,7 @@ mod api;
 pub mod contract;
 mod curseforge;
 mod index;
+mod modmeta;
 mod modrinth;
 mod packs;
 mod presets;

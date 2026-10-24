@@ -17,7 +17,7 @@ import { Card, CardList, Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
 import { Field, Segmented, TextInput } from "../../components/ui/form";
-import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { isNotImplemented } from "../../lib/errors";
 import { NICK_MAX, type RegisterDraft, hasErrors, validateNick, validateRegister } from "../../lib/validation";
 import { SkinFlat } from "../skins/SkinPreview";
@@ -290,11 +290,11 @@ export function AccountsScreen() {
     <div className="flex flex-col gap-6">
       <Section title={t("accounts.list")}>
         {accounts.isPending ? (
-          <Skeleton className="h-16" />
+          <ListSkeleton rows={2} rowClassName="h-16" />
         ) : accounts.error ? (
-          <ErrorMessage error={accounts.error} />
+          <ErrorMessage error={accounts.error} onRetry={() => void accounts.refetch()} />
         ) : accounts.data.length === 0 ? (
-          <EmptyState title={t("accounts.empty")} />
+          <EmptyState icon="user" title={t("accounts.empty")} />
         ) : (
           <CardList className="flex flex-col gap-2">
             {accounts.data.map((a) => (

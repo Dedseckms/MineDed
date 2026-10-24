@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "id": "sodium",
+  "version": "0.6.13+mc1.21.1",
+  "provides": ["indium"],
+  "depends": { "fabricloader": ">=0.12.0", "minecraft": "1.21.1" }
+}

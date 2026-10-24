@@ -99,6 +99,26 @@ fn release_url(asset: &Asset) -> AppResult<Url> {
     .map_err(|e| AppError::internal(format!("bad release URL: {e}")))
 }
 
+/// Project mirror (nginx mirror-cache on our server), same layout as GitHub.
+const PROJECT_MIRROR: &str = "https://relay.dedseckms.ru/mirror/mihomo";
+/// Public GitHub release proxies, prefixed to the release URL. Safe to use:
+/// the archive is checked against the pinned SHA-256 before it is unpacked.
+const GITHUB_PROXIES: &[&str] = &["https://ghfast.top/", "https://gh-proxy.com/"];
+
+/// Download candidates in order: GitHub, the project mirror, public proxies.
+pub(crate) fn candidate_urls(asset: &Asset) -> AppResult<Vec<Url>> {
+    let github = release_url(asset)?;
+    let mut out = vec![github.clone()];
+    let bad = |e: url::ParseError| AppError::internal(format!("bad mirror URL: {e}"));
+    out.push(
+        Url::parse(&format!("{PROJECT_MIRROR}/{MIHOMO_VERSION}/{}", asset.name)).map_err(bad)?,
+    );
+    for p in GITHUB_PROXIES {
+        out.push(Url::parse(&format!("{p}{github}")).map_err(bad)?);
+    }
+    Ok(out)
+}
+
 /// Where the downloaded executable lives.
 pub(crate) fn managed_path(paths: &Paths) -> PathBuf {
     paths
@@ -148,29 +168,83 @@ pub(crate) async fn ensure(
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| io_err(e, &dir))?;
-    let archive = dir.join(asset.name);
-    sink.progress(0, Some(asset.size), "vpn.download");
-    downloader
-        .fetch_many(
-            vec![DownloadReq {
-                urls: vec![release_url(&asset)?],
-                sha1: None,
-                size: Some(asset.size),
-                dest: archive.clone(),
-                kind: ResourceKind::Other,
-            }],
-            sink,
-        )
-        .await?;
-    sink.check_cancelled()?;
-    let (archive2, target2) = (archive.clone(), target.clone());
-    let res = tokio::task::spawn_blocking(move || install(&archive2, &asset, &target2))
-        .await
-        .map_err(|e| AppError::internal(format!("unpack task failed: {e}")))?;
-    let _ = tokio::fs::remove_file(&archive).await;
-    res?;
-    tracing::info!(version = MIHOMO_VERSION, "mihomo installed");
+    fetch_verified(downloader, sink, &asset, candidate_urls(&asset)?, &target).await?;
     Ok(target)
+}
+
+/// Tries `urls` in order until one yields an archive matching the pinned
+/// digest, then installs it to `target`.
+pub(crate) async fn fetch_verified(
+    downloader: &dyn Downloader,
+    sink: &dyn ProgressSink,
+    asset: &Asset,
+    urls: Vec<Url>,
+    target: &Path,
+) -> AppResult<()> {
+    let asset = *asset;
+    let dir = target
+        .parent()
+        .ok_or_else(|| AppError::internal("mihomo path has no parent"))?;
+    let archive = dir.join(asset.name);
+    let mut last: Option<AppError> = None;
+    // One source at a time: a mirror serving a wrong file must not stop the
+    // next one from being tried (the downloader can't verify SHA-256).
+    for (i, url) in urls.into_iter().enumerate() {
+        sink.check_cancelled()?;
+        let _ = tokio::fs::remove_file(&archive).await;
+        sink.progress(0, Some(asset.size), "vpn.download");
+        let fetched = downloader
+            .fetch_many(
+                vec![DownloadReq {
+                    urls: vec![url],
+                    sha1: None,
+                    size: Some(asset.size),
+                    dest: archive.clone(),
+                    kind: ResourceKind::Other,
+                }],
+                sink,
+            )
+            .await;
+        let res = match fetched {
+            Ok(()) => {
+                let (archive2, target2) = (archive.clone(), target.to_path_buf());
+                tokio::task::spawn_blocking(move || install(&archive2, &asset, &target2))
+                    .await
+                    .map_err(|e| AppError::internal(format!("unpack task failed: {e}")))
+                    .and_then(|r| r)
+            }
+            Err(e) => Err(e),
+        };
+        let _ = tokio::fs::remove_file(&archive).await;
+        match res {
+            Ok(()) => {
+                tracing::info!(version = MIHOMO_VERSION, source = i, "mihomo installed");
+                return Ok(());
+            }
+            Err(e) if e.code == ErrorCode::Cancelled => return Err(e),
+            Err(e) => {
+                tracing::warn!(source = i, error = %e.message, "mihomo source failed");
+                last = Some(e);
+            }
+        }
+    }
+    Err(unavailable(last, target))
+}
+
+/// Every source failed: tell the user how to get past it.
+fn unavailable(last: Option<AppError>, target: &Path) -> AppError {
+    let mut e = AppError::new(
+        ErrorCode::Network,
+        "cannot download mihomo from GitHub or its mirrors; set a manual proxy in settings \
+         and retry, or place the mihomo executable manually",
+    )
+    .detail("hint", "useProxy")
+    .detail("version", MIHOMO_VERSION)
+    .detail("manualPath", target.display().to_string());
+    if let Some(last) = last {
+        e = e.detail("lastError", last.message);
+    }
+    e
 }
 
 /// Verifies `archive` against the pinned digest and unpacks the executable to
@@ -259,6 +333,12 @@ mod tests {
             assert!(a.name.contains(MIHOMO_VERSION), "{}", a.name);
             assert_eq!(a.sha256.len(), 64);
             assert!(release_url(&a).unwrap().as_str().ends_with(a.name));
+            let urls = candidate_urls(&a).unwrap();
+            assert_eq!(urls[0], release_url(&a).unwrap());
+            assert!(urls.len() >= 3);
+            assert!(urls
+                .iter()
+                .all(|u| u.scheme() == "https" && u.as_str().ends_with(a.name)));
         }
         assert!(asset_for("macos", "x86_64").is_none());
     }
@@ -307,6 +387,72 @@ mod tests {
             z.finish().unwrap();
         }
         assert_eq!(unpack(buf.get_ref(), Packing::Zip).unwrap(), b"MZ-binary");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// GitHub unreachable, first mirror serves a wrong file: the next mirror
+    /// is used. Nothing reachable: a clear error suggesting a proxy.
+    #[tokio::test]
+    async fn falls_back_across_sources() {
+        use lc_http::{DownloaderConfig, HttpDownloader, SystemProxyMode};
+        use lc_runtime::NullSink;
+
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(b"ELF-binary").unwrap();
+        let good = gz.finish().unwrap();
+        let digest: &'static str = Box::leak(hex::encode(Sha256::digest(&good)).into_boxed_str());
+        let asset = Asset {
+            name: "m.gz",
+            sha256: digest,
+            size: good.len() as u64,
+            packing: Packing::Gzip,
+        };
+        let bad = vec![0u8; good.len()];
+        let app = axum::Router::new()
+            .route("/bad/m.gz", axum::routing::get(move || async move { bad }))
+            .route(
+                "/good/m.gz",
+                axum::routing::get(move || async move { good }),
+            );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        // A port nobody listens on stands in for a blocked GitHub.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_port = dead.local_addr().unwrap().port();
+        drop(dead);
+
+        let d = HttpDownloader::new(DownloaderConfig {
+            system_proxy: SystemProxyMode::Off,
+            attempts_per_url: 1,
+            ..DownloaderConfig::default()
+        })
+        .unwrap();
+        let u = |s: String| Url::parse(&s).unwrap();
+        let dir = tmp("fallback");
+        let target = dir.join("mihomo");
+        let urls = vec![
+            u(format!("http://127.0.0.1:{dead_port}/m.gz")),
+            u(format!("http://127.0.0.1:{port}/bad/m.gz")),
+            u(format!("http://127.0.0.1:{port}/good/m.gz")),
+        ];
+        fetch_verified(&d, &NullSink::default(), &asset, urls, &target)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"ELF-binary");
+        assert!(!dir.join("m.gz").exists());
+
+        let err = fetch_verified(
+            &d,
+            &NullSink::default(),
+            &asset,
+            vec![u(format!("http://127.0.0.1:{dead_port}/m.gz"))],
+            &dir.join("other"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Network);
+        assert_eq!(err.details.unwrap()["hint"], "useProxy");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

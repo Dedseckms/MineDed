@@ -108,12 +108,12 @@ src-tauri → всё (единственное место, где стабы з�
 | qa | `tests/`, ревью, запуск тестов; прод-код не пишет |
 | release | CI, `tauri.conf.json` (bundle/updater), подпись, установщики, `commands/app.rs` |
 
-Точные папки и правила — в `CLAUDE.md` и `.claude/agents/<роль>.md`.
+Границы модулей — в `docs/CONTRACTS.md`.
 
 ## 6. Волны
 
 ### Волна 0 — фундамент и PoC
-- [x] lead: workspace, контракты, стабы, bindings, документы, правила агентов (этот коммит).
+- [x] lead: workspace, контракты, стабы, bindings, документы, правила разработки.
 - [ ] **Владелец**: заявка Azure + Mojang (R1), ключ CurseForge (R4), домен/белый IP (R9), правила безопасности сервера для server-ops.
 - [ ] net: PoC iroh hole punching с российских провайдеров и мобильного интернета.
 - [ ] net: PoC mihomo TUN с правилами по процессу на Windows и Linux.
@@ -159,7 +159,7 @@ src-tauri → всё (единственное место, где стабы з�
 Решено (2026-10-20):
 - Название **MineUP**, identifier `ru.dedseckms.mineup`, домен сервера `dedseckms.ru`.
 - **Microsoft-аккаунты не нужны** — убраны из контрактов. Заявки Azure/Mojang и CurseForge не подаются; контент — только Modrinth, CurseForge отложен.
-- Правила безопасности сервера — в `.claude/agents/server-ops.md`.
+- Правила эксплуатации сервера — в `server/*/DEPLOY.md`.
 
 Открыто:
 1. Белый IP / проброс портов (по итогам разведки server-ops).

@@ -156,6 +156,17 @@ struct Hosting {
     lan_port: Option<u16>,
 }
 
+/// Guest side of a finished `Hello` / `Welcome` exchange.
+struct Handshake {
+    conn: Connection,
+    send: SendStream,
+    reader: BufReader<RecvStream>,
+    host_name: String,
+    welcome: (Vec<String>, Vec<String>),
+    /// Control messages that arrived before `Welcome`, in order.
+    early: Vec<ControlMsg>,
+}
+
 pub(crate) struct Session {
     pub(crate) role: RoomRole,
     pub(crate) room_id: RoomId,
@@ -261,8 +272,44 @@ impl Session {
         u8::try_from(i).ok()
     }
 
+    /// Peer currently holding speaker slot `index`; `None` for vacated or
+    /// not yet announced slots.
     fn speaker_id(&self, index: u8) -> Option<String> {
-        self.peers().order.get(usize::from(index)).cloned()
+        self.peers()
+            .order
+            .get(usize::from(index))
+            .filter(|id| !id.is_empty())
+            .cloned()
+    }
+}
+
+/// Number of distinct speaker indexes (`VoiceHeader::speaker` is a `u8`).
+const SPEAKER_SLOTS: usize = 256;
+
+impl Peers {
+    /// Host: gives `id` a speaker slot. Slots are never reused within a room
+    /// while fresh ones remain, so in-flight frames of a peer that just left
+    /// can't be credited to a newcomer.
+    fn assign_slot(&mut self, id: &str) {
+        if self.order.iter().any(|x| x == id) {
+            return;
+        }
+        if self.order.len() < SPEAKER_SLOTS {
+            self.order.push(id.to_owned());
+        } else if let Some(slot) = self.order.iter_mut().skip(1).find(|x| x.is_empty()) {
+            // 256 joins in one room: fall back to the oldest vacated slot.
+            *slot = id.to_owned();
+        } else {
+            self.order.push(id.to_owned());
+        }
+    }
+
+    /// Host: frees `id`'s slot, keeping every other index unchanged (an empty
+    /// id in `Welcome` marks a vacated slot).
+    fn vacate_slot(&mut self, id: &str) {
+        if let Some(slot) = self.order.iter_mut().find(|x| *x == id) {
+            slot.clear();
+        }
     }
 }
 
@@ -281,6 +328,9 @@ pub(crate) struct Inner {
     /// Endpoint key for the app's lifetime, so a host's ban of this launcher
     /// survives a rejoin.
     secret: SecretKey,
+    /// Held while a state snapshot is taken and handed to the observer, so
+    /// concurrent emitters can't deliver an older snapshot last.
+    emit: StdMutex<()>,
 }
 
 impl Inner {
@@ -330,6 +380,7 @@ impl P2pRooms {
                 session: StdMutex::new(None),
                 lan_port: Arc::new(lan_port),
                 secret: SecretKey::generate(),
+                emit: StdMutex::new(()),
             }),
         }
     }
@@ -372,6 +423,7 @@ impl P2pRooms {
     }
 
     fn emit_state(&self) {
+        let _emit = lock(&self.inner.emit);
         self.inner
             .observer
             .on_state(self.inner.current().map(|s| s.state()));
@@ -579,9 +631,13 @@ impl P2pRooms {
             }),
         });
         self.inner.set_current(Some(session.clone()));
+        let state = {
+            let _emit = lock(&self.inner.emit);
+            let state = session.state();
+            self.inner.observer.on_state(Some(state.clone()));
+            state
+        };
         tokio::spawn(self.clone().host_accept_loop(session.clone()));
-        let state = session.state();
-        self.inner.observer.on_state(Some(state.clone()));
         Ok(state)
     }
 
@@ -719,9 +775,7 @@ impl P2pRooms {
                     ban_uuid: uuid_key,
                 },
             );
-            if !p.order.contains(&remote) {
-                p.order.push(remote.clone());
-            }
+            p.assign_slot(&remote);
             old
         };
         if let Some(old) = replaced.and_then(|e| e.conn) {
@@ -809,7 +863,7 @@ impl P2pRooms {
                 .and_then(|e| e.conn.as_ref())
                 .is_some_and(|c| c.stable_id() == conn.stable_id());
             if same {
-                p.order.retain(|x| x != id);
+                p.vacate_slot(id);
                 p.map.remove(id)
             } else {
                 None
@@ -836,8 +890,11 @@ impl P2pRooms {
         })?;
         let entry = {
             let mut p = s.peers();
-            p.order.retain(|x| x != peer_id);
-            p.map.remove(peer_id)
+            let e = p.map.remove(peer_id);
+            if e.is_some() {
+                p.vacate_slot(peer_id);
+            }
+            e
         };
         let Some(entry) = entry else {
             return Err(
@@ -956,7 +1013,14 @@ impl P2pRooms {
                 password.as_ref(),
             )
             .await;
-        let (conn, send, reader, host_name, welcome) = match handshake {
+        let Handshake {
+            conn,
+            send,
+            reader,
+            host_name,
+            welcome,
+            early,
+        } = match handshake {
             Ok(v) => v,
             Err(e) => {
                 endpoint.close().await;
@@ -1027,6 +1091,14 @@ impl P2pRooms {
             host: None,
         });
         self.inner.set_current(Some(session.clone()));
+        // Initial snapshot goes out before any task can emit a newer one, so
+        // the observer never ends on a stale state.
+        let state = {
+            let _emit = lock(&self.inner.emit);
+            let state = session.state();
+            self.inner.observer.on_state(Some(state.clone()));
+            state
+        };
 
         if let Some((listener, local_addr)) = listener {
             tokio::spawn(guest_tunnel(listener, conn.clone(), session.cancel.clone()));
@@ -1048,16 +1120,13 @@ impl P2pRooms {
         );
         tokio::spawn(
             self.clone()
-                .guest_lifetime(session.clone(), host_key, conn, reader),
+                .guest_lifetime(session.clone(), host_key, conn, reader, early),
         );
-
-        let state = session.state();
-        self.inner.observer.on_state(Some(state.clone()));
         Ok(state)
     }
 
     /// Connects, sends `Hello` and waits for the host's `Hello` + `Welcome`.
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments)]
     async fn guest_connect(
         &self,
         endpoint: &Endpoint,
@@ -1067,13 +1136,7 @@ impl P2pRooms {
         me: &Identity,
         peer_token: &str,
         password: Option<&Secret>,
-    ) -> AppResult<(
-        Connection,
-        SendStream,
-        BufReader<RecvStream>,
-        String,
-        (Vec<String>, Vec<String>),
-    )> {
+    ) -> AppResult<Handshake> {
         let mut addr = EndpointAddr::new(host_id);
         for r in relays {
             addr = addr.with_relay_url(r.clone());
@@ -1106,6 +1169,7 @@ impl P2pRooms {
             .map_err(|e| net_err("control stream", e))?;
         let mut reader = BufReader::new(recv);
         let mut host_name = String::from("Host");
+        let mut early = Vec::new();
         let handshake = async {
             loop {
                 let line = wire::read_line(&mut reader, MAX_LINE).await?;
@@ -1119,6 +1183,9 @@ impl P2pRooms {
                     ControlMsg::Hello { name, .. } => host_name = clean_name(&name),
                     ControlMsg::Welcome { peers, peer_names } => return Ok((peers, peer_names)),
                     ControlMsg::Kick { reason } => return Err(kick_error(&reason)),
+                    // Broadcasts that raced ahead of our Welcome (chat, voice
+                    // states): replayed once the session exists.
+                    msg if early.len() < CONTROL_QUEUE => early.push(msg),
                     _ => {}
                 }
             }
@@ -1134,7 +1201,14 @@ impl P2pRooms {
                 return Err(timeout_err("welcome"));
             }
         };
-        Ok((conn, send, reader, host_name, welcome))
+        Ok(Handshake {
+            conn,
+            send,
+            reader,
+            host_name,
+            welcome,
+            early,
+        })
     }
 
     async fn guest_lifetime(
@@ -1143,8 +1217,18 @@ impl P2pRooms {
         host_key: String,
         conn: Connection,
         reader: BufReader<RecvStream>,
+        early: Vec<ControlMsg>,
     ) {
-        let control = self.clone().control_loop(s.clone(), host_key, reader);
+        let this = self.clone();
+        let s2 = s.clone();
+        let control = async move {
+            for msg in early {
+                if !this.on_control(&s2, &host_key, msg) {
+                    return;
+                }
+            }
+            this.control_loop(s2, host_key, reader).await;
+        };
         tokio::select! {
             () = s.cancel.cancelled() => return,
             () = control => {}
@@ -1153,7 +1237,7 @@ impl P2pRooms {
         // Host left, closed the room or kicked us.
         if self.inner.take_if(&s) {
             shutdown(&s).await;
-            self.inner.observer.on_state(None);
+            self.emit_state();
         }
     }
 
@@ -1169,71 +1253,79 @@ impl P2pRooms {
             let Ok(msg) = wire::decode(&line) else {
                 continue;
             };
-            match msg {
-                ControlMsg::Ping { nonce } => {
-                    if let Ok(l) = wire::encode(&ControlMsg::Pong { nonce }) {
-                        s.send_to(&from, &l);
-                    }
-                }
-                ControlMsg::Chat {
-                    id,
-                    text,
-                    sent_at,
-                    from: orig,
-                    from_name,
-                } => {
-                    self.on_chat(&s, &from, (orig, from_name), id, text, sent_at);
-                }
-                ControlMsg::VoiceState {
-                    speaking,
-                    muted,
-                    peer,
-                } => {
-                    // The host trusts only the connection identity; guests
-                    // accept the host's attribution of relayed states.
-                    let target = match (s.role, peer) {
-                        (RoomRole::Guest, Some(p)) => p,
-                        _ => from.clone(),
-                    };
-                    if target == s.my_id {
-                        continue;
-                    }
-                    let changed = match s.peers().map.get_mut(&target) {
-                        Some(e) if (e.peer.speaking, e.peer.muted) != (speaking, muted) => {
-                            e.peer.speaking = speaking;
-                            e.peer.muted = muted;
-                            true
-                        }
-                        _ => false,
-                    };
-                    if changed {
-                        if s.role == RoomRole::Host {
-                            let relay = wire::encode(&ControlMsg::VoiceState {
-                                speaking,
-                                muted,
-                                peer: Some(from.clone()),
-                            });
-                            if let Ok(line) = relay {
-                                s.broadcast(&line, Some(&from));
-                            }
-                        }
-                        self.emit_state();
-                    }
-                }
-                ControlMsg::Welcome { peers, peer_names } if s.role == RoomRole::Guest => {
-                    apply_welcome(&mut s.peers(), peers, peer_names, &s.my_id, &from);
-                    self.emit_state();
-                }
-                ControlMsg::Hello { name, .. } if s.role == RoomRole::Guest => {
-                    if let Some(e) = s.peers().map.get_mut(&from) {
-                        e.peer.name = clean_name(&name);
-                    }
-                    self.emit_state();
-                }
-                ControlMsg::Kick { .. } | ControlMsg::Bye => return,
-                _ => {}
+            if !self.on_control(&s, &from, msg) {
+                return;
             }
         }
+    }
+
+    /// Handles one control message from `from`; `false` ends the stream.
+    fn on_control(&self, s: &Arc<Session>, from: &str, msg: ControlMsg) -> bool {
+        match msg {
+            ControlMsg::Ping { nonce } => {
+                if let Ok(l) = wire::encode(&ControlMsg::Pong { nonce }) {
+                    s.send_to(from, &l);
+                }
+            }
+            ControlMsg::Chat {
+                id,
+                text,
+                sent_at,
+                from: orig,
+                from_name,
+            } => {
+                self.on_chat(s, from, (orig, from_name), id, text, sent_at);
+            }
+            ControlMsg::VoiceState {
+                speaking,
+                muted,
+                peer,
+            } => {
+                // The host trusts only the connection identity; guests
+                // accept the host's attribution of relayed states.
+                let target = match (s.role, peer) {
+                    (RoomRole::Guest, Some(p)) => p,
+                    _ => from.to_owned(),
+                };
+                if target == s.my_id {
+                    return true;
+                }
+                let changed = match s.peers().map.get_mut(&target) {
+                    Some(e) if (e.peer.speaking, e.peer.muted) != (speaking, muted) => {
+                        e.peer.speaking = speaking;
+                        e.peer.muted = muted;
+                        true
+                    }
+                    _ => false,
+                };
+                if changed {
+                    if s.role == RoomRole::Host {
+                        let relay = wire::encode(&ControlMsg::VoiceState {
+                            speaking,
+                            muted,
+                            peer: Some(from.to_owned()),
+                        });
+                        if let Ok(line) = relay {
+                            s.broadcast(&line, Some(from));
+                        }
+                    }
+                    self.emit_state();
+                }
+            }
+            ControlMsg::Welcome { peers, peer_names } if s.role == RoomRole::Guest => {
+                apply_welcome(&mut s.peers(), peers, peer_names, &s.my_id, from);
+                self.emit_state();
+            }
+            ControlMsg::Hello { name, .. } if s.role == RoomRole::Guest => {
+                if let Some(e) = s.peers().map.get_mut(from) {
+                    e.peer.name = clean_name(&name);
+                }
+                self.emit_state();
+            }
+            ControlMsg::Kick { .. } | ControlMsg::Bye => return false,
+            _ => {}
+        }
+        true
     }
 
     fn on_chat(
@@ -1296,16 +1388,25 @@ impl P2pRooms {
             let mut sender = from.clone();
             if s.role == RoomRole::Host {
                 // Authoritative speaker index: a guest cannot speak as someone else.
-                if let Some(idx) = s.speaker_index(&from) {
-                    set_speaker(&mut data, idx);
+                if speaker(&data).is_some() {
+                    match s.speaker_index(&from) {
+                        Some(idx) => set_speaker(&mut data, idx),
+                        // Left (or slotless): never forward a forgeable index.
+                        None => continue,
+                    }
                 }
                 for other in s.connections(Some(&from)) {
                     if other.max_datagram_size().is_some_and(|m| data.len() <= m) {
                         let _ = other.send_datagram(data.clone().into());
                     }
                 }
-            } else if let Some(id) = speaker(&data).and_then(|i| s.speaker_id(i)) {
-                // Forwarded by the host on behalf of another guest.
+            } else if let Some(idx) = speaker(&data) {
+                // Forwarded by the host on behalf of another guest. A vacated
+                // or not yet announced slot: the sender is unknown, drop it
+                // rather than mis-credit it.
+                let Some(id) = s.speaker_id(idx) else {
+                    continue;
+                };
                 if id != s.my_id {
                     sender = id;
                 }
@@ -1357,7 +1458,7 @@ impl P2pRooms {
         };
         if self.inner.take_if(&s) {
             shutdown(&s).await;
-            self.inner.observer.on_state(None);
+            self.emit_state();
         }
         Ok(())
     }
@@ -1700,7 +1801,8 @@ fn apply_welcome(
         .map(|e| (e.peer.path, e.peer.rtt_ms))
         .unwrap_or((PathKind::Connecting, None));
     for (i, id) in order.iter().enumerate() {
-        if id == my_id {
+        // Empty: a vacated speaker slot.
+        if id.is_empty() || id == my_id {
             continue;
         }
         let given = names.get(i).map(|n| clean_name(n));

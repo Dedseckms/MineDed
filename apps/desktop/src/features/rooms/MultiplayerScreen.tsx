@@ -8,7 +8,7 @@ import { Card, CardList, Section } from "../../components/ui/Card";
 import { CopyButton } from "../../components/ui/CopyButton";
 import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
-import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { PATH_TONE } from "../../lib/rooms";
 import { isSpeaking } from "../../lib/voice";
 import { useNavStore } from "../../stores/navStore";
@@ -138,7 +138,7 @@ function PeersSection({ room }: { room: RoomState }) {
   return (
     <Section title={t("rooms.peers.title", { n: room.peers.length })}>
       {room.peers.length === 0 ? (
-        <EmptyState title={host ? t("rooms.peers.waiting") : t("rooms.peers.none")} />
+        <EmptyState icon="users" title={host ? t("rooms.peers.waiting") : t("rooms.peers.none")} />
       ) : (
         <CardList className="flex flex-col gap-2">
           {room.peers.map((p) => (
@@ -209,8 +209,8 @@ function RoomView({ room }: { room: RoomState }) {
 
 export function MultiplayerScreen() {
   const room = useRoomState();
-  if (room.isPending) return <Skeleton className="h-40" />;
-  if (room.error) return <ErrorMessage error={room.error} />;
+  if (room.isPending) return <ListSkeleton rows={2} rowClassName="h-56" className="grid gap-6 lg:grid-cols-2" />;
+  if (room.error) return <ErrorMessage error={room.error} onRetry={() => void room.refetch()} />;
   if (room.data) return <RoomView room={room.data} />;
   return (
     <div className="grid gap-6 lg:grid-cols-2">

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -13,5 +14,9 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
+  },
+  test: {
+    // Let tests read styles.css via `?raw` (theme / light-mode rules).
+    css: { include: [/styles\.css/] },
   },
 });

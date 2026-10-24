@@ -27,6 +27,11 @@ impl HostMemory {
     }
 
     pub fn is_proxy_first(&self, url: &Url) -> bool {
+        self.contains(url)
+    }
+
+    /// Whether url's host has a live (unexpired) entry.
+    pub fn contains(&self, url: &Url) -> bool {
         let Some(key) = host_key(url) else {
             return false;
         };
@@ -42,13 +47,19 @@ impl HostMemory {
     }
 
     pub fn remember(&self, url: &Url) {
-        if let Some(key) = host_key(url) {
+        if let Some(key) = self.insert(url) {
             tracing::info!(host = %key, ttl_secs = self.ttl.as_secs(), "host remembered as proxy-first");
-            self.until
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(key, Instant::now() + self.ttl);
         }
+    }
+
+    /// Adds (or refreshes) url's host; returns its key.
+    pub fn insert(&self, url: &Url) -> Option<String> {
+        let key = host_key(url)?;
+        self.until
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.clone(), Instant::now() + self.ttl);
+        Some(key)
     }
 
     pub fn forget(&self, url: &Url) {

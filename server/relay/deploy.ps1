@@ -27,9 +27,10 @@ if (-not (Test-Path $bin)) { throw "missing $bin" }
 
 # Stage files (LF endings for shell scripts).
 $stage = Join-Path ([IO.Path]::GetTempPath()) ("mineup-relay-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Force "$stage\hub", "$stage\iroh-relay", "$stage\caddy" | Out-Null
+New-Item -ItemType Directory -Force "$stage\hub", "$stage\iroh-relay", "$stage\caddy", "$stage\updates" | Out-Null
 foreach ($f in "compose.yaml", "compose.qad.yaml", "start.sh", "check.sh", "install.sh", "DEPLOY.md", ".env.example",
-    "hub\Dockerfile", "iroh-relay\relay.toml", "iroh-relay\relay-qad.toml", "caddy\relay.caddy") {
+    "hub\Dockerfile", "iroh-relay\relay.toml", "iroh-relay\relay-qad.toml", "caddy\relay.caddy",
+    "updates\Dockerfile", "updates\mirror.sh", "updates\httpd.conf") {
     $text = [IO.File]::ReadAllText((Join-Path $src $f)) -replace "`r`n", "`n"
     [IO.File]::WriteAllText((Join-Path $stage $f), $text, (New-Object Text.UTF8Encoding $false))
 }

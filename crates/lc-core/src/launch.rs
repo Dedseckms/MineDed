@@ -265,9 +265,7 @@ pub(crate) fn build_plan(i: PlanInputs<'_>) -> AppResult<LaunchPlan> {
     let (jvm_t, game_t) = arg_templates(profile, i.env);
     let mut jvm_args = vec![format!("-Xms{}M", i.min_mb), format!("-Xmx{}M", i.max_mb)];
     jvm_args.extend(jvm_t.iter().map(|a| substitute(a, &vars)));
-    if let Some(log) = &i.prepared.log_arg {
-        jvm_args.push(log.clone());
-    }
+    jvm_args.extend(i.prepared.log_args.iter().cloned());
 
     let mut java_agents = Vec::new();
     if let Some(a) = &i.auth.authlib {
@@ -432,7 +430,7 @@ mod tests {
                 index_id: profile.asset_index.as_ref().unwrap().id.clone(),
                 game_assets: PathBuf::from("/root/assets"),
             },
-            log_arg: Some("-Dlog4j.configurationFile=/root/assets/log_configs/client.xml".into()),
+            log_args: vec!["-Dlog4j.configurationFile=/root/assets/log_configs/client.xml".into()],
             libs,
             profile,
         }

@@ -14,17 +14,25 @@ use lc_types::content::{
     InstalledContent, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::Instance;
+use lc_types::version::LoaderKind;
 use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 
 use crate::api::{Api, DlHttp, Http};
 use crate::contract::ContentService;
 use crate::curseforge::{default_env_dirs, find_api_key, no_key_error, CurseForgeSource};
 use crate::index::{base_name, key, ContentIndex, IndexEntry};
+use crate::modmeta::{read_jar_meta_async, ModMeta};
 use crate::modrinth::ModrinthSource;
-use crate::resolver::{resolve, InstalledRef, Lookup};
+use crate::resolver::{resolve, DiskMeta, InstalledRef, Lookup};
 use crate::shaders::{has_shader_loader, optifine_manual, shader_loader_groups};
 use crate::source::{Catalog, Target, UpdateItem};
-use crate::util::{check_file_name, file_hashes, io_err, kind_dir, parse_url, CONTENT_DIRS};
+use crate::util::{
+    check_file_name, file_hashes, io_err, kind_dir, loader_compatible, parse_url, sha1_hex,
+    CONTENT_DIRS,
+};
+
+/// Jars larger than this are not fetched just to read their metadata.
+const MAX_META_JAR: u64 = 64 * 1024 * 1024;
 
 pub(crate) struct Inner {
     pub paths: Paths,
@@ -73,7 +81,7 @@ impl ContentServices {
         system: Arc<dyn SystemProbe>,
     ) -> Self {
         let key = find_api_key(&default_env_dirs(paths.root()));
-        let http: Arc<dyn Http> = Arc::new(DlHttp(downloader.clone()));
+        let http: Arc<dyn Http> = Arc::new(DlHttp::new(downloader.clone()));
         Self::with_parts(paths, downloader, instances, system, http, key)
     }
 
@@ -129,6 +137,48 @@ impl Inner {
 
     pub fn instance_dir(&self, id: InstanceId) -> PathBuf {
         self.paths.instance(id)
+    }
+
+    /// Cache of jars fetched during resolution to read `fabric.mod.json`
+    /// (keyed by SHA-1, reused by the install).
+    fn jar_cache(&self, sha1: &str) -> PathBuf {
+        self.paths
+            .cache()
+            .join("content")
+            .join("jars")
+            .join(format!(
+                "{}.jar",
+                sha1_hex(sha1.to_ascii_lowercase().as_bytes())
+            ))
+    }
+
+    /// `fabric.mod.json` of the enabled mod jars in `game_dir` (Fabric/Quilt only).
+    pub async fn disk_metas(
+        &self,
+        inst: &Instance,
+        game_dir: &Path,
+        idx: &ContentIndex,
+    ) -> AppResult<Vec<DiskMeta>> {
+        if !matches!(inst.loader.kind, LoaderKind::Fabric | LoaderKind::Quilt) {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for f in self.scan(game_dir).await? {
+            if f.kind != ContentKind::Mod || !f.enabled || !f.name.ends_with(".jar") {
+                continue;
+            }
+            let Some(meta) = read_jar_meta_async(game_dir.join(f.dir).join(&f.name)).await else {
+                continue;
+            };
+            out.push(DiskMeta {
+                owner: idx
+                    .files
+                    .get(&f.key())
+                    .map(|e| (e.source, e.project_id.clone())),
+                meta,
+            });
+        }
+        Ok(out)
     }
 
     /// Files in `mods/`, `resourcepacks/`, `shaderpacks/`, `datapacks/`.
@@ -228,6 +278,18 @@ impl Inner {
             let disabled = old_disk.map(|f| !f.enabled).unwrap_or(false);
             let dest = game.join(dir).join(&v.file_name);
             let sha1 = rf.sha1.clone().or_else(|| v.sha1.clone());
+            if let Some(h) = &sha1 {
+                // Fetched while resolving: the downloader re-verifies and skips it.
+                let cached = self.jar_cache(h);
+                if tokio::fs::try_exists(&cached).await.unwrap_or(false)
+                    && !tokio::fs::try_exists(&dest).await.unwrap_or(false)
+                {
+                    if let Some(parent) = dest.parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+                    let _ = tokio::fs::copy(&cached, &dest).await;
+                }
+            }
             reqs.push(DownloadReq {
                 urls: vec![parse_url(&url)?],
                 sha1: sha1.clone(),
@@ -375,7 +437,8 @@ impl Inner {
                 manual = m;
             }
         }
-        let mut plan = resolve(self, &target, &installed, picks, extra).await?;
+        let disk = self.disk_metas(inst, &game, &idx).await?;
+        let mut plan = resolve(self, &target, &installed, &disk, picks, extra).await?;
         plan.manual.extend(manual);
         Ok(plan)
     }
@@ -433,6 +496,51 @@ impl Lookup for Inner {
 
     async fn manual_url(&self, v: &ContentVersion) -> AppResult<String> {
         Ok(self.catalog(v.source)?.file(v).await?.manual_url)
+    }
+
+    async fn candidates(
+        &self,
+        source: ContentSourceKind,
+        project_id: &str,
+        target: &Target,
+    ) -> AppResult<Vec<ContentVersion>> {
+        let cat = self.catalog(source)?;
+        let kind = cat.project(project_id).await?.kind;
+        let mut list: Vec<(ContentVersion, bool)> = cat
+            .versions_ranked(project_id, &target.filter(kind))
+            .await?
+            .into_iter()
+            .filter(|(v, _)| {
+                kind != ContentKind::Mod || loader_compatible(&v.loaders, target.loader)
+            })
+            .collect();
+        // Releases first, otherwise newest first (stable).
+        list.sort_by_key(|(_, release)| !*release);
+        Ok(list.into_iter().map(|(v, _)| v).collect())
+    }
+
+    async fn mod_meta(&self, v: &ContentVersion) -> Option<ModMeta> {
+        if v.manual_download || v.size > MAX_META_JAR || !v.file_name.ends_with(".jar") {
+            return None;
+        }
+        let cat = self.catalog(v.source).ok()?;
+        let rf = cat.file(v).await.ok()?;
+        // Only hash-verified downloads.
+        let sha1 = rf.sha1.clone().or_else(|| v.sha1.clone())?;
+        let url = parse_url(rf.url.as_deref()?).ok()?;
+        let dest = self.jar_cache(&sha1);
+        let req = DownloadReq {
+            urls: vec![url],
+            sha1: Some(sha1),
+            size: (v.size > 0).then_some(v.size),
+            dest: dest.clone(),
+            kind: ResourceKind::Content,
+        };
+        self.dl
+            .fetch_many(vec![req], &lc_runtime::NullSink::default())
+            .await
+            .ok()?;
+        read_jar_meta_async(dest).await
     }
 }
 

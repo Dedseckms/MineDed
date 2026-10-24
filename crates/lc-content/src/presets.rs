@@ -206,7 +206,17 @@ impl PresetService for ContentServices {
                     version_id: Some(e.version_id.clone()),
                 })
                 .collect();
-            let plan = resolve(inner.as_ref(), &target, &installed, Vec::new(), extra).await?;
+            let game = inner.instances.game_dir(instance);
+            let disk = inner.disk_metas(&inst, &game, &idx).await?;
+            let plan = resolve(
+                inner.as_ref(),
+                &target,
+                &installed,
+                &disk,
+                Vec::new(),
+                extra,
+            )
+            .await?;
             for c in &plan.conflicts {
                 sink.log(&format!(
                     "preset: {} conflicts with {}: {}",

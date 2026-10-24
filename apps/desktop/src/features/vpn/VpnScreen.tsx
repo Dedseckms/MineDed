@@ -18,7 +18,7 @@ import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { VirtualList } from "../../components/ui/VirtualList";
-import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { Field, Segmented, TextInput } from "../../components/ui/form";
 import {
   type NodeSort,
@@ -265,13 +265,11 @@ function NodesSection() {
       }
     >
       {nodes.isPending ? (
-        <Skeleton className="h-24" />
+        <ListSkeleton rows={5} rowClassName="h-[46px]" />
       ) : nodes.error ? (
-        <ErrorMessage error={nodes.error} />
+        <ErrorMessage error={nodes.error} onRetry={() => void nodes.refetch()} />
       ) : total === 0 ? (
-        <EmptyState title={t("vpn.nodes.empty")}>
-          <p className="text-sm text-muted">{t("vpn.nodes.emptyHint")}</p>
-        </EmptyState>
+        <EmptyState icon="shield" title={t("vpn.nodes.empty")} description={t("vpn.nodes.emptyHint")} />
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-3">
@@ -326,9 +324,9 @@ export function VpnScreen() {
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted">{t("vpn.intro")}</p>
       {state.isPending ? (
-        <Skeleton className="h-40" />
+        <ListSkeleton rows={1} rowClassName="h-40" />
       ) : state.error ? (
-        <ErrorMessage error={state.error} />
+        <ErrorMessage error={state.error} onRetry={() => void state.refetch()} />
       ) : (
         <StatusSection state={state.data} hasNodes={(nodes.data?.length ?? 0) > 0} />
       )}

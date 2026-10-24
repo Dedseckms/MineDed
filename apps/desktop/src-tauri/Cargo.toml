@@ -33,6 +33,8 @@ tauri.workspace = true
 tauri-specta.workspace = true
 tokio.workspace = true
 url.workspace = true
+# release: self-update (signed bundles, mirrored latest.json)
+tauri-plugin-updater = "2.10"
 
 [lints]
 workspace = true

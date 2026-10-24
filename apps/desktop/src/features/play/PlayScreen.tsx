@@ -103,17 +103,17 @@ export function PlayScreen() {
 
   if (instances.isPending || accounts.isPending) {
     return (
-      <div className="flex flex-col gap-4">
+      <div role="status" aria-busy="true" aria-label={t("common.loading")} className="flex flex-col gap-4" data-testid="skeleton">
         <Skeleton className="h-40" />
         <Skeleton className="h-64" />
       </div>
     );
   }
-  if (instances.error) return <ErrorMessage error={instances.error} />;
+  if (instances.error) return <ErrorMessage error={instances.error} onRetry={() => void instances.refetch()} />;
 
   if (!instance) {
     return (
-      <EmptyState title={t("play.noInstances")}>
+      <EmptyState icon="layers" title={t("play.noInstances")}>
         <Button variant="primary" icon={<Icon name="plus" />} onClick={() => nav.go("instances")}>
           {t("instances.create")}
         </Button>

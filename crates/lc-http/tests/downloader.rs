@@ -617,6 +617,70 @@ async fn connection_refused_is_network_error() {
     assert!(err.details.unwrap().contains_key("url"));
 }
 
+/// No proxy and the origin unreachable: after the first failure the host is
+/// demoted (mirror first for verified downloads, a single try otherwise),
+/// and a total failure suggests a proxy.
+#[tokio::test]
+async fn unreachable_host_is_demoted_and_hinted() {
+    let (srv, addr) = start(1000).await;
+    // Accepts and drops every connection: a reset-style block.
+    let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_addr = dead.local_addr().unwrap();
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let acc = accepts.clone();
+    tokio::spawn(async move {
+        while let Ok((s, _)) = dead.accept().await {
+            acc.fetch_add(1, Ordering::SeqCst);
+            drop(s);
+        }
+    });
+    let d = downloader();
+    let tmp = TempDir::new("demote");
+    let urls = |name: &str| {
+        vec![
+            url(dead_addr, &format!("/{name}")),
+            url(addr, &format!("/ok/{name}")),
+        ]
+    };
+    let sink = RecSink::new();
+    d.fetch_many(
+        vec![req(urls("a"), &srv.data, tmp.path().join("a"))],
+        &*sink,
+    )
+    .await
+    .unwrap();
+    let first = accepts.load(Ordering::SeqCst);
+    assert!(first >= 1);
+    // Verified: the mirror goes first now, the dead origin isn't touched.
+    d.fetch_many(
+        vec![req(urls("b"), &srv.data, tmp.path().join("b"))],
+        &*sink,
+    )
+    .await
+    .unwrap();
+    assert_eq!(accepts.load(Ordering::SeqCst), first);
+    assert_eq!(srv.hits("/ok/b"), 1);
+
+    // Unverified: original first, but only one attempt.
+    let err = d
+        .get_bytes(&url(dead_addr, "/x"), ResourceKind::Other)
+        .await
+        .unwrap_err();
+    assert_eq!(accepts.load(Ordering::SeqCst), first + 1);
+    assert!(
+        matches!(err.code, ErrorCode::Network | ErrorCode::Blocked),
+        "{err:?}"
+    );
+    assert_eq!(err.details.unwrap()["hint"], "useProxy");
+
+    // A plain HTTP error is not a reason to suggest a proxy.
+    let err = d
+        .get_bytes(&url(addr, "/404/x"), ResourceKind::Other)
+        .await
+        .unwrap_err();
+    assert!(!err.details.unwrap().contains_key("hint"));
+}
+
 #[tokio::test]
 async fn manual_http_proxy_is_used_with_auth() {
     let (srv, addr) = start(10).await;

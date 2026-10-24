@@ -3,6 +3,8 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { Settings, Theme } from "../bindings";
 import { useSettings } from "../api/queries";
 import i18n from "../i18n";
+import { accentTokens } from "../lib/color";
+import { type MotionPreset, type PresetName, motionPreset } from "../lib/motion";
 
 export type ResolvedTheme = "dark" | "light";
 
@@ -44,13 +46,34 @@ export function useMotionPrefs(): MotionPrefs {
   return motionPrefs(data, osReduced);
 }
 
-/** Applies theme, language and performance flags from settings to the document. */
+/** Animation props for a shared preset; instant when motion is reduced. */
+export function useMotionPreset(name: PresetName): MotionPreset {
+  return motionPreset(name, useMotionPrefs().reduced);
+}
+
+const ACCENT_VARS = {
+  accent: "--color-accent",
+  accentStrong: "--color-accent-strong",
+  accentFg: "--color-accent-fg",
+} as const;
+
+/** Sets (or clears, for `null`/invalid) the accent CSS variables on `root`. */
+export function applyAccent(root: HTMLElement, accent: string | null | undefined, theme: ResolvedTheme): void {
+  const tokens = accent ? accentTokens(accent, theme) : null;
+  for (const [k, cssVar] of Object.entries(ACCENT_VARS) as Array<[keyof typeof ACCENT_VARS, string]>) {
+    if (tokens) root.style.setProperty(cssVar, tokens[k]);
+    else root.style.removeProperty(cssVar);
+  }
+}
+
+/** Applies theme, accent, language and performance flags from settings to the document. */
 export function useApplyAppearance(): void {
   const { data: settings } = useSettings();
   const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
   const prefs = useMotionPrefs();
   const theme = resolveTheme(settings?.theme ?? "system", prefersDark);
   const language = settings?.language;
+  const accent = settings?.accentColor ?? null;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -59,6 +82,10 @@ export function useApplyAppearance(): void {
     root.dataset.reduceMotion = String(prefs.reduced);
     root.style.colorScheme = theme;
   }, [theme, prefs.light, prefs.reduced]);
+
+  useEffect(() => {
+    applyAccent(document.documentElement, accent, theme);
+  }, [accent, theme]);
 
   useEffect(() => {
     if (language && i18n.language !== language) void i18n.changeLanguage(language);

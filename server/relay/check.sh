@@ -16,6 +16,10 @@ $SUDO docker compose -p mineup-relay ps --format '{{.Name}} {{.Status}}'
 echo "== hub health";   curl -fsS "$H/health" && echo || fail "hub health"
 echo "== relay healthz"; curl -fsS -o /dev/null -w '%{http_code}\n' "$R/healthz" || fail "relay healthz"
 echo "== relay ping";    curl -fsS -o /dev/null -w '%{http_code}\n' "$R/ping" || fail "relay ping"
+echo "== updates status"
+curl -fsS "http://127.0.0.1:${UPDATES_PORT:-18090}/status.json" && echo || fail "updates status"
+echo "== updates via Caddy (expect 200)"
+curl -sS -o /dev/null -w '%{http_code}\n' https://relay.dedseckms.ru/updates/status.json
 echo "== join unknown room (expect 404)"
 curl -sS -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' \
   -d '{"endpointId":"probe"}' "$H/rooms/AAAA-AAAA/join"

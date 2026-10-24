@@ -1,7 +1,6 @@
 # Deploy (owner: server-ops)
 
-Only the server-ops agent works with the server, and only over SSH under the security rules
-in `.claude/agents/server-ops.md`.
+Server access is SSH-only, under the rules in the service DEPLOY.md files.
 
 ## Layout on the server
 
