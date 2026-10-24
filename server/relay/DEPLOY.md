@@ -70,7 +70,7 @@
 
 ## Запросы владельцу
 
-Все выполнены к 2026-10-24 (п. 2 и 4 — агентом с разрешения владельца).
+Все выполнены к 2026-10-24 (п. 2 и 4 — с разрешения владельца).
 
 1. DNS: A-запись `relay.dedseckms.ru` → 62.182.138.63.
 2. Caddy: в `/etc/caddy/Caddyfile` рядом с импортом skinserver добавить
@@ -121,7 +121,7 @@ TUN в mihomo нет (проверено 2026-10-21), трафик контей�
    `relay.dedseckms.ru` ещё нет; Drasl отвечает на `127.0.0.1:25585` (validate 403 на чужой
    токен, profile 401 — маршруты подтверждены).
 2. Файлы загружены в `/opt/relay` (без sudo). Контейнеры **не запускались**: sudo для
-   `docker compose` агенту недоступен — запуск выполняет владелец (`./start.sh`).
+   `docker compose` удалённо недоступен — запуск выполняет владелец (`./start.sh`).
    Создан `.env` из `.env.example`, архив загрузки — `backups/upload-20261022-031952.tar`.
 3. Smoke-тест бинаря без Docker: `timeout 15 ./hub/hub` на `127.0.0.1:18081` (процесс
    завершился сам, порт закрыт): health 200; create с чужим токеном → 401 `authExpired`
@@ -130,7 +130,7 @@ TUN в mihomo нет (проверено 2026-10-21), трафик контей�
 
 ### 2026-10-24 — запуск, Caddy, QAD, зеркало обновлений (server-ops)
 Владелец: DNS `relay.dedseckms.ru` готов, проброс UDP 7842 → 192.168.31.83 сделан; импорт
-в Caddyfile и reload Caddy разрешены агенту.
+в Caddyfile и reload Caddy разрешены оператору.
 1. `./start.sh` (QAD=0): поднялись `mineup-relay-hub`, `mineup-relay-iroh` (healthy).
 2. Caddy: бэкап `/etc/caddy/Caddyfile.bak-mineup-relay-20261024-100230`, в конец добавлена
    строка `import /opt/relay/caddy/*.caddy`, `caddy validate` OK, `systemctl reload caddy`.

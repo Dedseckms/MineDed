@@ -1,4 +1,4 @@
-# Owner: release. Gate for every PR into main (see CLAUDE.md "Definition of done").
+# Owner: release. Gate for every PR into main (definition of done).
 name: ci
 
 on:

@@ -2,7 +2,7 @@
 //!
 //! CONTRACT: this crate is owned by the lead. Every type here is exported to
 //! TypeScript via specta (`apps/desktop/src/bindings.ts`). Field names are
-//! camelCase on the wire. Subagents request changes, they do not edit.
+//! camelCase on the wire. Changes go through the contract owner.
 
 pub mod account;
 pub mod content;
