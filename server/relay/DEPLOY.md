@@ -151,3 +151,10 @@ TUN в mihomo нет (проверено 2026-10-21), трафик контей�
 Откат зеркала: `sudo docker compose -p mineup-relay stop updates-mirror updates-web` и убрать
 блок `handle_path /updates/*` из `caddy/relay.caddy` + validate/reload. Откат Caddy целиком:
 `sudo cp /etc/caddy/Caddyfile.bak-mineup-relay-20261024-100230 /etc/caddy/Caddyfile` + reload.
+
+### 2026-10-24 — hub 1.0.0
+deploy.ps1 не загрузил бинарь (`hub/hub` оставался от 2026-10-22). Загружен musl-бинарь 1.0.0
+(sha256 `d9777f94…d58a`), прежний сохранён в `backups/hub-prev-20261024-154153`, `./start.sh`.
+Health `{"status":"ok","version":"1.0.0"}`; анонимный open-room create → 201, DELETE по hostToken → 204.
+mihomo/caddy active, Drasl 200. Тег образа остаётся `mineup/hub:0.1.0` (`HUB_VERSION` в .env не задан).
+Откат: вернуть `backups/hub-prev-*` в `hub/hub` и `./start.sh`.
