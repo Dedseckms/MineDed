@@ -88,6 +88,7 @@ pub(crate) fn from_env(get: impl Fn(&str) -> Option<String>) -> Option<SystemPro
 
 /// Parses WinINet `ProxyServer` (`host:port` or `http=h:p;https=h:p;socks=h:p`)
 /// and `ProxyOverride` (`;`-separated patterns).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn parse_wininet(server: &str, overrides: &str) -> Option<SystemProxy> {
     let server = server.trim();
     if server.is_empty() {
