@@ -30,11 +30,21 @@ pub fn port_from_log_line(line: &str) -> Option<u16> {
     // Log4j prefix ends at the first "]: ": `[time] [Server thread/INFO]: msg`
     // (Forge adds a logger tag: `[time] [Server thread/INFO] [x.IntegratedServer/]: msg`).
     let end = line.find("]: ")?;
-    if !line[..end + 1].contains("[Server thread/INFO]") {
-        return None;
-    }
+    let prefix = &line[..end + 1];
     let msg = &line[end + 3..];
-    let rest = MARKERS.iter().find_map(|m| msg.strip_prefix(m))?;
+    // `IntegratedServer.publishServer` runs on the client thread ("Render
+    // thread", "Client thread" before 1.13), so "Started serving on" is
+    // logged there, not on the server thread.
+    let client = ["[Render thread/INFO]", "[Client thread/INFO]"]
+        .iter()
+        .any(|t| prefix.contains(t));
+    let rest = if prefix.contains("[Server thread/INFO]") {
+        MARKERS.iter().find_map(|m| msg.strip_prefix(m))?
+    } else if client {
+        msg.strip_prefix(MARKERS[0])?
+    } else {
+        return None;
+    };
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     if digits.len() != rest.trim_end().len() {
         return None;
@@ -191,6 +201,15 @@ mod tests {
                  [net.minecraft.client.server.IntegratedServer/]: Started serving on 40404"
             ),
             Some(40404)
+        );
+        // Real 1.20+ output: logged by the client thread.
+        assert_eq!(
+            port_from_log_line("[18:22:41] [Render thread/INFO]: Started serving on 63256"),
+            Some(63256)
+        );
+        assert_eq!(
+            port_from_log_line("[18:22:41] [Render thread/INFO]: Local game hosted on port 1"),
+            None
         );
         assert_eq!(port_from_log_line("Started serving on 51234"), None);
         assert_eq!(port_from_log_line("Loading 42 mods"), None);

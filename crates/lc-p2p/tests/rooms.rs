@@ -40,6 +40,8 @@ struct HubState {
     /// Last join body (name/uuid checks).
     last_join: Option<Value>,
     create_had_bearer: bool,
+    /// Answer `401 authExpired` to creates with a bearer (live hub, v1.0.1).
+    reject_bearer: bool,
 }
 
 type Hub = Arc<Mutex<HubState>>;
@@ -52,6 +54,12 @@ async fn create_room(
     let room_id = RoomId::new();
     let mut h = hub.lock().unwrap();
     h.create_had_bearer = headers.contains_key(axum::http::header::AUTHORIZATION);
+    if h.create_had_bearer && h.reject_bearer {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"code": "authExpired", "message": "token is invalid or expired"})),
+        );
+    }
     let mut room = body.clone();
     room["roomId"] = json!(room_id);
     h.room = Some(room);
@@ -205,6 +213,10 @@ struct Side {
 }
 
 async fn side(hub_url: &str, cfg: P2pConfig, env: FakeEnv) -> Side {
+    side_env(hub_url, cfg, Arc::new(env)).await
+}
+
+async fn side_env(hub_url: &str, cfg: P2pConfig, env: Arc<dyn RoomEnv>) -> Side {
     let settings = Arc::new(MemorySettingsStore::default());
     settings
         .set(Settings {
@@ -215,7 +227,7 @@ async fn side(hub_url: &str, cfg: P2pConfig, env: FakeEnv) -> Side {
         .unwrap();
     let rec = Arc::new(Rec::default());
     let downloader = Arc::new(HttpDownloader::new(DownloaderConfig::default()).unwrap());
-    let rooms = P2pRooms::new(cfg, downloader, settings, Arc::new(env), rec.clone());
+    let rooms = P2pRooms::new(cfg, downloader, settings, env, rec.clone());
     Side { rooms, rec }
 }
 
@@ -1152,4 +1164,99 @@ async fn voice_room_password_and_online_host() {
     let err = guest.rooms.join("ABCD-1234", None, None).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::AuthRequired);
     host.leave().await.unwrap();
+}
+
+// ------------------------------------------- v1.0.1 room-hang regressions
+
+struct TestEnv {
+    token: Option<&'static str>,
+    delay: Duration,
+}
+
+#[async_trait]
+impl RoomEnv for TestEnv {
+    async fn instance_sig(&self, _instance: InstanceId) -> AppResult<InstanceSig> {
+        Ok(InstanceSig {
+            mc: "1.21.1".into(),
+            loader: LoaderKind::Vanilla,
+            loader_version: None,
+            mods_hash: "m".into(),
+        })
+    }
+
+    async fn identity(&self) -> AppResult<Identity> {
+        tokio::time::sleep(self.delay).await;
+        Ok(Identity {
+            name: "Steve".into(),
+            uuid: None,
+            hub_token: self.token.map(lc_accounts::Secret::new),
+        })
+    }
+}
+
+fn env(token: Option<&'static str>, delay: Duration) -> Arc<dyn RoomEnv> {
+    Arc::new(TestEnv { token, delay })
+}
+
+/// Hub refuses a Yggdrasil bearer: the voice room still opens (open mode).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn voice_room_survives_rejected_bearer() {
+    let (hub_url, hub) = spawn_hub(vec![]).await;
+    hub.lock().unwrap().reject_bearer = true;
+    let cfg = base_cfg(Arc::new(loopback_only), vec![]);
+    let host = side_env(&hub_url, cfg, env(Some("ygg"), Duration::ZERO)).await;
+    let st = host.rooms.create_voice(None).await.unwrap();
+    assert_eq!(st.kind, RoomKind::Voice);
+    assert_eq!(st.auth_mode, RoomAuthMode::Open);
+    assert!(!hub.lock().unwrap().create_had_bearer);
+    host.rooms.leave().await.unwrap();
+
+    // A game room can't fall back (the world runs in online mode): clear error.
+    host.rooms.set_lan_port(Some(spawn_echo().await));
+    let err = host
+        .rooms
+        .create(InstanceId::new(), RoomAuthMode::Yggdrasil, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::AuthExpired);
+    assert_eq!(err.details.unwrap()["source"], "hub");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slow_identity_times_out() {
+    let (hub_url, _hub) = spawn_hub(vec![]).await;
+    let cfg = P2pConfig {
+        identity_timeout: Duration::from_millis(200),
+        ..base_cfg(Arc::new(loopback_only), vec![])
+    };
+    let host = side_env(&hub_url, cfg, env(None, Duration::from_secs(30))).await;
+    let t = std::time::Instant::now();
+    let err = host.rooms.create_voice(None).await.unwrap_err();
+    assert!(t.elapsed() < Duration::from_secs(5));
+    assert_eq!(err.code, ErrorCode::Network);
+    let d = err.details.unwrap();
+    assert_eq!(d["step"], "identity");
+    assert_eq!(d["reason"], "timeout");
+    assert!(host.rooms.state().await.unwrap().is_none());
+}
+
+/// Relay down: an error instead of a room nobody can reach; hub room closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unreachable_relay_fails_fast() {
+    let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay = format!("http://127.0.0.1:{}", dead.local_addr().unwrap().port());
+    drop(dead);
+    let (hub_url, hub) = spawn_hub(vec![]).await;
+    let cfg = P2pConfig {
+        online_timeout: Duration::from_secs(2),
+        ..base_cfg(Arc::new(loopback_only), vec![relay])
+    };
+    let host = side_env(&hub_url, cfg, env(None, Duration::ZERO)).await;
+    let t = std::time::Instant::now();
+    let err = host.rooms.create_voice(None).await.unwrap_err();
+    assert!(t.elapsed() < Duration::from_secs(10));
+    assert_eq!(err.code, ErrorCode::Network);
+    assert_eq!(err.details.unwrap()["reason"], "relayUnreachable");
+    assert!(hub.lock().unwrap().closed);
+    assert!(host.rooms.state().await.unwrap().is_none());
 }

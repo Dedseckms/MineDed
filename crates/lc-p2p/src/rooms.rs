@@ -80,6 +80,11 @@ pub struct P2pConfig {
     pub hello_timeout: Duration,
     /// Limit for reaching the host.
     pub connect_timeout: Duration,
+    /// Limit for resolving the local player (`RoomEnv::identity`; Yggdrasil
+    /// accounts validate / refresh tokens over the network).
+    pub identity_timeout: Duration,
+    /// Limit for binding the endpoint and (with relays) reaching a home relay.
+    pub online_timeout: Duration,
     /// Including the host.
     pub max_peers: u32,
     /// Listen for / send LAN multicast announcements (off in tests).
@@ -94,6 +99,8 @@ impl Default for P2pConfig {
             lan_wait: Duration::from_secs(120),
             hello_timeout: Duration::from_secs(10),
             connect_timeout: Duration::from_secs(30),
+            identity_timeout: Duration::from_secs(30),
+            online_timeout: Duration::from_secs(20),
             max_peers: 8,
             lan_multicast: true,
             endpoint_tweak: None,
@@ -108,6 +115,8 @@ impl fmt::Debug for P2pConfig {
             .field("lan_wait", &self.lan_wait)
             .field("hello_timeout", &self.hello_timeout)
             .field("connect_timeout", &self.connect_timeout)
+            .field("identity_timeout", &self.identity_timeout)
+            .field("online_timeout", &self.online_timeout)
             .field("max_peers", &self.max_peers)
             .field("lan_multicast", &self.lan_multicast)
             .field("endpoint_tweak", &self.endpoint_tweak.is_some())
@@ -452,9 +461,55 @@ impl P2pRooms {
         if let Some(tweak) = &self.inner.cfg.endpoint_tweak {
             b = tweak(b);
         }
-        b.bind()
+        let limit = self.inner.cfg.online_timeout;
+        let t = Instant::now();
+        let ep = tokio::time::timeout(limit, b.bind())
             .await
-            .map_err(|e| net_err("cannot start p2p endpoint", e))
+            .map_err(|_| timeout_err("endpoint bind").detail("step", "bind"))?
+            .map_err(|e| net_err("cannot start p2p endpoint", e).detail("step", "bind"))?;
+        if relays.is_empty() {
+            return Ok(ep);
+        }
+        // Peers outside this LAN find us only through the home relay: without
+        // it the room would look fine but nobody could join.
+        let left = limit.saturating_sub(t.elapsed());
+        if tokio::time::timeout(left, ep.online()).await.is_err() {
+            ep.close().await;
+            return Err(
+                AppError::new(ErrorCode::Network, "cannot reach the p2p relay server")
+                    .detail("reason", "relayUnreachable")
+                    .detail("step", "online")
+                    .detail(
+                        "relays",
+                        relays
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    ),
+            );
+        }
+        tracing::info!("rooms: endpoint online in {} ms", t.elapsed().as_millis());
+        Ok(ep)
+    }
+
+    /// `RoomEnv::identity` with a time limit.
+    async fn identity(&self) -> AppResult<Identity> {
+        let t = Instant::now();
+        let me = tokio::time::timeout(self.inner.cfg.identity_timeout, self.inner.env.identity())
+            .await
+            .map_err(|_| {
+                AppError::new(ErrorCode::Network, "account check timed out")
+                    .detail("reason", "timeout")
+                    .detail("step", "identity")
+                    .detail("source", "accounts")
+            })??;
+        tracing::info!(
+            "rooms: identity resolved in {} ms (yggdrasil: {})",
+            t.elapsed().as_millis(),
+            me.hub_token.is_some()
+        );
+        Ok(me)
     }
 
     fn relays(&self, from_hub: Vec<String>) -> Vec<RelayUrl> {
@@ -515,7 +570,7 @@ impl P2pRooms {
         }
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
         let hub = self.hub().await?;
-        let me = self.inner.env.identity().await?;
+        let me = self.identity().await?;
         check_host_auth_mode(auth_mode, &me)?;
         let sig = self.inner.env.instance_sig(instance).await?;
 
@@ -550,24 +605,43 @@ impl P2pRooms {
         }
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
         let hub = self.hub().await?;
-        let me = self.inner.env.identity().await?;
-        // No game server here: the mode only says whether guests must prove a
-        // Yggdrasil account (and lets bans stick to the profile).
-        let auth_mode = if me.hub_token.is_some() {
-            RoomAuthMode::Yggdrasil
-        } else {
-            RoomAuthMode::Open
-        };
-        self.start_hosting(Hosting {
-            hub,
-            me,
-            kind: RoomKind::Voice,
-            sig: None,
-            auth_mode,
-            password,
-            lan_port: None,
-        })
-        .await
+        let mut me = self.identity().await?;
+        // Never waits for a LAN world: voice rooms have no game tunnel.
+        loop {
+            // No game server here: the mode only says whether guests must prove
+            // a Yggdrasil account (and lets bans stick to the profile).
+            let auth_mode = if me.hub_token.is_some() {
+                RoomAuthMode::Yggdrasil
+            } else {
+                RoomAuthMode::Open
+            };
+            let res = self
+                .start_hosting(Hosting {
+                    hub: hub.clone(),
+                    me: me.clone(),
+                    kind: RoomKind::Voice,
+                    sig: None,
+                    auth_mode,
+                    password: password.clone(),
+                    lan_port: None,
+                })
+                .await;
+            match res {
+                // Hub refused our Yggdrasil token: a voice room works without
+                // it, guests just aren't required to have an account.
+                Err(e)
+                    if me.hub_token.is_some()
+                        && matches!(e.code, ErrorCode::AuthExpired | ErrorCode::AuthRequired) =>
+                {
+                    tracing::warn!(
+                        "rooms: hub rejected the account token ({:?}), hosting an open voice room",
+                        e.code
+                    );
+                    me.hub_token = None;
+                }
+                other => return other,
+            }
+        }
     }
 
     /// Registers the room in hub and starts accepting peers. Caller holds `op`.
@@ -591,7 +665,12 @@ impl P2pRooms {
             max_peers: self.inner.cfg.max_peers,
             password_protected: password.is_some(),
         };
+        let t = Instant::now();
         let resp = hub.create_room(&req, me.hub_token.as_ref()).await?;
+        tracing::info!(
+            "rooms: hub created the room in {} ms",
+            t.elapsed().as_millis()
+        );
         let host_token = Secret::new(resp.host_token);
         let relays = self.relays(resp.relay_urls);
         let endpoint = match self.bind_endpoint(secret, &relays, true).await {
@@ -944,7 +1023,7 @@ impl P2pRooms {
         }
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
         let hub = self.hub().await?;
-        let me = self.inner.env.identity().await?;
+        let me = self.identity().await?;
         // Computed up front so a broken instance fails before hub is asked.
         let local_sig = match instance {
             Some(i) => Some(self.inner.env.instance_sig(i).await?),

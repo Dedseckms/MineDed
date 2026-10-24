@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use lc_accounts::{AuthProvider, Secret, UserType};
 use lc_core::InstanceService;
 use lc_types::room::InstanceSig;
-use lc_types::{AppError, AppResult, InstanceId};
+use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 use sha2::{Digest, Sha256};
 
 /// Local player shown to peers.
@@ -75,17 +75,19 @@ impl RoomEnv for CoreRoomEnv {
                 uuid: Some(a.uuid),
                 hub_token: (a.user_type == UserType::Mojang).then_some(a.access_token),
             }),
-            Err(e) => {
-                tracing::debug!(
-                    "rooms: no default account ({:?}), joining anonymously",
-                    e.code
-                );
+            // No account at all: play anonymously.
+            Err(e) if e.code == ErrorCode::AuthRequired => {
+                tracing::info!("rooms: no default account, joining anonymously");
                 Ok(Identity {
                     name: "Player".into(),
                     uuid: None,
                     hub_token: None,
                 })
             }
+            // An account exists but can't be used (session expired, auth
+            // server down): say so instead of silently going anonymous, which
+            // then failed later with a misleading auth-mode / hub error.
+            Err(e) => Err(e.detail("source", "accounts")),
         }
     }
 }
