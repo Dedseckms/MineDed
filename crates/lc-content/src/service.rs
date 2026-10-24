@@ -72,7 +72,8 @@ impl DiskFile {
 
 impl ContentServices {
     /// CurseForge is enabled when `CURSEFORGE_API_KEY` is set in the environment
-    /// or a `.env` (executable dir, data root); otherwise its calls
+    /// or a `.env` (executable dir, data root), or embedded into the release
+    /// build (`option_env!`, lowest priority); otherwise its calls
     /// fail with `AuthRequired` and Modrinth keeps working.
     pub fn new(
         paths: Paths,

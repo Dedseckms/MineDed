@@ -56,7 +56,12 @@ impl Downloader for Dl {
         Ok(())
     }
     async fn get_bytes(&self, url: &Url, _k: ResourceKind) -> AppResult<Vec<u8>> {
-        Err(AppError::new(ErrorCode::NotFound, "unused").detail("url", url.as_str()))
+        self.files
+            .lock()
+            .unwrap()
+            .get(url.as_str())
+            .cloned()
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "404").detail("url", url.as_str()))
     }
     fn client(&self, route: Route) -> reqwest::Client {
         lc_http::StubDownloader.client(route)
@@ -136,9 +141,13 @@ impl InstanceService for Instances {
         if let Some(j) = patch.java {
             i.java = j;
         }
+        if let Some(icon) = patch.icon {
+            i.icon = Some(icon);
+        }
         Ok(i.clone())
     }
-    async fn delete(&self, _id: InstanceId) -> AppResult<()> {
+    async fn delete(&self, id: InstanceId) -> AppResult<()> {
+        self.map.lock().unwrap().remove(&id);
         Ok(())
     }
     async fn repair(&self, _id: InstanceId, _s: &dyn ProgressSink) -> AppResult<()> {
@@ -519,4 +528,371 @@ async fn preset_installs_mods_and_flags() {
     assert!(inst.jvm_args.contains(&"-XX:+UseG1GC".to_owned()));
     assert!(!inst.memory.auto);
     assert_eq!(inst.memory.max_mb, 2048);
+}
+
+// ---------------------------------------------------------------------------
+// Modpacks from catalogues
+// ---------------------------------------------------------------------------
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\nicon-bytes";
+const PACK: &str = "PACKfo01";
+const ICON_URL: &str = "https://cdn.modrinth.com/data/PACKfo01/icon.png";
+
+fn zip_bytes(dir: &std::path::Path, entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let out = dir.join(format!("{}.zip", InstanceId::new()));
+    let entries: Vec<(String, Vec<u8>)> = entries
+        .iter()
+        .map(|(n, b)| ((*n).to_owned(), b.clone()))
+        .collect();
+    crate::packs::write_zip(&out, &entries, &[]).unwrap();
+    std::fs::read(out).unwrap()
+}
+
+fn sha512_hex(b: &[u8]) -> String {
+    hex::encode(sha2::Sha512::digest(b))
+}
+
+/// A small sink that can be cancelled up front.
+fn cancelled_sink() -> NullSink {
+    let s = NullSink::default();
+    s.cancel_token().cancel();
+    s
+}
+
+impl Env {
+    /// Modrinth modpack `PACK` with versions `pv3` (beta) and `pv2` (featured
+    /// release, the pick for "latest"); `pv2` contains Sodium + overrides.
+    /// Returns the `.mrpack` URL of `pv2`.
+    fn mr_modpack(&self, bad_sha512: bool) -> String {
+        let project = serde_json::json!({"id": PACK, "slug": "tiny", "title": "Tiny Pack",
+            "project_type": "modpack", "loaders": ["fabric"], "icon_url": ICON_URL});
+        self.http
+            .route(&format!("{MR}/project/{PACK}"), project.to_string());
+        let sodium = self.mr_version("AANobbMI", "so1", "sodium.jar", &["fabric"], &[]);
+        let file = &sodium["files"][0];
+        let index = serde_json::json!({
+            "formatVersion": 1, "game": "minecraft", "versionId": "1.0", "name": "inner name",
+            "files": [
+                {"path": "mods/sodium.jar", "hashes": file["hashes"], "downloads": [file["url"]],
+                 "fileSize": file["size"]},
+                {"path": "mods/server-only.jar", "hashes": {"sha1": "x", "sha512": "y"},
+                 "downloads": ["https://cdn.modrinth.com/x.jar"], "env": {"client": "unsupported"}}
+            ],
+            "dependencies": {"minecraft": "1.21.1", "fabric-loader": "0.16.9"}
+        });
+        let bytes = zip_bytes(
+            self._dir.path(),
+            &[
+                ("modrinth.index.json", index.to_string().into_bytes()),
+                ("overrides/config/a.toml", b"x=1".to_vec()),
+                ("overrides/mods/extra.jar", b"extra".to_vec()),
+                ("client-overrides/options.txt", b"gamma:1".to_vec()),
+            ],
+        );
+        let url = format!("https://cdn.modrinth.com/data/{PACK}/versions/pv2/tiny-1.0.mrpack");
+        let sha512 = if bad_sha512 {
+            "00".repeat(64)
+        } else {
+            sha512_hex(&bytes)
+        };
+        let pv2 = serde_json::json!({
+            "id": "pv2", "project_id": PACK, "name": "1.0", "version_number": "1.0",
+            "game_versions": ["1.21.1"], "loaders": ["fabric"], "featured": true,
+            "date_published": "2025-01-01T00:00:00Z", "version_type": "release",
+            "files": [{"hashes": {"sha1": sha1_hex(&bytes), "sha512": sha512}, "url": url,
+                "filename": "tiny-1.0.mrpack", "primary": true, "size": bytes.len()}],
+            "dependencies": []
+        });
+        let pv3 = serde_json::json!({
+            "id": "pv3", "project_id": PACK, "name": "1.1-beta", "version_number": "1.1-beta",
+            "game_versions": ["1.21.1"], "loaders": ["fabric"], "featured": false,
+            "date_published": "2025-02-01T00:00:00Z", "version_type": "beta",
+            "files": [{"hashes": {"sha1": "00", "sha512": "00"},
+                "url": "https://cdn.modrinth.com/data/PACKfo01/versions/pv3/b.mrpack",
+                "filename": "b.mrpack", "primary": true, "size": 1}],
+            "dependencies": []
+        });
+        self.http.route(
+            &format!("{MR}/project/{PACK}/version"),
+            serde_json::json!([pv3, pv2]).to_string(),
+        );
+        self.http
+            .route(&format!("{MR}/version/pv2"), pv2.to_string());
+        let mut files = self.dl.files.lock().unwrap();
+        files.insert(url.clone(), bytes);
+        files.insert(ICON_URL.into(), PNG.to_vec());
+        url
+    }
+
+    fn staging_is_empty(&self) -> bool {
+        let dir = self._dir.path().join("cache/content/staging");
+        std::fs::read_dir(dir).map_or(true, |mut d| d.next().is_none())
+    }
+}
+
+#[tokio::test]
+async fn modrinth_modpack_installs_from_catalog() {
+    let e = env(None);
+    e.mr_modpack(false);
+
+    // Search and versions for modpacks.
+    e.http.route(
+        &format!("{MR}/search"),
+        r#"{"hits":[{"project_id":"PACKfo01","slug":"tiny","title":"Tiny Pack","project_type":"modpack"}],"offset":0,"total_hits":1}"#,
+    );
+    let page = e
+        .svc
+        .search(SearchQuery {
+            source: ContentSourceKind::Modrinth,
+            kind: ContentKind::Modpack,
+            text: String::new(),
+            mc: None,
+            loader: None,
+            categories: vec![],
+            sort: SortBy::Downloads,
+            offset: 0,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items[0].kind, ContentKind::Modpack);
+    let versions = e
+        .svc
+        .versions(
+            ContentSourceKind::Modrinth,
+            PACK,
+            lc_types::content::ContentFilter {
+                mc: None,
+                loader: Some(LoaderKind::Fabric),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[1].mc_versions, vec!["1.21.1"]);
+    assert_eq!(versions[1].loaders, vec![LoaderKind::Fabric]);
+
+    let sink = NullSink::default();
+    let inst = e
+        .svc
+        .install_remote(ContentSourceKind::Modrinth, PACK, None, &sink)
+        .await
+        .unwrap();
+    assert_eq!(inst.name, "Tiny Pack");
+    assert_eq!(inst.mc, "1.21.1");
+    assert_eq!(inst.loader.kind, LoaderKind::Fabric);
+    assert_eq!(inst.loader.version.as_deref(), Some("0.16.9"));
+    assert_eq!(inst.icon.as_deref(), Some("icon.png"));
+    let inst_dir = e._dir.path().join("instances").join(inst.id.to_string());
+    assert_eq!(std::fs::read(inst_dir.join("icon.png")).unwrap(), PNG);
+    let game = e.inst.game_dir(inst.id);
+    assert!(game.join("mods/sodium.jar").exists());
+    assert!(!game.join("mods/server-only.jar").exists());
+    assert_eq!(
+        std::fs::read(game.join("mods/extra.jar")).unwrap(),
+        b"extra"
+    );
+    assert_eq!(std::fs::read(game.join("config/a.toml")).unwrap(), b"x=1");
+    assert!(game.join("options.txt").exists());
+    let list = e.svc.list(inst.id).await.unwrap();
+    let so = list.iter().find(|c| c.file_name == "sodium.jar").unwrap();
+    assert_eq!(so.source, ContentSourceKind::Modrinth);
+    assert_eq!(so.version_id.as_deref(), Some("so1"));
+    assert!(e.staging_is_empty());
+    // The downloaded pack is not kept after a successful install.
+    let packs = e._dir.path().join("cache/content/packs");
+    assert!(std::fs::read_dir(packs).map_or(true, |mut d| d.next().is_none()));
+
+    // Explicit version of another project is rejected.
+    e.http.route(
+        &format!("{MR}/version/other"),
+        serde_json::json!({"id": "other", "project_id": "ZZZ", "files": []}).to_string(),
+    );
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::Modrinth, PACK, Some("other"), &sink)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    // Not a modpack.
+    e.project("AANobbMI", "sodium", "mod");
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::Modrinth, "AANobbMI", None, &sink)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+}
+
+#[tokio::test]
+async fn modpack_failures_leave_no_instance() {
+    // Bad sha512 of the pack itself.
+    let e = env(None);
+    e.mr_modpack(true);
+    let sink = NullSink::default();
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::Modrinth, PACK, Some("pv2"), &sink)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::HashMismatch);
+    assert!(e.inst.map.lock().unwrap().is_empty());
+
+    // Cancelled before anything is created.
+    let e = env(None);
+    e.mr_modpack(false);
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::Modrinth, PACK, None, &cancelled_sink())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Cancelled);
+    assert!(e.inst.map.lock().unwrap().is_empty());
+
+    // A pack mod that fails to download: no instance, staging cleaned.
+    let e = env(None);
+    let url = e.mr_modpack(false);
+    e.dl.files
+        .lock()
+        .unwrap()
+        .retain(|k, _| *k == url || k == ICON_URL);
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::Modrinth, PACK, None, &sink)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+    assert!(e.inst.map.lock().unwrap().is_empty());
+    assert!(e.staging_is_empty());
+    // The verified pack stays cached for a retry.
+    assert!(e._dir.path().join("cache/content/packs").exists());
+}
+
+#[tokio::test]
+async fn curseforge_modpack_installs_and_respects_opt_out() {
+    let e = env(Some("test-key"));
+    let packs: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/curseforge/modpack.json")).unwrap();
+    for p in packs["data"].as_array().unwrap() {
+        e.http.route(
+            &format!("{CF}/v1/mods/{}", p["id"]),
+            serde_json::json!({ "data": p }).to_string(),
+        );
+    }
+    // Mod referenced by the manifest.
+    let jar = b"somemod".to_vec();
+    let jar_url = "https://edge.forgecdn.net/files/4/711/somemod-1.2.3.jar";
+    let mods: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/curseforge/mods.json")).unwrap();
+    e.http.route(
+        &format!(r#"POST {CF}/v1/mods {{"modIds":[1001]}}"#),
+        serde_json::json!({"data": [mods["data"][0]]}).to_string(),
+    );
+    e.http.route(
+        &format!(r#"POST {CF}/v1/mods/files {{"fileIds":[4711]}}"#),
+        serde_json::json!({"data": [{"id": 4711, "modId": 1001, "displayName": "Some Mod",
+            "fileName": "somemod-1.2.3.jar", "releaseType": 1, "fileLength": jar.len(),
+            "hashes": [{"value": sha1_hex(&jar), "algo": 1}], "downloadUrl": jar_url,
+            "gameVersions": ["1.20.1", "Forge"]}]})
+        .to_string(),
+    );
+    let manifest = serde_json::json!({
+        "minecraft": {"version": "1.20.1", "modLoaders": [{"id": "forge-47.3.0", "primary": true}]},
+        "manifestType": "minecraftModpack", "manifestVersion": 1, "name": "inner", "version": "1.0",
+        "author": "packer", "files": [{"projectID": 1001, "fileID": 4711, "required": true}],
+        "overrides": "overrides"
+    });
+    let zip = zip_bytes(
+        e._dir.path(),
+        &[
+            ("manifest.json", manifest.to_string().into_bytes()),
+            ("overrides/config/b.txt", b"b".to_vec()),
+        ],
+    );
+    let zip_url = "https://edge.forgecdn.net/files/9/0/Tiny%20Pack-1.0.zip";
+    let file = |id: u32, server: bool, date: &str| {
+        serde_json::json!({"id": id, "modId": 900, "displayName": "Tiny Pack 1.0",
+            "fileName": "Tiny Pack-1.0.zip", "releaseType": 1, "fileDate": date,
+            "fileLength": zip.len(), "isServerPack": server,
+            "hashes": [{"value": sha1_hex(&zip).to_uppercase(), "algo": 1}],
+            "downloadUrl": zip_url, "gameVersions": ["1.20.1"]})
+    };
+    e.http.route(
+        &format!("{CF}/v1/mods/900/files"),
+        serde_json::json!({"data": [file(9000, false, "2025-01-01"), file(9001, true, "2025-01-02")]})
+            .to_string(),
+    );
+    {
+        let mut f = e.dl.files.lock().unwrap();
+        f.insert(jar_url.into(), jar);
+        f.insert(zip_url.into(), zip.clone());
+        f.insert(
+            "https://media.forgecdn.net/avatars/thumbnails/1/2/256/256/tiny.png".into(),
+            PNG.to_vec(),
+        );
+    }
+
+    // Versions list the client pack with mc + loader (from latestFilesIndexes).
+    let versions = e
+        .svc
+        .versions(
+            ContentSourceKind::CurseForge,
+            "900",
+            lc_types::content::ContentFilter::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].version_id, "9000");
+    assert_eq!(versions[0].mc_versions, vec!["1.20.1"]);
+    assert_eq!(versions[0].loaders, vec![LoaderKind::Forge]);
+
+    let sink = NullSink::default();
+    let inst = e
+        .svc
+        .install_remote(ContentSourceKind::CurseForge, "900", None, &sink)
+        .await
+        .unwrap();
+    assert_eq!(inst.name, "Tiny Pack");
+    assert_eq!(inst.loader.kind, LoaderKind::Forge);
+    assert_eq!(inst.loader.version.as_deref(), Some("47.3.0"));
+    assert_eq!(inst.icon.as_deref(), Some("icon.png"));
+    let game = e.inst.game_dir(inst.id);
+    assert!(game.join("mods/somemod-1.2.3.jar").exists());
+    assert!(game.join("config/b.txt").exists());
+    let list = e.svc.list(inst.id).await.unwrap();
+    assert_eq!(list[0].source, ContentSourceKind::CurseForge);
+    assert!(e.staging_is_empty());
+
+    // allowModDistribution=false on the pack → manual download with the page URL.
+    e.http.route(
+        &format!("{CF}/v1/mods/901/files"),
+        serde_json::json!({"data": [{"id": 9100, "modId": 901, "fileName": "locked.zip",
+            "releaseType": 1, "downloadUrl": null,
+            "hashes": [{"value": "da39a3ee5e6b4b0d3255bfef95601890afd80709", "algo": 1}]}]})
+        .to_string(),
+    );
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::CurseForge, "901", None, &sink)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::ManualDownloadRequired);
+    let details = err.details.unwrap();
+    assert_eq!(details["fileName"], "locked.zip");
+    assert_eq!(
+        details["projectUrl"],
+        "https://www.curseforge.com/minecraft/modpacks/locked-pack"
+    );
+    assert!(details["url"]
+        .starts_with("https://www.curseforge.com/minecraft/modpacks/locked-pack/download/"));
+
+    // Without a key CurseForge packs fail cleanly.
+    let e = env(None);
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::CurseForge, "900", None, &sink)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::AuthRequired);
 }

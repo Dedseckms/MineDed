@@ -565,7 +565,7 @@ fn walk(root: &Path, skip_saves: bool) -> AppResult<Vec<String>> {
 }
 
 /// Writes a zip: `(name, bytes)` entries + files copied from disk.
-fn write_zip(
+pub(crate) fn write_zip(
     out: &Path,
     entries: &[(String, Vec<u8>)],
     files: &[(String, PathBuf)],
@@ -607,6 +607,62 @@ fn parse<T: for<'de> Deserialize<'de>>(bytes: &[u8], what: &str) -> AppResult<T>
 // Import / export
 // ---------------------------------------------------------------------------
 
+/// Name/icon of a pack installed from a catalogue (override the archive's name).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PackMeta {
+    pub name: Option<String>,
+    pub icon_url: Option<String>,
+}
+
+/// Largest icon accepted from a catalogue.
+const MAX_ICON_BYTES: usize = 2 * 1024 * 1024;
+
+/// Extension of a PNG/JPEG/GIF/WebP image by its magic bytes.
+pub(crate) fn image_ext(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if b.len() >= 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+/// Moves every file under `src` into `dst`, merging folders and replacing files.
+pub(crate) fn move_tree(src: &Path, dst: &Path) -> AppResult<()> {
+    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
+    while let Some((from_dir, to_dir)) = stack.pop() {
+        std::fs::create_dir_all(&to_dir).map_err(|e| io_err(&to_dir, e))?;
+        let rd = std::fs::read_dir(&from_dir).map_err(|e| io_err(&from_dir, e))?;
+        for e in rd {
+            let e = e.map_err(|e| io_err(&from_dir, e))?;
+            let from = e.path();
+            let to = to_dir.join(e.file_name());
+            let ft = e.file_type().map_err(|err| io_err(&from, err))?;
+            if ft.is_dir() {
+                stack.push((from, to));
+            } else if ft.is_file() {
+                if to.is_dir() {
+                    return Err(bad_pack("pack file collides with a folder")
+                        .detail("path", to.to_string_lossy()));
+                }
+                if std::fs::rename(&from, &to).is_err() {
+                    std::fs::copy(&from, &to).map_err(|e| io_err(&to, e))?;
+                    let _ = std::fs::remove_file(&from);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `.mrpack` file entry accepted for download: (entry, url, sha1).
+type Planned = (MrpackFile, String, String);
+
 impl Inner {
     async fn create_instance(
         &self,
@@ -634,7 +690,93 @@ impl Inner {
             .await
     }
 
-    async fn import_mrpack(&self, path: &Path, sink: &dyn ProgressSink) -> AppResult<Instance> {
+    /// Fresh staging dir for a pack being unpacked (same volume as instances,
+    /// so files are moved, not copied).
+    async fn staging_dir(&self) -> AppResult<PathBuf> {
+        let dir = self
+            .paths
+            .cache()
+            .join("content")
+            .join("staging")
+            .join(InstanceId::new().to_string());
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| io_err(&dir, e))?;
+        Ok(dir)
+    }
+
+    /// Creates the instance (installs vanilla + loader), moves the staged game
+    /// files into it and sets the icon. A half-made instance is deleted on failure.
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_pack(
+        &self,
+        staging: &Path,
+        name: &str,
+        mc: String,
+        loader: LoaderRef,
+        cidx: ContentIndex,
+        meta: &PackMeta,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<Instance> {
+        sink.check_cancelled()?;
+        sink.progress(0, None, "stages.packLoader");
+        let name = meta.name.as_deref().unwrap_or(name);
+        let inst = self.create_instance(name, mc, loader, sink).await?;
+        let adopted = async {
+            let (s, g) = (staging.to_path_buf(), self.instances.game_dir(inst.id));
+            join(tokio::task::spawn_blocking(move || move_tree(&s, &g)).await)?;
+            cidx.save(&self.instance_dir(inst.id)).await?;
+            let Some(url) = &meta.icon_url else {
+                return Ok(inst.clone());
+            };
+            match self.fetch_icon(inst.id, url).await {
+                Some(icon) => {
+                    self.instances
+                        .update(
+                            inst.id,
+                            InstancePatch {
+                                icon: Some(icon),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                }
+                None => {
+                    sink.log("modpack icon could not be downloaded");
+                    Ok(inst.clone())
+                }
+            }
+        }
+        .await;
+        if adopted.is_err() {
+            let _ = self.instances.delete(inst.id).await;
+        }
+        adopted
+    }
+
+    /// Best effort: catalogue icon saved as `icon.<ext>` in the instance dir.
+    /// Icons have no published hash; the size and image format are checked.
+    async fn fetch_icon(&self, id: InstanceId, url: &str) -> Option<String> {
+        let u = url::Url::parse(url)
+            .ok()
+            .filter(|u| u.scheme() == "https")?;
+        let bytes = self.dl.get_bytes(&u, ResourceKind::Other).await.ok()?;
+        if bytes.len() > MAX_ICON_BYTES {
+            return None;
+        }
+        let name = format!("icon.{}", image_ext(&bytes)?);
+        let path = self.instance_dir(id).join(&name);
+        tokio::fs::write(&path, &bytes).await.ok()?;
+        Some(name)
+    }
+
+    async fn import_mrpack(
+        &self,
+        path: &Path,
+        meta: &PackMeta,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<Instance> {
+        sink.progress(0, None, "stages.packResolve");
         let p = path.to_path_buf();
         let bytes = join(
             tokio::task::spawn_blocking(move || read_entry(&mut open_zip(&p)?, MRPACK_INDEX)).await,
@@ -644,8 +786,8 @@ impl Inner {
             return Err(bad_pack("mrpack is not for minecraft"));
         }
         let (mc, loader) = mrpack_target(&idx)?;
-        // Validate everything before creating the instance.
-        let mut planned = Vec::new();
+        // Validate everything before downloading anything.
+        let mut planned: Vec<Planned> = Vec::new();
         for f in &idx.files {
             if f.env
                 .as_ref()
@@ -674,9 +816,28 @@ impl Inner {
             safe_join(Path::new("game"), &f.path)?;
             planned.push((f.clone(), url, sha1));
         }
+        sink.check_cancelled()?;
 
-        let inst = self.create_instance(&idx.name, mc, loader, sink).await?;
-        let game = self.instances.game_dir(inst.id);
+        let staging = self.staging_dir().await?;
+        let r = async {
+            let cidx = self.stage_mrpack(path, &planned, &staging, sink).await?;
+            self.finish_pack(&staging, &idx.name, mc, loader, cidx, meta, sink)
+                .await
+        }
+        .await;
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        r
+    }
+
+    /// Downloads the pack files and unpacks the overrides into `staging`.
+    async fn stage_mrpack(
+        &self,
+        path: &Path,
+        planned: &[Planned],
+        staging: &Path,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<ContentIndex> {
+        sink.progress(0, Some(planned.len() as u64), "stages.packMods");
         let reqs = planned
             .iter()
             .map(|(f, url, sha1)| {
@@ -684,16 +845,18 @@ impl Inner {
                     urls: vec![parse_url(url)?],
                     sha1: Some(sha1.clone()),
                     size: (f.file_size > 0).then_some(f.file_size),
-                    dest: safe_join(&game, &f.path)?,
+                    dest: safe_join(staging, &f.path)?,
                     kind: ResourceKind::Content,
                 })
             })
             .collect::<AppResult<Vec<_>>>()?;
-        self.dl.fetch_many(reqs, sink).await?;
+        if !reqs.is_empty() {
+            self.dl.fetch_many(reqs, sink).await?;
+        }
 
         let mut cidx = ContentIndex::default();
-        for (f, url, sha1) in &planned {
-            let dest = safe_join(&game, &f.path)?;
+        for (f, url, sha1) in planned {
+            let dest = safe_join(staging, &f.path)?;
             let (_, sha512) = file_hashes(&dest).await?;
             if let Some(want) = f.hashes.get("sha512") {
                 if !want.eq_ignore_ascii_case(&sha512) {
@@ -723,8 +886,9 @@ impl Inner {
                 );
             }
         }
+        sink.check_cancelled()?;
         sink.progress(0, None, "stages.packOverrides");
-        let (p, g) = (path.to_path_buf(), game.clone());
+        let (p, g) = (path.to_path_buf(), staging.to_path_buf());
         join(
             tokio::task::spawn_blocking(move || -> AppResult<()> {
                 extract_prefix(&p, "overrides", &g)?;
@@ -733,12 +897,17 @@ impl Inner {
             })
             .await,
         )?;
-        cidx.save(&self.instance_dir(inst.id)).await?;
-        Ok(inst)
+        Ok(cidx)
     }
 
-    async fn import_cf(&self, path: &Path, sink: &dyn ProgressSink) -> AppResult<Instance> {
+    async fn import_cf(
+        &self,
+        path: &Path,
+        meta: &PackMeta,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<Instance> {
         let cf = self.curseforge.clone().ok_or_else(no_key_error)?;
+        sink.progress(0, None, "stages.packResolve");
         let p = path.to_path_buf();
         let bytes = join(
             tokio::task::spawn_blocking(move || read_entry(&mut open_zip(&p)?, CF_MANIFEST)).await,
@@ -752,50 +921,175 @@ impl Inner {
             .map(|f| f.file_id)
             .collect();
         let files = cf.files_with_mods(&ids).await?;
-        let inst = self.create_instance(&m.name, mc, loader, sink).await?;
-        let game = self.instances.game_dir(inst.id);
-        let mut reqs = Vec::new();
-        let mut cidx = ContentIndex::default();
+        if files.len() < ids.len() {
+            sink.log(&format!(
+                "{} pack file(s) are no longer available on CurseForge",
+                ids.len() - files.len()
+            ));
+        }
+        // (url, sha1, size, relative path, index key, entry)
+        let mut planned = Vec::new();
+        let mut manual = 0usize;
         for (v, kind, rf) in &files {
             let Ok(dir) = crate::util::kind_dir(*kind) else {
                 continue;
             };
             crate::util::check_file_name(&v.file_name)?;
             let Some(url) = &rf.url else {
+                manual += 1;
                 sink.log(&format!(
                     "manual download required: {} → {} (put it into {dir}/)",
                     v.file_name, rf.manual_url
                 ));
                 continue;
             };
-            reqs.push(DownloadReq {
-                urls: vec![parse_url(url)?],
+            let entry = IndexEntry {
+                kind: *kind,
+                source: ContentSourceKind::CurseForge,
+                project_id: v.project_id.clone(),
+                version_id: v.version_id.clone(),
+                title: None,
+                version_number: Some(v.version_number.clone()),
                 sha1: rf.sha1.clone(),
-                size: (v.size > 0).then_some(v.size),
-                dest: game.join(dir).join(&v.file_name),
-                kind: ResourceKind::Content,
-            });
-            cidx.files.insert(
+                sha512: None,
+                size: Some(v.size),
+                url: Some(url.clone()),
+            };
+            planned.push((
+                parse_url(url)?,
+                rf.sha1.clone(),
+                v.size,
+                (dir, v.file_name.clone()),
                 key(dir, &v.file_name),
-                IndexEntry {
-                    kind: *kind,
-                    source: ContentSourceKind::CurseForge,
-                    project_id: v.project_id.clone(),
-                    version_id: v.version_id.clone(),
-                    title: None,
-                    version_number: Some(v.version_number.clone()),
-                    sha1: rf.sha1.clone(),
-                    sha512: None,
-                    size: Some(v.size),
-                    url: Some(url.clone()),
-                },
-            );
+                entry,
+            ));
         }
-        self.dl.fetch_many(reqs, sink).await?;
-        let (p, g, o) = (path.to_path_buf(), game.clone(), m.overrides.clone());
-        join(tokio::task::spawn_blocking(move || extract_prefix(&p, &o, &g)).await)?;
-        cidx.save(&self.instance_dir(inst.id)).await?;
-        Ok(inst)
+        if manual > 0 {
+            sink.log(&format!(
+                "{manual} file(s) must be downloaded by hand (allowModDistribution=false)"
+            ));
+        }
+        sink.check_cancelled()?;
+
+        let staging = self.staging_dir().await?;
+        let r = async {
+            sink.progress(0, Some(planned.len() as u64), "stages.packMods");
+            let mut reqs = Vec::new();
+            let mut cidx = ContentIndex::default();
+            for (url, sha1, size, (dir, name), k, entry) in planned {
+                reqs.push(DownloadReq {
+                    urls: vec![url],
+                    sha1,
+                    size: (size > 0).then_some(size),
+                    dest: staging.join(dir).join(name),
+                    kind: ResourceKind::Content,
+                });
+                cidx.files.insert(k, entry);
+            }
+            if !reqs.is_empty() {
+                self.dl.fetch_many(reqs, sink).await?;
+            }
+            sink.check_cancelled()?;
+            sink.progress(0, None, "stages.packOverrides");
+            let (p, g, o) = (path.to_path_buf(), staging.clone(), m.overrides.clone());
+            join(tokio::task::spawn_blocking(move || extract_prefix(&p, &o, &g)).await)?;
+            self.finish_pack(&staging, &m.name, mc, loader, cidx, meta, sink)
+                .await
+        }
+        .await;
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        r
+    }
+
+    /// Downloads a catalogue modpack into the cache (hash-checked) and imports it.
+    async fn install_remote(
+        &self,
+        source: ContentSourceKind,
+        project_id: &str,
+        version_id: Option<&str>,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<Instance> {
+        sink.progress(0, None, "stages.packDownload");
+        let (pf, want) = match source {
+            ContentSourceKind::Modrinth => (
+                self.modrinth.pack_file(project_id, version_id).await?,
+                Detected::Mrpack,
+            ),
+            ContentSourceKind::CurseForge => (
+                self.curseforge
+                    .clone()
+                    .ok_or_else(no_key_error)?
+                    .pack_file(project_id, version_id)
+                    .await?,
+                Detected::CurseForge,
+            ),
+            ContentSourceKind::Local => {
+                return Err(bad_pack("local files have no remote catalogue"));
+            }
+        };
+        if !allowed_download(&pf.url) {
+            return Err(bad_pack("modpack download host is not allowed").detail("url", &pf.url));
+        }
+        let sha1 = pf.sha1.to_ascii_lowercase();
+        if sha1.len() != 40 || !sha1.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(bad_pack("bad modpack sha1").detail("sha1", &pf.sha1));
+        }
+        sink.log(&format!(
+            "modpack {} (version {}): {}",
+            pf.title, pf.version_id, pf.file_name
+        ));
+        let ext = if want == Detected::Mrpack {
+            "mrpack"
+        } else {
+            "zip"
+        };
+        let dest = self
+            .paths
+            .cache()
+            .join("content")
+            .join("packs")
+            .join(format!("{sha1}.{ext}"));
+        self.dl
+            .fetch_many(
+                vec![DownloadReq {
+                    urls: vec![parse_url(&pf.url)?],
+                    sha1: Some(sha1),
+                    size: (pf.size > 0).then_some(pf.size),
+                    dest: dest.clone(),
+                    kind: ResourceKind::Content,
+                }],
+                sink,
+            )
+            .await?;
+        if let Some(want512) = &pf.sha512 {
+            let (_, got) = file_hashes(&dest).await?;
+            if !want512.eq_ignore_ascii_case(&got) {
+                let _ = tokio::fs::remove_file(&dest).await;
+                return Err(AppError::new(ErrorCode::HashMismatch, "sha512 mismatch")
+                    .detail("file", &pf.file_name));
+            }
+        }
+        sink.check_cancelled()?;
+        let d = dest.clone();
+        let names = join(tokio::task::spawn_blocking(move || entry_names(&d)).await)?;
+        if detect(&names) != Some(want) {
+            let _ = tokio::fs::remove_file(&dest).await;
+            return Err(bad_pack("downloaded modpack has an unexpected format"));
+        }
+        let meta = PackMeta {
+            name: Some(pf.title.clone()),
+            icon_url: pf.icon_url.clone(),
+        };
+        let r = if want == Detected::Mrpack {
+            self.import_mrpack(&dest, &meta, sink).await
+        } else {
+            self.import_cf(&dest, &meta, sink).await
+        };
+        // Kept on failure: a retry reuses the verified download.
+        if r.is_ok() {
+            let _ = tokio::fs::remove_file(&dest).await;
+        }
+        r
     }
 
     async fn import_launcher(&self, path: &Path, sink: &dyn ProgressSink) -> AppResult<Instance> {
@@ -965,15 +1259,16 @@ impl Inner {
 
 #[async_trait]
 impl PackIo for ContentServices {
-    // TODO(mods): implemented in the modpack-catalog task.
     async fn install_remote(
         &self,
-        _source: lc_types::content::ContentSourceKind,
-        _project_id: &str,
-        _version_id: Option<&str>,
-        _sink: &dyn ProgressSink,
+        source: ContentSourceKind,
+        project_id: &str,
+        version_id: Option<&str>,
+        sink: &dyn ProgressSink,
     ) -> AppResult<Instance> {
-        Err(AppError::not_implemented("PackIo::install_remote"))
+        self.inner
+            .install_remote(source, project_id, version_id, sink)
+            .await
     }
 
     async fn import(&self, path: &str, sink: &dyn ProgressSink) -> AppResult<Instance> {
@@ -981,8 +1276,14 @@ impl PackIo for ContentServices {
         let pp = p.clone();
         let names = join(tokio::task::spawn_blocking(move || entry_names(&pp)).await)?;
         match detect(&names) {
-            Some(Detected::Mrpack) => self.inner.import_mrpack(&p, sink).await,
-            Some(Detected::CurseForge) => self.inner.import_cf(&p, sink).await,
+            Some(Detected::Mrpack) => {
+                self.inner
+                    .import_mrpack(&p, &PackMeta::default(), sink)
+                    .await
+            }
+            Some(Detected::CurseForge) => {
+                self.inner.import_cf(&p, &PackMeta::default(), sink).await
+            }
             Some(Detected::Launcher) => self.inner.import_launcher(&p, sink).await,
             None => Err(bad_pack("unknown modpack format")),
         }

@@ -29,6 +29,21 @@ pub(crate) struct RemoteFile {
     pub manual_url: String,
 }
 
+/// Downloadable modpack archive of one catalogue version.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PackFile {
+    pub version_id: String,
+    pub file_name: String,
+    pub url: String,
+    /// Always present: packs without a SHA-1 are rejected.
+    pub sha1: String,
+    pub sha512: Option<String>,
+    pub size: u64,
+    /// Project title (instance name).
+    pub title: String,
+    pub icon_url: Option<String>,
+}
+
 /// Instance the content is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Target {

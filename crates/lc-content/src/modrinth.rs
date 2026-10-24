@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use crate::api::{Api, TTL_IMMUTABLE, TTL_META, TTL_SEARCH, TTL_VERSIONS};
 use crate::contract::ContentSource;
-use crate::source::{Catalog, ProjectInfo, RemoteFile, Target, UpdateItem};
+use crate::source::{Catalog, PackFile, ProjectInfo, RemoteFile, Target, UpdateItem};
 use crate::util::{loader_from_str, parse_url};
 
 pub(crate) const MODRINTH_API: &str = "https://api.modrinth.com/v2";
@@ -62,6 +62,8 @@ struct Project {
     project_type: String,
     #[serde(default)]
     loaders: Vec<String>,
+    #[serde(default)]
+    icon_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,6 +82,8 @@ pub(crate) struct MrVersion {
     date_published: String,
     #[serde(default)]
     version_type: String,
+    #[serde(default)]
+    featured: bool,
     #[serde(default)]
     files: Vec<MrFile>,
     #[serde(default)]
@@ -291,6 +295,81 @@ impl ModrinthSource {
         }
         self.api.get(url.as_str(), &[], TTL_VERSIONS).await
     }
+
+    /// `.mrpack` of a modpack version (`None` = latest, see [`pick_pack_version`]).
+    pub(crate) async fn pack_file(
+        &self,
+        project_id: &str,
+        version_id: Option<&str>,
+    ) -> AppResult<PackFile> {
+        let id = Self::id_segment(project_id)?;
+        let p: Project = self
+            .api
+            .get(&format!("{}/project/{id}", self.base), &[], TTL_META)
+            .await?;
+        if kind_of(&p.project_type, &p.loaders) != ContentKind::Modpack {
+            return Err(
+                AppError::new(ErrorCode::InvalidInput, "project is not a modpack")
+                    .detail("project", project_id),
+            );
+        }
+        let v = match version_id {
+            Some(vid) => {
+                let v = self.raw_version(vid).await?;
+                if v.project_id != p.id {
+                    return Err(AppError::new(
+                        ErrorCode::InvalidInput,
+                        "version belongs to another project",
+                    )
+                    .detail("version", vid));
+                }
+                v
+            }
+            None => {
+                let list = self.raw_versions(&p.id, &ContentFilter::default()).await?;
+                pick_pack_version(&list).cloned().ok_or_else(|| {
+                    AppError::new(ErrorCode::NotFound, "modpack has no .mrpack versions")
+                        .detail("project", project_id)
+                })?
+            }
+        };
+        let f = mrpack_file(&v).ok_or_else(|| {
+            AppError::new(ErrorCode::NotFound, "version has no .mrpack file")
+                .detail("version", &v.id)
+        })?;
+        let sha1 = f.hashes.get("sha1").cloned().ok_or_else(|| {
+            AppError::new(ErrorCode::InvalidInput, "modpack file has no sha1")
+                .detail("version", &v.id)
+        })?;
+        Ok(PackFile {
+            version_id: v.id.clone(),
+            file_name: f.filename.clone(),
+            url: f.url.clone(),
+            sha1,
+            sha512: f.hashes.get("sha512").cloned(),
+            size: f.size,
+            title: p.title,
+            icon_url: p.icon_url.filter(|s| !s.is_empty()),
+        })
+    }
+}
+
+/// The `.mrpack` of a version: the primary one, else the first.
+fn mrpack_file(v: &MrVersion) -> Option<&MrFile> {
+    let packs = || v.files.iter().filter(|f| f.filename.ends_with(".mrpack"));
+    packs().find(|f| f.primary).or_else(|| packs().next())
+}
+
+/// Latest installable pack version from a newest-first list: featured release,
+/// then any release, then the newest version with a `.mrpack`.
+fn pick_pack_version(list: &[MrVersion]) -> Option<&MrVersion> {
+    let ok = |v: &&MrVersion| mrpack_file(v).is_some();
+    let release = |v: &&MrVersion| v.version_type == "release";
+    list.iter()
+        .filter(ok)
+        .find(|v| v.featured && release(v))
+        .or_else(|| list.iter().filter(ok).find(release))
+        .or_else(|| list.iter().find(ok))
 }
 
 #[async_trait]
@@ -519,5 +598,47 @@ mod tests {
             r#"[["project_type:mod"],["versions:1.21.1"],["categories:quilt","categories:fabric"]]"#
         );
         assert!(url.contains("index=downloads"));
+
+        let url = s
+            .search_url(&SearchQuery {
+                source: ContentSourceKind::Modrinth,
+                kind: ContentKind::Modpack,
+                text: String::new(),
+                mc: None,
+                loader: Some(LoaderKind::Fabric),
+                categories: vec![],
+                sort: SortBy::Relevance,
+                offset: 0,
+                limit: 20,
+            })
+            .unwrap();
+        let u = url::Url::parse(&url).unwrap();
+        let facets = u.query_pairs().find(|(k, _)| k == "facets").unwrap().1;
+        assert_eq!(
+            facets,
+            r#"[["project_type:modpack"],["categories:fabric"]]"#
+        );
+    }
+
+    fn pv(id: &str, vtype: &str, featured: bool, file: &str) -> MrVersion {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "project_id": "P", "version_type": vtype, "featured": featured,
+            "files": [{"url": "https://cdn.modrinth.com/x", "filename": file, "primary": true}],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn pack_version_preference() {
+        let list = vec![
+            pv("beta", "beta", true, "a.mrpack"),
+            pv("rel-new", "release", false, "b.mrpack"),
+            pv("rel-feat", "release", true, "c.mrpack"),
+        ];
+        assert_eq!(pick_pack_version(&list).unwrap().id, "rel-feat");
+        assert_eq!(pick_pack_version(&list[..2]).unwrap().id, "rel-new");
+        assert_eq!(pick_pack_version(&list[..1]).unwrap().id, "beta");
+        let no_pack = vec![pv("x", "release", true, "x.zip")];
+        assert!(pick_pack_version(&no_pack).is_none());
     }
 }
