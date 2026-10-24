@@ -2,6 +2,8 @@
 
 Кроссплатформенный (Windows / Linux) лаунчер Minecraft: все версии игры, Fabric / Quilt / Forge / NeoForge, моды и готовые сборки из Modrinth, свой сервер скинов, мультиплеер по коду комнаты, голосовой чат и встроенный VPN на случай блокировок.
 
+[Сайт Лаунчера](https://mineup.dedseckms.ru/)
+
 ## Установка
 
 Скачайте установщик из [Releases](https://github.com/Dedseckms/MineUP/releases/latest):
