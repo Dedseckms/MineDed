@@ -32,11 +32,16 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --verify-tag \
-              --title "MineUP $TAG" --notes "MineUP $TAG"
+          # Reuse an existing (draft) release for this tag, else create one.
+          # Draft releases are not returned by /releases/tags/<tag>, so list them.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\")][0].id // empty")
+          if [ -z "$id" ]; then
+            id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$TAG" -f name="MineUP $TAG" -f body="MineUP $TAG" \
+              -F draft=true --jq .id)
           fi
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+          test -n "$id"
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
   build:
@@ -89,5 +94,7 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest
+          ID: ${{ needs.draft.outputs.release_id }}
+        run: |
+          test -n "$ID"
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" -F draft=false -f make_latest=true
