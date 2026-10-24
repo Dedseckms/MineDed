@@ -89,5 +89,5 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
-          ID: ${{ needs.draft.outputs.release_id }}
-        run: gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" -F draft=false -f make_latest=true
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest
