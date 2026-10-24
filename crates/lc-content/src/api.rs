@@ -110,7 +110,11 @@ impl DlHttp {
                 Err(e) => return Err(e),
             }
         }
-        Err(first.unwrap_or_else(|| AppError::new(ErrorCode::Network, "request failed")))
+        // Neither route got through (no working proxy): let the UI suggest
+        // one, like `Downloader::get_bytes` does.
+        Err(first
+            .unwrap_or_else(|| AppError::new(ErrorCode::Network, "request failed"))
+            .detail("hint", "useProxy"))
     }
 }
 
@@ -504,6 +508,7 @@ mod route_tests {
         let h = [("x-api-key", "k".to_owned())];
         let e = http.get(&format!("{base}/v1/x"), &h).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::Network);
+        assert_eq!(e.details.unwrap()["hint"], "useProxy");
         // Both routes were tried.
         assert_eq!(*d.routes.lock().unwrap(), vec![Route::Auto, Route::Proxied]);
     }
