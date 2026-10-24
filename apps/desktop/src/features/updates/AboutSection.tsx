@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import type { Settings } from "../../bindings";
-import { isMock } from "../../api/client";
+import { isDemo, isMock } from "../../api/client";
 import { useAppVersion, useSaveSettings } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
@@ -26,7 +26,7 @@ export function AboutSection({ settings }: { settings: Settings }) {
         <dt className="text-muted">{t("updates.version")}</dt>
         <dd className="font-medium tabular-nums" data-testid="app-version">
           {version.data ?? "…"}
-          {isMock ? <span className="ml-2 text-xs font-normal text-muted">{t("app.mock")}</span> : null}
+          {isMock && !isDemo ? <span className="ml-2 text-xs font-normal text-muted">{t("app.mock")}</span> : null}
         </dd>
       </dl>
       <Switch

@@ -76,7 +76,8 @@ function makeCode(seed: number): string {
   let out = "";
   for (let i = 0; i < 8; i += 1) {
     s = (s * 1103515245 + 12345) >>> 0;
-    out += CODE_CHARS[s % CODE_CHARS.length];
+    // High bits: the low bits of this LCG cycle with a tiny period ("3AAA-AAAA").
+    out += CODE_CHARS[(s >>> 16) % CODE_CHARS.length];
     if (i === 3) out += "-";
   }
   return out;
@@ -186,7 +187,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
     later(delay + tickMs * 4, () => {
       const peer: Peer = { ...base, path: idx % 2 === 0 ? "direct" : "relay", rttMs: idx % 2 === 0 ? 24 + idx * 7 : 85 + idx * 11 };
       updatePeer(roomId, peer);
-      if (room?.roomId === roomId) bus.emit("chatMessage", peerMsg(peer, idx === 0 ? "Привет! / Hi!" : "o/", idx % 2 === 1));
+      if (room?.roomId === roomId) bus.emit("chatMessage", peerMsg(peer, "o/", idx % 2 === 1));
     });
   };
 

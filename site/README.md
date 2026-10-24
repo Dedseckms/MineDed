@@ -8,6 +8,9 @@ no external fonts, CDNs or trackers.
 - `app.js` — RU/EN dictionary (auto from `navigator.language`, toggle remembered in `localStorage`),
   background switcher, download links resolved from the latest GitHub release
   (fallback: `https://github.com/Dedseckms/MineUP/releases/latest`).
+- `screenshots/<screen>-<ru|en>.webp` — real UI screenshots (1600×1000) shown in a lazy gallery with a `<dialog>` lightbox.
+  Regenerate: `pnpm --filter desktop dev`, then open `/?demo=1&lang=ru&bg=forest&section=<id>`
+  (`&library=catalog`, `&instance=inst-fabric&tab=mods|browse`) in a 1600×1000 window, dark scheme.
 - `logo.svg` — logo and favicon (copy of `apps/desktop/public/logo.svg`).
 
 ## Serve
@@ -29,7 +32,7 @@ mineup.dedseckms.ru {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 	}
-	@assets path *.css *.js *.svg
+	@assets path *.css *.js *.svg *.webp
 	header @assets Cache-Control "public, max-age=86400"
 	file_server
 }

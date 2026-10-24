@@ -2,7 +2,7 @@ import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { type ComponentType, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { isMock } from "../../api/client";
+import { isDemo, isMock } from "../../api/client";
 import { BRAND_LOGO_URL, BRAND_MARK } from "../../brand";
 import { useAccounts, useAppVersion, useSettings } from "../../api/queries";
 import { backdropFlags } from "../../lib/backdrop";
@@ -127,7 +127,7 @@ function Sidebar() {
       </ul>
       <p className="mt-auto hidden px-3 text-xs text-muted lg:block">
         {t("app.version", { version: version.data ?? "…" })}
-        {isMock ? ` · ${t("app.mock")}` : ""}
+        {isMock && !isDemo ? ` · ${t("app.mock")}` : ""}
       </p>
     </nav>
   );

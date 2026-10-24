@@ -36,13 +36,30 @@
       f8t: "Auto-updates",
       f8d: "The launcher updates itself in the background with signed releases.",
       screensTitle: "How it looks",
-      screensNote: "Illustrations of the interface drawn with CSS, not real screenshots.",
-      s1: "Instance library",
-      s1alt: "Instance library illustration",
-      s2: "Mod catalog",
-      s2alt: "Mod catalog illustration",
-      s3: "Rooms, chat and voice",
-      s3alt: "Room with chat illustration",
+      screensNote: "Real screenshots of the launcher. Click to enlarge.",
+      shPlay: "Play",
+      shPlayAlt: "Play screen: instance and account picker, running game with a live log",
+      shInstances: "Instance library",
+      shInstancesAlt: "Instance library with vanilla, Fabric and Forge instances",
+      shModpacks: "Modpack catalog",
+      shModpacksAlt: "Modpack catalog from Modrinth with filters",
+      shMods: "Instance mods",
+      shModsAlt: "Installed mods of a Fabric instance with updates and toggles",
+      shCatalog: "Mod catalog",
+      shCatalogAlt: "Modrinth mod catalog filtered by the instance version and loader",
+      shSkins: "Skins in 3D",
+      shSkinsAlt: "Skin library with a 3D preview and a cape",
+      shAccounts: "Accounts",
+      shAccountsAlt: "Offline accounts and sign-in to the MineUP server",
+      shMultiplayer: "Room, voice and chat",
+      shMultiplayerAlt: "Multiplayer room with a code, participants, voice panel and chat",
+      shVpn: "Built-in VPN",
+      shVpnAlt: "VPN screen: mode, subscription and nodes sorted by ping",
+      shSettings: "Appearance",
+      shSettingsAlt: "Appearance settings: theme, accent colour, language and pixel backgrounds",
+      lbPrev: "Previous screenshot",
+      lbNext: "Next screenshot",
+      lbClose: "Close",
       dlTitle: "Download",
       dlLatest: "Latest release",
       dlVersion: "Latest release: {v}",
@@ -84,13 +101,30 @@
       f8t: "Автообновления",
       f8d: "Лаунчер сам обновляется в фоне, релизы подписаны.",
       screensTitle: "Как это выглядит",
-      screensNote: "Иллюстрации интерфейса, нарисованные на CSS, а не настоящие скриншоты.",
-      s1: "Библиотека сборок",
-      s1alt: "Иллюстрация библиотеки сборок",
-      s2: "Каталог модов",
-      s2alt: "Иллюстрация каталога модов",
-      s3: "Комнаты, чат и голос",
-      s3alt: "Иллюстрация комнаты с чатом",
+      screensNote: "Настоящие скриншоты лаунчера. Нажмите, чтобы увеличить.",
+      shPlay: "Запуск игры",
+      shPlayAlt: "Экран «Играть»: выбор сборки и аккаунта, запущенная игра и её лог",
+      shInstances: "Библиотека сборок",
+      shInstancesAlt: "Библиотека сборок: ванилла, Fabric и Forge",
+      shModpacks: "Каталог модпаков",
+      shModpacksAlt: "Каталог модпаков Modrinth с фильтрами",
+      shMods: "Моды сборки",
+      shModsAlt: "Установленные моды сборки Fabric с обновлениями и переключателями",
+      shCatalog: "Каталог модов",
+      shCatalogAlt: "Каталог модов Modrinth с фильтром по версии и загрузчику сборки",
+      shSkins: "Скины в 3D",
+      shSkinsAlt: "Библиотека скинов с 3D-просмотром и плащом",
+      shAccounts: "Аккаунты",
+      shAccountsAlt: "Оффлайн-аккаунты и вход через сервер MineUP",
+      shMultiplayer: "Комната, голос и чат",
+      shMultiplayerAlt: "Комната мультиплеера: код, участники, голосовая панель и чат",
+      shVpn: "Встроенный VPN",
+      shVpnAlt: "Экран VPN: режим, подписка и узлы по пингу",
+      shSettings: "Внешний вид",
+      shSettingsAlt: "Настройки внешнего вида: тема, акцент, язык и пиксельные фоны",
+      lbPrev: "Предыдущий скриншот",
+      lbNext: "Следующий скриншот",
+      lbClose: "Закрыть",
       dlTitle: "Скачать",
       dlLatest: "Последний релиз",
       dlVersion: "Последний релиз: {v}",
@@ -138,6 +172,7 @@
     btn.textContent = lang === "ru" ? "EN" : "RU";
     btn.setAttribute("aria-label", t("langBtn"));
     btn.setAttribute("lang", lang === "ru" ? "en" : "ru");
+    paintShots();
     var v = document.getElementById("dl-version");
     if (release) v.textContent = t("dlVersion").replace("{v}", release.tag_name || "");
     else if (releaseFailed) v.textContent = t("dlFallback");
@@ -162,17 +197,58 @@
     bg.setAttribute("data-scene", id);
   }
 
-  function paintMocks() {
-    document.querySelectorAll(".mock[data-scene]").forEach(function (el) {
-      var old = el.querySelector(".bg");
-      if (old) old.remove();
-      var d = document.createElement("div");
-      d.className = "bg";
-      d.setAttribute("aria-hidden", "true");
-      d.innerHTML = S.render(el.getAttribute("data-scene"), false);
-      el.insertBefore(d, el.firstChild);
-    });
+  // Screenshot gallery: per-language images, native <dialog> lightbox.
+  var shots = Array.prototype.slice.call(document.querySelectorAll("[data-shot]"));
+  var lightbox = document.getElementById("lightbox");
+  var lbImg = document.getElementById("lb-img");
+  var lbCaption = document.getElementById("lb-caption");
+  var lbIndex = 0;
+
+  function shotKey(id) {
+    return "sh" + id.charAt(0).toUpperCase() + id.slice(1);
   }
+
+  function shotSrc(id) {
+    return "screenshots/" + id + "-" + lang + ".webp";
+  }
+
+  function paintShots() {
+    shots.forEach(function (btn) {
+      var img = btn.querySelector("img");
+      var src = shotSrc(btn.getAttribute("data-shot"));
+      if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+    });
+    if (lightbox.open) showShot(lbIndex);
+  }
+
+  function showShot(i) {
+    lbIndex = (i + shots.length) % shots.length;
+    var id = shots[lbIndex].getAttribute("data-shot");
+    lbImg.src = shotSrc(id);
+    lbImg.alt = t(shotKey(id) + "Alt");
+    lbCaption.textContent = t(shotKey(id));
+  }
+
+  shots.forEach(function (btn, i) {
+    btn.addEventListener("click", function () {
+      showShot(i);
+      if (typeof lightbox.showModal === "function") lightbox.showModal();
+      else window.open(shotSrc(btn.getAttribute("data-shot")), "_blank", "noopener");
+    });
+  });
+  lightbox.addEventListener("click", function (e) {
+    var action = e.target.closest ? e.target.closest("[data-lb]") : null;
+    if (e.target === lightbox) lightbox.close(); // click on the backdrop
+    else if (action) {
+      var a = action.getAttribute("data-lb");
+      if (a === "close") lightbox.close();
+      else showShot(lbIndex + (a === "next" ? 1 : -1));
+    }
+  });
+  lightbox.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowRight") showShot(lbIndex + 1);
+    else if (e.key === "ArrowLeft") showShot(lbIndex - 1);
+  });
 
   document.getElementById("scene-btn").addEventListener("click", function () {
     var cur = bg.getAttribute("data-scene");
@@ -228,6 +304,5 @@
 
   applyLang();
   paintBg();
-  paintMocks();
   loadRelease();
 })();
