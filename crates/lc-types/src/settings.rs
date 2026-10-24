@@ -72,9 +72,8 @@ mod tests {
 pub const DEFAULT_HUB_URL: &str = "https://relay.dedseckms.ru/api/v1";
 
 /// Global launcher settings (`settings_get` / `settings_set`).
-/// Missing fields (older settings files) take their `Default` values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub language: Language,
     pub theme: Theme,

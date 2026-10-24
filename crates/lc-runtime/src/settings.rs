@@ -29,6 +29,18 @@ impl SettingsStore for MemorySettingsStore {
     }
 }
 
+/// Parses a settings file written by any older version: top-level fields it
+/// lacks take their `Settings::default()` values instead of failing.
+fn parse_with_defaults(bytes: &[u8]) -> serde_json::Result<Settings> {
+    let mut merged = serde_json::to_value(Settings::default())?;
+    let file: serde_json::Value = serde_json::from_slice(bytes)?;
+    match (merged.as_object_mut(), file) {
+        (Some(base), serde_json::Value::Object(fields)) => base.extend(fields),
+        (_, other) => return serde_json::from_value(other),
+    }
+    serde_json::from_value(merged)
+}
+
 /// Settings persisted as JSON. Missing file = defaults; a corrupt file is
 /// moved aside (`settings.json.corrupt`) and defaults are used.
 #[derive(Debug)]
@@ -47,7 +59,7 @@ impl JsonSettingsStore {
 
     async fn load(&self) -> AppResult<Settings> {
         match tokio::fs::read(&self.path).await {
-            Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(bytes) => match parse_with_defaults(&bytes) {
                 Ok(s) => Ok(s),
                 Err(_) => {
                     let mut aside = self.path.clone().into_os_string();
@@ -94,6 +106,14 @@ impl SettingsStore for JsonSettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn older_file_gets_new_fields_from_defaults() {
+        let s = parse_with_defaults(br#"{"language":"en","lightMode":true}"#).unwrap();
+        assert!(s.light_mode);
+        assert_eq!(s.translucent, Settings::default().translucent);
+        assert_eq!(s.hub_url, Settings::default().hub_url);
+    }
 
     #[tokio::test]
     async fn json_store_roundtrip_and_corrupt_file() {
