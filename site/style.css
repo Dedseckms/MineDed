@@ -108,7 +108,7 @@ h1, h2, h3 { line-height: 1.2; margin: 0; }
 .top nav a { color: var(--text); text-decoration: none; padding: 8px 12px; border-radius: 8px; font-weight: 500; }
 .top nav a:hover { background: var(--surface-2); }
 .tools { display: flex; gap: 2px; }
-main { display: grid; gap: 28px; padding: 40px 0 28px; }
+main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; padding: 40px 0 28px; }
 main:focus { outline: none; }
 section { scroll-margin-top: 80px; }
 
@@ -128,14 +128,16 @@ section { scroll-margin-top: 80px; }
 /* ---- Screenshot gallery + lightbox ---- */
 .note { display: inline-block; padding: 6px 12px; margin: -6px 0 14px; color: var(--muted); }
 .shots { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
-.shot { margin: 0; display: grid; gap: 8px; }
+/* min-width: 0 stops the 1600px intrinsic image width from widening grid tracks. */
+main > *, .shots > li, .shot, .shot button { min-width: 0; }
+.shot { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .shot button {
   display: block; width: 100%; padding: 0; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--surface); overflow: hidden; cursor: zoom-in; box-shadow: var(--shadow);
   transition: border-color 0.15s, transform 0.15s;
 }
 .shot button:hover { border-color: var(--accent); transform: translateY(-2px); }
-.shot img { width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; }
+.shot img { width: 100%; max-width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; }
 .shot figcaption { padding: 8px 12px; font-weight: 600; justify-self: start; }
 .lightbox {
   width: min(1600px, 96vw); max-width: none; max-height: 96vh; padding: 0;
@@ -172,3 +174,7 @@ section { scroll-margin-top: 80px; }
   body { font-size: 20px; }
   .top, main, .foot { width: min(1600px, 100% - 48px); }
 }
+
+/* Never scroll sideways (drifting clouds are 200% wide). */
+html, body { overflow-x: clip; }
+.bg { overflow: hidden; }
