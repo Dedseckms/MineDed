@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "iris",
+  "version": "1.8.8+mc1.21.1",
+  "name": "Iris",
+  "environment": "client",
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.21.1",
+    "sodium": "0.6.x"
+  },
+  "breaks": {
+    "sodium": ["<0.6.0", ">0.6.x"],
+    "optifabric": "*"
+  }
+}

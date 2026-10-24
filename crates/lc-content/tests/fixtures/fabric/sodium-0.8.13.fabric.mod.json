@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "id": "sodium",
+  "version": "0.8.13+mc1.21.1",
+  "depends": { "fabricloader": ">=0.16.0", "minecraft": ["1.21.1"] },
+  "breaks": { "iris": "<1.9.0" }
+}

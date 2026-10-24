@@ -39,18 +39,153 @@ const ALLOWED_HOSTS: [&str; 6] = [
 const MAX_ENTRIES: usize = 20_000;
 const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
-/// JVM args accepted from a foreign launcher zip: heap, `-XX:` (except
-/// command hooks) and `-D` properties. Everything else is dropped and logged.
+/// `-XX:` options a foreign pack may set: GC / JIT / memory tuning only.
+/// Anything that reads files or runs commands (`Flags`, `VMOptionsFile`,
+/// `OnError`, `OnOutOfMemoryError`, `*Command*`, logging to paths, ...) is
+/// not listed and therefore rejected.
+const XX_ALLOWED: &[&str] = &[
+    "AdaptiveSizePolicyWeight",
+    "AggressiveOpts",
+    "AllocatePrefetchStyle",
+    "AlwaysActAsServerClassMachine",
+    "AlwaysPreTouch",
+    "CICompilerCount",
+    "ConcGCThreads",
+    "DisableExplicitGC",
+    "DoEscapeAnalysis",
+    "EliminateLocks",
+    "G1ConcRefinementServiceIntervalMillis",
+    "G1ConcRSHotCardLimit",
+    "G1ConcRSLogCacheSize",
+    "G1HeapRegionSize",
+    "G1HeapWastePercent",
+    "G1MaxNewSizePercent",
+    "G1MixedGCCountTarget",
+    "G1MixedGCLiveThresholdPercent",
+    "G1NewSizePercent",
+    "G1RSetUpdatingPauseTimePercent",
+    "G1ReservePercent",
+    "G1SATBBufferEnqueueingThresholdPercent",
+    "GCTimeRatio",
+    "InitialRAMPercentage",
+    "InitiatingHeapOccupancyPercent",
+    "MaxGCPauseMillis",
+    "MaxHeapFreeRatio",
+    "MaxInlineLevel",
+    "MaxMetaspaceSize",
+    "MaxRAMPercentage",
+    "MaxTenuringThreshold",
+    "MetaspaceSize",
+    "MinHeapFreeRatio",
+    "MinRAMPercentage",
+    "NmethodSweepActivity",
+    "OmitStackTraceInFastThrow",
+    "ParallelGCThreads",
+    "ParallelRefProcEnabled",
+    "PerfDisableSharedMem",
+    "RangeCheckElimination",
+    "ReservedCodeCacheSize",
+    "SegmentedCodeCache",
+    "ShenandoahGCMode",
+    "ShowCodeDetailsInExceptionMessages",
+    "SoftRefLRUPolicyMSPerMB",
+    "SurvivorRatio",
+    "ThreadPriorityPolicy",
+    "TieredCompilation",
+    "TrustFinalNonStaticFields",
+    "UnlockExperimentalVMOptions",
+    "UseAdaptiveGCBoundary",
+    "UseCompressedClassPointers",
+    "UseCompressedOops",
+    "UseCriticalJavaThreadPriority",
+    "UseDynamicNumberOfGCThreads",
+    "UseFastUnorderedTimeStamps",
+    "UseFPUForSpilling",
+    "UseG1GC",
+    "UseLargePages",
+    "UseLoopPredicate",
+    "UseNUMA",
+    "UseParallelGC",
+    "UseSerialGC",
+    "UseShenandoahGC",
+    "UseStringDeduplication",
+    "UseTransparentHugePages",
+    "UseVectorCmov",
+    "UseXMMForArrayCopy",
+    "UseZGC",
+    "ZCollectionInterval",
+    "ZGenerational",
+    "ZUncommit",
+    "ZUncommitDelay",
+];
+
+/// `-D` property prefixes that change class loading, security, native
+/// library lookup or logging configuration (log4j can load remote configs).
+const D_DENIED: &[&str] = &[
+    "java.",
+    "javax.",
+    "jdk.",
+    "sun.",
+    "com.sun.",
+    "log4j",
+    "org.apache.logging",
+    "org.lwjgl.",
+    "jna.",
+    "jnidispatch.",
+    "fml.",
+    "forge",
+    "mixin.",
+    "fabric.",
+    "loader.",
+    "minecraft.",
+];
+
+/// Value of a sized option: digits with an optional unit (`512m`, `4G`, `80`).
+fn is_size(v: &str) -> bool {
+    let digits = v.trim_end_matches(['k', 'K', 'm', 'M', 'g', 'G']);
+    !digits.is_empty() && digits.len() + 1 >= v.len() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn safe_xx(opt: &str) -> bool {
+    if let Some(name) = opt.strip_prefix('+').or_else(|| opt.strip_prefix('-')) {
+        return XX_ALLOWED.contains(&name);
+    }
+    let Some((name, value)) = opt.split_once('=') else {
+        return false;
+    };
+    if !XX_ALLOWED.contains(&name) {
+        return false;
+    }
+    if name == "ShenandoahGCMode" {
+        return matches!(value, "satb" | "iu" | "passive" | "generational");
+    }
+    is_size(value)
+}
+
+fn safe_d(prop: &str) -> bool {
+    let name = prop.split('=').next().unwrap_or("");
+    let lower = name.to_ascii_lowercase();
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && !D_DENIED.iter().any(|p| lower.starts_with(p))
+}
+
+/// JVM args accepted from a foreign launcher zip: heap/stack sizes,
+/// allowlisted `-XX:` tuning flags and harmless `-D` properties.
+/// Everything else is dropped and logged.
 pub(crate) fn safe_jvm_args(args: &[String], sink: &dyn ProgressSink) -> Vec<String> {
     args.iter()
         .filter(|a| {
             let ok = if let Some(xx) = a.strip_prefix("-XX:") {
-                let lower = xx.to_ascii_lowercase();
-                !(lower.contains("onerror")
-                    || lower.contains("onoutofmemoryerror")
-                    || lower.contains("command"))
+                safe_xx(xx)
+            } else if let Some(d) = a.strip_prefix("-D") {
+                safe_d(d)
             } else {
-                a.starts_with("-Xms") || a.starts_with("-Xmx") || a.starts_with("-D")
+                ["-Xms", "-Xmx", "-Xss", "-Xmn"]
+                    .iter()
+                    .any(|p| a.strip_prefix(p).is_some_and(is_size))
             };
             if !ok {
                 sink.log(&format!("import: dropped JVM argument {a}"));
@@ -899,6 +1034,22 @@ mod tests {
             "-javaagent:evil.jar",
             "-agentpath:x.dll",
             "-cp",
+            "-XX:Flags=/tmp/evil",
+            "-XX:VMOptionsFile=evil.txt",
+            "-XX:+UnlockDiagnosticVMOptions",
+            "-XX:ErrorFile=/tmp/x",
+            "-XX:MaxGCPauseMillis=50",
+            "-XX:MaxGCPauseMillis=50;rm",
+            "-XX:G1HeapRegionSize=16M",
+            "-XX:-UseZGC",
+            "-XX:UseG1GC",
+            "-XX:LogFile=x",
+            "-Xmx4G;calc",
+            "-Djava.library.path=evil",
+            "-Dlog4j.configurationFile=http://x/y.xml",
+            "-Djava.system.class.loader=Evil",
+            "-Dfml.ignoreInvalidMinecraftCertificates=true",
+            "-Dsome.mod.setting=1",
         ]
         .iter()
         .map(|s| (*s).to_owned())
@@ -911,7 +1062,11 @@ mod tests {
                 "-Xms1G",
                 "-Dfoo=bar",
                 "-XX:+UseG1GC",
-                "-XX:+ShowCodeDetailsInExceptionMessages"
+                "-XX:+ShowCodeDetailsInExceptionMessages",
+                "-XX:MaxGCPauseMillis=50",
+                "-XX:G1HeapRegionSize=16M",
+                "-XX:-UseZGC",
+                "-Dsome.mod.setting=1",
             ]
         );
     }

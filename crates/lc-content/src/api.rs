@@ -1,9 +1,10 @@
 //! HTTP access for catalogue APIs (through `Downloader` only) + on-disk TTL cache
 //! under `Paths::cache()/content`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use lc_http::{Downloader, ResourceKind, Route};
@@ -30,9 +31,98 @@ pub(crate) trait Http: Send + Sync {
     ) -> AppResult<Vec<u8>>;
 }
 
+/// How long a host stays "proxy first" after the direct route failed.
+const PROXY_FIRST_TTL: Duration = Duration::from_secs(10 * 60);
+
 /// `Downloader`-backed transport. Header-less GETs go through `get_bytes`
-/// (retries, route policy); requests with headers / POST use `client(Route::Auto)`.
-pub(crate) struct DlHttp(pub Arc<dyn Downloader>);
+/// (mirrors, retries, `Route::Auto` fallback inside the downloader). Requests
+/// with headers / POST bodies get the same policy here: `client(Route::Auto)`
+/// first, and on a network error, 5xx/451 or a non-JSON (block page) answer
+/// they are retried through `client(Route::Proxied)`; the host is then tried
+/// via the proxy first for a while.
+pub(crate) struct DlHttp {
+    dl: Arc<dyn Downloader>,
+    proxy_first: Mutex<HashMap<String, Instant>>,
+}
+
+impl DlHttp {
+    pub fn new(dl: Arc<dyn Downloader>) -> Self {
+        Self {
+            dl,
+            proxy_first: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn host(url: &str) -> String {
+        url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .unwrap_or_default()
+    }
+
+    fn is_proxy_first(&self, host: &str) -> bool {
+        let map = self
+            .proxy_first
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        map.get(host).is_some_and(|t| t.elapsed() < PROXY_FIRST_TTL)
+    }
+
+    fn set_proxy_first(&self, host: &str, on: bool) {
+        let mut map = self
+            .proxy_first
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if on {
+            map.insert(host.to_owned(), Instant::now());
+        } else {
+            map.remove(host);
+        }
+    }
+
+    /// Sends `build(client)` over Auto, then Proxied (or the reverse for
+    /// remembered hosts). Returns the first error when both fail.
+    async fn routed<F>(&self, url: &str, build: F) -> AppResult<Vec<u8>>
+    where
+        F: Fn(reqwest::Client) -> reqwest::RequestBuilder + Send + Sync,
+    {
+        let host = Self::host(url);
+        let order = if self.is_proxy_first(&host) {
+            [Route::Proxied, Route::Auto]
+        } else {
+            [Route::Auto, Route::Proxied]
+        };
+        let mut first: Option<AppError> = None;
+        for (i, route) in order.into_iter().enumerate() {
+            match send(build(self.dl.client(route)), url)
+                .await
+                .and_then(|b| looks_like_json(b, url))
+            {
+                Ok(b) => {
+                    if i > 0 {
+                        self.set_proxy_first(&host, route == Route::Proxied);
+                    }
+                    return Ok(b);
+                }
+                Err(e) if e.code == ErrorCode::Network => {
+                    first.get_or_insert(e.detail("route", format!("{route:?}")));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(first.unwrap_or_else(|| AppError::new(ErrorCode::Network, "request failed")))
+    }
+}
+
+/// A JSON API never answers with HTML: treat that as a spoofed (blocked) reply.
+fn looks_like_json(bytes: Vec<u8>, url: &str) -> AppResult<Vec<u8>> {
+    match bytes.iter().find(|b| !b.is_ascii_whitespace()) {
+        Some(b'{') | Some(b'[') | None => Ok(bytes),
+        Some(_) => {
+            Err(AppError::new(ErrorCode::Network, "spoofed response (not JSON)").detail("url", url))
+        }
+    }
+}
 
 fn status_err(status: reqwest::StatusCode, url: &str) -> AppError {
     let code = match status.as_u16() {
@@ -74,17 +164,18 @@ async fn send(req: reqwest::RequestBuilder, url: &str) -> AppResult<Vec<u8>> {
 #[async_trait]
 impl Http for DlHttp {
     async fn get(&self, url: &str, headers: &[(&'static str, String)]) -> AppResult<Vec<u8>> {
+        let parsed = parse_url(url)?;
         if headers.is_empty() {
-            return self
-                .0
-                .get_bytes(&parse_url(url)?, ResourceKind::Other)
-                .await;
+            return self.dl.get_bytes(&parsed, ResourceKind::Other).await;
         }
-        let mut req = self.0.client(Route::Auto).get(parse_url(url)?);
-        for (k, v) in headers {
-            req = req.header(*k, v);
-        }
-        send(req, url).await
+        self.routed(url, |client| {
+            let mut req = client.get(parsed.clone());
+            for (k, v) in headers {
+                req = req.header(*k, v);
+            }
+            req
+        })
+        .await
     }
 
     async fn post_json(
@@ -93,11 +184,15 @@ impl Http for DlHttp {
         headers: &[(&'static str, String)],
         body: &serde_json::Value,
     ) -> AppResult<Vec<u8>> {
-        let mut req = self.0.client(Route::Auto).post(parse_url(url)?).json(body);
-        for (k, v) in headers {
-            req = req.header(*k, v);
-        }
-        send(req, url).await
+        let parsed = parse_url(url)?;
+        self.routed(url, |client| {
+            let mut req = client.post(parsed.clone()).json(body);
+            for (k, v) in headers {
+                req = req.header(*k, v);
+            }
+            req
+        })
+        .await
     }
 }
 
@@ -287,5 +382,129 @@ pub(crate) mod fake {
         ) -> AppResult<Vec<u8>> {
             Err(AppError::new(ErrorCode::Network, "down"))
         }
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use lc_http::DownloadReq;
+    use lc_runtime::ProgressSink;
+    use lc_types::settings::ProxyCfg;
+    use url::Url;
+
+    use super::*;
+
+    /// Serves `body` as JSON to every connection (stand-in for the API via the proxy).
+    fn serve(body: &'static str) -> (String, Arc<AtomicUsize>) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                h.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    /// A port nothing listens on: the "blackholed" direct route.
+    fn dead_proxy() -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        drop(l);
+        format!("http://{addr}")
+    }
+
+    /// Direct (`Auto`) goes through an unreachable proxy; `Proxied` reaches the server.
+    struct Dl {
+        dead: String,
+        gets: AtomicUsize,
+        routes: Mutex<Vec<Route>>,
+    }
+
+    #[async_trait]
+    impl Downloader for Dl {
+        async fn fetch_many(&self, _r: Vec<DownloadReq>, _s: &dyn ProgressSink) -> AppResult<()> {
+            Ok(())
+        }
+        async fn get_bytes(&self, _url: &Url, _k: ResourceKind) -> AppResult<Vec<u8>> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
+            Ok(b"{}".to_vec())
+        }
+        fn client(&self, route: Route) -> reqwest::Client {
+            self.routes.lock().unwrap().push(route);
+            let b = reqwest::Client::builder().no_proxy();
+            match route {
+                Route::Proxied => b.build().unwrap(),
+                _ => b
+                    .proxy(reqwest::Proxy::all(&self.dead).unwrap())
+                    .build()
+                    .unwrap(),
+            }
+        }
+        fn mirrors_for(&self, original: &Url, _k: ResourceKind) -> Vec<Url> {
+            vec![original.clone()]
+        }
+        fn set_manual_proxy(&self, _p: Option<ProxyCfg>) {}
+    }
+
+    fn dl() -> Arc<Dl> {
+        Arc::new(Dl {
+            dead: dead_proxy(),
+            gets: AtomicUsize::new(0),
+            routes: Mutex::new(Vec::new()),
+        })
+    }
+
+    #[tokio::test]
+    async fn api_calls_fall_back_to_proxy_when_direct_is_blackholed() {
+        let (base, hits) = serve(r#"{"ok":true}"#);
+        let d = dl();
+        let http = DlHttp::new(d.clone());
+        // Header-less GET (Modrinth search/versions): the downloader's Auto policy.
+        http.get(&format!("{base}/v2/search"), &[]).await.unwrap();
+        assert_eq!(d.gets.load(Ordering::SeqCst), 1);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // GET with headers (CurseForge) and POST (Modrinth updates): Auto, then Proxied.
+        let h = [("x-api-key", "k".to_owned())];
+        let b = http
+            .get(&format!("{base}/v1/mods/search"), &h)
+            .await
+            .unwrap();
+        assert_eq!(b, br#"{"ok":true}"#);
+        assert_eq!(*d.routes.lock().unwrap(), vec![Route::Auto, Route::Proxied]);
+        // Remembered: the next call goes via the proxy first.
+        let body = serde_json::json!({"hashes": []});
+        http.post_json(&format!("{base}/v2/version_files/update"), &[], &body)
+            .await
+            .unwrap();
+        assert_eq!(d.routes.lock().unwrap()[2], Route::Proxied);
+        assert_eq!(d.routes.lock().unwrap().len(), 3);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn block_page_is_retried_and_errors_surface() {
+        let (base, _) = serve("<html>blocked</html>");
+        let d = dl();
+        let http = DlHttp::new(d.clone());
+        let h = [("x-api-key", "k".to_owned())];
+        let e = http.get(&format!("{base}/v1/x"), &h).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Network);
+        // Both routes were tried.
+        assert_eq!(*d.routes.lock().unwrap(), vec![Route::Auto, Route::Proxied]);
     }
 }
