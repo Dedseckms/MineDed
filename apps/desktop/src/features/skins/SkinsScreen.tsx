@@ -16,7 +16,7 @@ import { Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/form";
-import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { useMotionPrefs } from "../../hooks/useAppearance";
 import { SKIN_EXTS, skinNameFromPath, validateFilePath, validateSkinName } from "../../lib/validation";
 import { Skin3D, SkinFlat } from "./SkinPreview";
@@ -135,8 +135,8 @@ function CapePicker({ account, onPreview }: { account: string; onPreview: (url: 
 
   useEffect(() => onPreview(active?.url ?? null), [active?.url, onPreview]);
 
-  if (capes.isPending) return <Skeleton className="h-10" />;
-  if (capes.error) return <ErrorMessage error={capes.error} />;
+  if (capes.isPending) return <ListSkeleton rows={1} rowClassName="h-10" />;
+  if (capes.error) return <ErrorMessage error={capes.error} onRetry={() => void capes.refetch()} />;
   if (capes.data.length === 0) return <p className="text-sm text-muted">{t("skins.noCapes")}</p>;
   return (
     <div className="flex flex-col gap-2">
@@ -186,15 +186,11 @@ export function SkinsScreen() {
       <div className="grid gap-6 lg:grid-cols-[1fr_18rem]">
         <Section title={t("skins.library")}>
           {skins.isPending ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Skeleton className="h-44" />
-              <Skeleton className="h-44" />
-              <Skeleton className="h-44" />
-            </div>
+            <ListSkeleton rows={6} rowClassName="h-44" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4" />
           ) : skins.error ? (
-            <ErrorMessage error={skins.error} />
+            <ErrorMessage error={skins.error} onRetry={() => void skins.refetch()} />
           ) : list.length === 0 ? (
-            <EmptyState title={t("skins.empty")} />
+            <EmptyState icon="shirt" title={t("skins.empty")} />
           ) : (
             <div role="radiogroup" aria-label={t("skins.library")} className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
               {list.map((s) => (

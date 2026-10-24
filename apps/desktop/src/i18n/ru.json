@@ -29,7 +29,8 @@
     "soon": "Скоро",
     "optional": "Необязательно",
     "close": "Закрыть",
-    "copyLink": "Копировать ссылку"
+    "copyLink": "Копировать ссылку",
+    "retry": "Повторить"
   },
   "play": {
     "play": "Играть",
@@ -196,7 +197,12 @@
       "url": "Адрес сервера",
       "hint": "API-адрес вашего сервера скинов и аккаунтов (authlib-injector). Пусто — сервер MineUP по умолчанию.",
       "placeholder": "https://auth.example.com/api/yggdrasil"
-    }
+    },
+    "accent": "Акцентный цвет",
+    "accentDefault": "Как в теме",
+    "accentCustom": "Свой цвет",
+    "accentSwatch": "Акцент {{color}}",
+    "accentHint": "Автоматически подстраивается, чтобы оставаться читаемым в обеих темах."
   },
   "tasks": {
     "center": "Задачи",

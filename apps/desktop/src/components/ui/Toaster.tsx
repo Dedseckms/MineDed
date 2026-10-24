@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useMotionPrefs, useMotionPreset } from "../../hooks/useAppearance";
 import { TOAST_TTL_MS, type Toast, type ToastTone, useToastStore } from "../../stores/toastStore";
 import { Button } from "./Button";
 import { Icon } from "./Icon";
@@ -21,6 +22,8 @@ const ICON_TONE: Record<ToastTone, string> = {
 function ToastItem({ toast }: { toast: Toast }) {
   const { t, i18n } = useTranslation();
   const dismiss = useToastStore((s) => s.dismiss);
+  const { reduced } = useMotionPrefs();
+  const preset = useMotionPreset("toast");
 
   useEffect(() => {
     const timer = setTimeout(() => dismiss(toast.id), TOAST_TTL_MS);
@@ -29,13 +32,10 @@ function ToastItem({ toast }: { toast: Toast }) {
 
   return (
     <motion.div
-      layout
+      layout={!reduced}
       role={toast.tone === "info" ? "status" : "alert"}
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, x: 24 }}
-      transition={{ duration: 0.18, ease: "easeOut" }}
-      className={`pointer-events-auto flex w-80 items-start gap-3 rounded-xl border bg-surface p-3 shadow-xl ${TONE[toast.tone]}`}
+      {...preset}
+      className={`pointer-events-auto flex w-80 max-w-[calc(100vw-2rem)] items-start gap-3 rounded-xl border bg-surface p-3 shadow-xl ${TONE[toast.tone]}`}
     >
       <span className={`mt-0.5 ${ICON_TONE[toast.tone]}`}>
         <Icon name="alert" />

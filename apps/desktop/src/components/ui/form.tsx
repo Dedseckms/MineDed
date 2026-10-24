@@ -114,7 +114,7 @@ export interface SegmentedProps<T extends string> {
 
 export function Segmented<T extends string>({ value, options, onChange, ariaLabel }: SegmentedProps<T>) {
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className="inline-flex flex-wrap gap-1 rounded-lg bg-surface-2 p-1">
+    <div role="radiogroup" aria-label={ariaLabel} className="inline-flex w-fit max-w-full flex-wrap gap-1 rounded-lg bg-surface-2 p-1">
       {options.map((o) => (
         <button
           key={o.value}

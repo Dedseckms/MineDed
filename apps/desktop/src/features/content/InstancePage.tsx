@@ -7,7 +7,7 @@ import { qk, useContentList, useInstances, useStartTask } from "../../api/querie
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { Tabs } from "../../components/ui/Tabs";
-import { Badge, ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { Badge, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { type SearchKind, hasShaderLoader, installedOfKind, shaderLoaderFor } from "../../lib/content";
 import { useContentStore } from "../../stores/contentStore";
 import { INSTANCE_TABS, type InstanceTab, useNavStore } from "../../stores/navStore";
@@ -140,9 +140,9 @@ function InstanceContent({ instance }: { instance: Instance }) {
         {tab === "browse" ? (
           <Catalog instance={instance} installed={installed} onOpen={setProject} onInstall={(p) => installProject(p)} />
         ) : content.isPending ? (
-          <Skeleton className="h-64" />
+          <ListSkeleton rows={5} rowClassName="h-14" />
         ) : content.error ? (
-          <ErrorMessage error={content.error} />
+          <ErrorMessage error={content.error} onRetry={() => void content.refetch()} />
         ) : (
           <>
             {tab === "shaders" ? <ShaderHint instance={instance} installed={installed} onInstall={setRequest} /> : null}
@@ -183,8 +183,8 @@ export function InstancePage({ id }: { id: string }) {
   const [exportOpen, setExportOpen] = useState(false);
   const instance = instances.data?.find((i) => i.id === id);
 
-  if (instances.isPending) return <Skeleton className="h-64" />;
-  if (instances.error) return <ErrorMessage error={instances.error} />;
+  if (instances.isPending) return <ListSkeleton rows={3} rowClassName="h-20" />;
+  if (instances.error) return <ErrorMessage error={instances.error} onRetry={() => void instances.refetch()} />;
 
   return (
     <div className="flex flex-col gap-4">

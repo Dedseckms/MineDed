@@ -8,7 +8,7 @@ import { Button } from "../../components/ui/Button";
 import { Card, CardList } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
-import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { isActive, useGameStore } from "../../stores/gameStore";
 import { useNavStore } from "../../stores/navStore";
 import { selectVisibleTasks, useTaskStore } from "../../stores/taskStore";
@@ -164,9 +164,9 @@ function InstanceLibrary() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">{t("instances.count", { count: instances.data?.length ?? 0 })}</p>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button icon={<Icon name="download" />} onClick={() => setImporting(true)}>
             {t("import.button")}
           </Button>
@@ -183,14 +183,11 @@ function InstanceLibrary() {
       ))}
 
       {instances.isPending ? (
-        <div className="grid gap-3">
-          <Skeleton className="h-28" />
-          <Skeleton className="h-28" />
-        </div>
+        <ListSkeleton rows={4} rowClassName="h-28" className="grid gap-3 lg:grid-cols-2" />
       ) : instances.error ? (
-        <ErrorMessage error={instances.error} />
+        <ErrorMessage error={instances.error} onRetry={() => void instances.refetch()} />
       ) : instances.data.length === 0 ? (
-        <EmptyState title={t("instances.empty")}>
+        <EmptyState icon="layers" title={t("instances.empty")}>
           <Button variant="primary" icon={<Icon name="plus" />} onClick={() => setCreating(true)}>
             {t("instances.create")}
           </Button>

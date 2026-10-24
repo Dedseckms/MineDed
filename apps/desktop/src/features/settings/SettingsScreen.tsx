@@ -4,9 +4,10 @@ import { useTranslation } from "react-i18next";
 import type { Language, MemoryCfg, Settings } from "../../bindings";
 import { useSaveSettings, useSettings, useSystemInfo } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
+import { Icon } from "../../components/ui/Icon";
 import { Section } from "../../components/ui/Card";
 import { Field, Segmented, Switch, TextInput } from "../../components/ui/form";
-import { ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import {
   type ProxyDraft,
   type ProxyMode,
@@ -19,10 +20,78 @@ import {
   validateOptionalUrl,
   validateProxy,
 } from "../../lib/validation";
+import { useDraftValue } from "../../hooks/useDraftValue";
+import { ACCENT_PRESETS, isHexColor } from "../../lib/color";
 import { MemoryEditor, useFormatMb } from "../common/MemoryEditor";
 import { VoiceSettingsSection } from "../voice/VoiceSettingsSection";
 
 type ThemeChoice = "dark" | "light" | "system";
+
+/**
+ * Accent swatches + custom colour. The native colour input fires on every drag
+ * step, so custom values are committed after a short pause (no IPC per pixel).
+ */
+export function AccentPicker({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useDraftValue<string | null>(value, onChange);
+  const current = draft?.toLowerCase() ?? null;
+  const custom = current !== null && !(ACCENT_PRESETS as readonly string[]).includes(current);
+  const swatch = (selected: boolean) =>
+    `grid size-8 cursor-pointer place-items-center rounded-full border-2 transition-transform hover:scale-110 ${
+      selected ? "border-text" : "border-transparent"
+    }`;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span id="accent-label" className="text-sm font-medium">
+        {t("settings.accent")}
+      </span>
+      <div role="radiogroup" aria-labelledby="accent-label" className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={current === null}
+          aria-label={t("settings.accentDefault")}
+          title={t("settings.accentDefault")}
+          onClick={() => setDraft(null)}
+          className={`${swatch(current === null)} bg-surface-2 text-muted`}
+        >
+          <Icon name="refresh" className="size-4" />
+        </button>
+        {ACCENT_PRESETS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            role="radio"
+            aria-checked={current === c}
+            aria-label={t("settings.accentSwatch", { color: c })}
+            title={c}
+            onClick={() => setDraft(c)}
+            className={swatch(current === c)}
+          >
+            <span className="size-6 rounded-full" style={{ background: c }} aria-hidden />
+          </button>
+        ))}
+        <label className={`${swatch(custom)} relative overflow-hidden`} title={t("settings.accentCustom")}>
+          <span className="sr-only">{t("settings.accentCustom")}</span>
+          <span
+            className="size-6 rounded-full"
+            style={{ background: custom && current ? current : "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }}
+            aria-hidden
+          />
+          <input
+            type="color"
+            className="absolute inset-0 cursor-pointer opacity-0"
+            value={current ?? "#4ade80"}
+            onChange={(e) => {
+              if (isHexColor(e.target.value)) setDraft(e.target.value.toLowerCase());
+            }}
+          />
+        </label>
+      </div>
+      <p className="text-xs text-muted">{t("settings.accentHint")}</p>
+    </div>
+  );
+}
 
 /** Theme, language and performance flags: saved and applied immediately. */
 function AppearanceSection({ settings }: { settings: Settings }) {
@@ -46,6 +115,7 @@ function AppearanceSection({ settings }: { settings: Settings }) {
           ]}
         />
       </div>
+      <AccentPicker value={settings.accentColor} onChange={(accentColor) => set({ accentColor })} />
       <div className="flex flex-col gap-1.5">
         <span className="text-sm font-medium">{t("settings.language")}</span>
         <Segmented<Language>
@@ -282,7 +352,7 @@ function GameSection({ settings }: { settings: Settings }) {
         </Field>
       </Section>
 
-      <div className="sticky bottom-0 -mx-6 flex items-center justify-end gap-2 border-t border-border bg-bg px-6 py-3">
+      <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t border-border bg-bg px-4 py-3 lg:-mx-6 lg:px-6">
         <ErrorMessage error={save.error} className="mr-auto" />
         {dirty && invalid ? <p className="mr-auto text-xs text-danger">{t("settings.fixErrors")}</p> : null}
         <Button variant="ghost" disabled={!dirty} onClick={() => setDraft(base)}>
@@ -298,8 +368,8 @@ function GameSection({ settings }: { settings: Settings }) {
 
 export function SettingsScreen() {
   const settings = useSettings();
-  if (settings.isPending) return <Skeleton className="h-96" />;
-  if (settings.error) return <ErrorMessage error={settings.error} />;
+  if (settings.isPending) return <ListSkeleton rows={3} rowClassName="h-48" className="flex flex-col gap-6" />;
+  if (settings.error) return <ErrorMessage error={settings.error} onRetry={() => void settings.refetch()} />;
   return (
     <div className="flex flex-col gap-6">
       <AppearanceSection settings={settings.data} />

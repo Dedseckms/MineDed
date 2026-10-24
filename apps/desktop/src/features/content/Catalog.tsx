@@ -8,7 +8,7 @@ import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { VirtualList } from "../../components/ui/VirtualList";
 import { Segmented, Select, Switch, TextInput } from "../../components/ui/form";
-import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { useDebounced } from "../../hooks/useDebounced";
 import {
   SEARCH_KINDS,
@@ -173,15 +173,11 @@ export function Catalog({
       ) : null}
 
       {search.isPending ? (
-        <div className="flex flex-col gap-3">
-          <Skeleton className="h-24" />
-          <Skeleton className="h-24" />
-          <Skeleton className="h-24" />
-        </div>
+        <ListSkeleton rows={4} rowClassName="h-24" className="flex flex-col gap-3" />
       ) : search.error ? (
-        <ErrorMessage error={search.error} />
+        <ErrorMessage error={search.error} onRetry={() => void search.refetch()} />
       ) : items.length === 0 ? (
-        <EmptyState title={t("content.noResults")} />
+        <EmptyState icon="search" title={t("content.noResults")} />
       ) : (
         <>
           <p className="text-xs text-muted" aria-live="polite">
