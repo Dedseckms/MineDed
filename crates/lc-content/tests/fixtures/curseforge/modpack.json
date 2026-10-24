@@ -1,0 +1,35 @@
+{
+  "data": [
+    {
+      "id": 900,
+      "gameId": 432,
+      "name": "Tiny Pack",
+      "slug": "tiny-pack",
+      "links": { "websiteUrl": "https://www.curseforge.com/minecraft/modpacks/tiny-pack" },
+      "summary": "A small modpack",
+      "downloadCount": 500.0,
+      "classId": 4471,
+      "categories": [{ "id": 4481, "name": "Small / Light", "slug": "small-light" }],
+      "authors": [{ "id": 2, "name": "packer" }],
+      "logo": { "thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/1/2/256/256/tiny.png" },
+      "allowModDistribution": true,
+      "latestFilesIndexes": [
+        { "gameVersion": "1.20.1", "fileId": 9000, "filename": "Tiny Pack-1.0.zip", "releaseType": 1, "modLoader": 1 }
+      ]
+    },
+    {
+      "id": 901,
+      "gameId": 432,
+      "name": "Locked Pack",
+      "slug": "locked-pack",
+      "links": { "websiteUrl": "https://www.curseforge.com/minecraft/modpacks/locked-pack" },
+      "summary": "No third-party downloads",
+      "downloadCount": 1.0,
+      "classId": 4471,
+      "categories": [],
+      "authors": [],
+      "allowModDistribution": false,
+      "latestFilesIndexes": []
+    }
+  ]
+}

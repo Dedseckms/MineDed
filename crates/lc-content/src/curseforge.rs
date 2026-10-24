@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use crate::api::{Api, TTL_IMMUTABLE, TTL_META, TTL_SEARCH, TTL_VERSIONS};
 use crate::contract::ContentSource;
-use crate::source::{Catalog, ProjectInfo, RemoteFile, Target, UpdateItem};
+use crate::source::{Catalog, PackFile, ProjectInfo, RemoteFile, Target, UpdateItem};
 use crate::util::{loader_from_str, parse_url};
 
 pub(crate) const CF_API: &str = "https://api.curseforge.com";
@@ -33,17 +33,29 @@ pub(crate) fn no_key_error() -> AppError {
     .detail("source", "curseForge")
 }
 
-/// `CURSEFORGE_API_KEY` from the environment, else from the first `.env` found in `dirs`.
+/// Key embedded at compile time (release CI passes it from a secret); `None` in dev builds.
+const EMBEDDED_KEY: Option<&str> = option_env!("CURSEFORGE_API_KEY");
+
+/// `CURSEFORGE_API_KEY` from the environment, else from the first `.env` found
+/// in `dirs`, else the key embedded into release builds.
 pub(crate) fn find_api_key(dirs: &[PathBuf]) -> Option<String> {
-    if let Ok(v) = std::env::var(ENV_KEY) {
-        let v = v.trim().to_owned();
-        if !v.is_empty() {
-            return Some(v);
-        }
-    }
-    dirs.iter()
-        .find_map(|d| std::fs::read_to_string(d.join(".env")).ok())
-        .and_then(|text| parse_dotenv(&text, ENV_KEY))
+    find_api_key_with(dirs, EMBEDDED_KEY)
+}
+
+fn find_api_key_with(dirs: &[PathBuf], embedded: Option<&str>) -> Option<String> {
+    let nonempty = |v: &str| {
+        let v = v.trim();
+        (!v.is_empty()).then(|| v.to_owned())
+    };
+    std::env::var(ENV_KEY)
+        .ok()
+        .and_then(|v| nonempty(&v))
+        .or_else(|| {
+            dirs.iter()
+                .find_map(|d| std::fs::read_to_string(d.join(".env")).ok())
+                .and_then(|text| parse_dotenv(&text, ENV_KEY))
+        })
+        .or_else(|| embedded.and_then(nonempty))
 }
 
 pub(crate) fn parse_dotenv(text: &str, key: &str) -> Option<String> {
@@ -194,6 +206,8 @@ pub(crate) struct CfFile {
     game_versions: Vec<String>,
     #[serde(default)]
     dependencies: Vec<CfDep>,
+    #[serde(default)]
+    is_server_pack: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -239,6 +253,36 @@ pub(crate) fn loader_type(l: LoaderKind) -> Option<u32> {
     }
 }
 
+fn loader_of_type(t: u32) -> Option<LoaderKind> {
+    match t {
+        1 => Some(LoaderKind::Forge),
+        4 => Some(LoaderKind::Fabric),
+        5 => Some(LoaderKind::Quilt),
+        6 => Some(LoaderKind::NeoForge),
+        _ => None,
+    }
+}
+
+/// Loaders from the file's game versions; modpack files often list none, so
+/// the mod's latestFilesIndexes entry for that file is used as a fallback.
+fn file_loaders(f: &CfFile, m: &CfMod) -> Vec<LoaderKind> {
+    let mut out: Vec<LoaderKind> = f
+        .game_versions
+        .iter()
+        .filter_map(|v| loader_from_str(v))
+        .collect();
+    if out.is_empty() {
+        out.extend(
+            m.latest_files_indexes
+                .iter()
+                .filter(|x| x.file_id == f.id)
+                .filter_map(|x| x.mod_loader.and_then(loader_of_type))
+                .take(1),
+        );
+    }
+    out
+}
+
 fn mod_allows(m: &CfMod) -> bool {
     m.allow_mod_distribution != Some(false)
 }
@@ -265,11 +309,7 @@ pub(crate) fn to_content_version(f: &CfFile, m: &CfMod) -> ContentVersion {
             .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
             .cloned()
             .collect(),
-        loaders: f
-            .game_versions
-            .iter()
-            .filter_map(|v| loader_from_str(v))
-            .collect(),
+        loaders: file_loaders(f, m),
         published: f.file_date.clone(),
         file_name: f.file_name.clone(),
         size: f.file_length,
@@ -406,6 +446,100 @@ impl CurseForgeSource {
             ));
         }
         Ok(out)
+    }
+
+    /// Files of a mod, newest first (server packs excluded).
+    async fn raw_mod_files(&self, m: &CfMod, filter: &ContentFilter) -> AppResult<Vec<CfFile>> {
+        let kind = kind_of_class(m.class_id);
+        let mut url = parse_url(&format!("{}/v1/mods/{}/files", self.base, m.id))?;
+        {
+            let mut p = url.query_pairs_mut();
+            if let Some(mc) = filter.mc.as_deref().filter(|s| !s.is_empty()) {
+                p.append_pair("gameVersion", mc);
+            }
+            if matches!(kind, ContentKind::Mod | ContentKind::Modpack) {
+                if let Some(t) = filter.loader.and_then(loader_type) {
+                    p.append_pair("modLoaderType", &t.to_string());
+                }
+            }
+            p.append_pair("pageSize", "50");
+        }
+        let d: Data<Vec<CfFile>> = self.get(url.as_str(), TTL_VERSIONS).await?;
+        let mut files: Vec<CfFile> = d.data.into_iter().filter(|f| !f.is_server_pack).collect();
+        files.sort_by(|a, b| b.file_date.cmp(&a.file_date).then(b.id.cmp(&a.id)));
+        Ok(files)
+    }
+
+    /// Client zip of a modpack file (`None` = newest release, else newest).
+    /// `allowModDistribution=false` → `ManualDownloadRequired` with the page URL.
+    pub(crate) async fn pack_file(
+        &self,
+        project_id: &str,
+        version_id: Option<&str>,
+    ) -> AppResult<PackFile> {
+        let m = self.raw_mod(project_id).await?;
+        if kind_of_class(m.class_id) != ContentKind::Modpack {
+            return Err(
+                AppError::new(ErrorCode::InvalidInput, "project is not a modpack")
+                    .detail("project", project_id),
+            );
+        }
+        let f = match version_id {
+            Some(vid) => {
+                let f = self
+                    .raw_files(&[numeric(vid)?])
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        AppError::new(ErrorCode::NotFound, "file not found").detail("id", vid)
+                    })?;
+                if f.mod_id != m.id {
+                    return Err(AppError::new(
+                        ErrorCode::InvalidInput,
+                        "file belongs to another project",
+                    )
+                    .detail("id", vid));
+                }
+                f
+            }
+            None => {
+                let files = self.raw_mod_files(&m, &ContentFilter::default()).await?;
+                let pick = files
+                    .iter()
+                    .find(|f| f.release_type == 1)
+                    .or_else(|| files.first())
+                    .cloned();
+                pick.ok_or_else(|| {
+                    AppError::new(ErrorCode::NotFound, "modpack has no files")
+                        .detail("project", project_id)
+                })?
+            }
+        };
+        let rf = remote_file(&f, &m);
+        let Some(url) = rf.url else {
+            return Err(AppError::new(
+                ErrorCode::ManualDownloadRequired,
+                "the author does not allow third-party downloads of this modpack",
+            )
+            .detail("url", rf.manual_url)
+            .detail("fileName", &f.file_name)
+            .detail("projectUrl", mod_page(&m)));
+        };
+        let sha1 = rf.sha1.ok_or_else(|| {
+            AppError::new(ErrorCode::InvalidInput, "modpack file has no sha1")
+                .detail("id", f.id.to_string())
+        })?;
+        Ok(PackFile {
+            version_id: f.id.to_string(),
+            file_name: f.file_name.clone(),
+            url,
+            sha1,
+            sha512: None,
+            size: f.file_length,
+            title: m.name.clone(),
+            icon_url: m.logo.as_ref().and_then(|l| l.thumbnail_url.clone()),
+        })
     }
 
     pub(crate) fn search_url(&self, q: &SearchQuery) -> AppResult<String> {
@@ -549,24 +683,7 @@ impl Catalog for CurseForgeSource {
         filter: &ContentFilter,
     ) -> AppResult<Vec<(ContentVersion, bool)>> {
         let m = self.raw_mod(project_id).await?;
-        let kind = kind_of_class(m.class_id);
-        let mut url = parse_url(&format!("{}/v1/mods/{}/files", self.base, m.id))?;
-        {
-            let mut p = url.query_pairs_mut();
-            if let Some(mc) = filter.mc.as_deref().filter(|s| !s.is_empty()) {
-                p.append_pair("gameVersion", mc);
-            }
-            if matches!(kind, ContentKind::Mod | ContentKind::Modpack) {
-                if let Some(t) = filter.loader.and_then(loader_type) {
-                    p.append_pair("modLoaderType", &t.to_string());
-                }
-            }
-            p.append_pair("pageSize", "50");
-        }
-        let d: Data<Vec<CfFile>> = self.get(url.as_str(), TTL_VERSIONS).await?;
-        let mut files = d.data;
-        // Newest first.
-        files.sort_by(|a, b| b.file_date.cmp(&a.file_date).then(b.id.cmp(&a.id)));
+        let files = self.raw_mod_files(&m, filter).await?;
         Ok(files
             .iter()
             .map(|f| (to_content_version(f, &m), f.release_type == 1))
@@ -682,6 +799,65 @@ mod tests {
         assert_eq!(v.dependencies[1].kind, DependencyKind::Incompatible);
         assert_eq!(v.dependencies[2].kind, DependencyKind::Optional);
         assert!(remote_file(&file, &allowed).url.is_some());
+    }
+
+    #[test]
+    fn modpack_search_and_loader_fallback() {
+        let api = Arc::new(Api::new(
+            Arc::new(crate::api::fake::FakeHttp::default()),
+            std::env::temp_dir(),
+        ));
+        let s = CurseForgeSource::new(api, "k".into());
+        let url = s
+            .search_url(&SearchQuery {
+                source: ContentSourceKind::CurseForge,
+                kind: ContentKind::Modpack,
+                text: "pack".into(),
+                mc: Some("1.20.1".into()),
+                loader: Some(LoaderKind::NeoForge),
+                categories: vec![],
+                sort: SortBy::Downloads,
+                offset: 0,
+                limit: 20,
+            })
+            .unwrap();
+        assert!(url.contains("classId=4471"));
+        assert!(url.contains("modLoaderType=6"));
+        assert!(url.contains("gameVersion=1.20.1"));
+
+        let m: CfMod = serde_json::from_value(serde_json::json!({
+            "id": 7, "name": "Pack", "classId": 4471,
+            "latestFilesIndexes": [{"gameVersion": "1.20.1", "fileId": 70, "modLoader": 6}],
+        }))
+        .unwrap();
+        let f: CfFile = serde_json::from_value(serde_json::json!({
+            "id": 70, "modId": 7, "fileName": "pack.zip", "gameVersions": ["1.20.1"],
+        }))
+        .unwrap();
+        let v = to_content_version(&f, &m);
+        assert_eq!(v.loaders, vec![LoaderKind::NeoForge]);
+        assert_eq!(v.mc_versions, vec!["1.20.1"]);
+        assert_eq!(kind_of_class(m.class_id), ContentKind::Modpack);
+    }
+
+    #[test]
+    fn dotenv_wins_over_embedded_key() {
+        if std::env::var(ENV_KEY).is_ok() {
+            return; // the process environment has priority over both
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "CURSEFORGE_API_KEY=from-file\n").unwrap();
+        let dirs = vec![dir.path().to_path_buf()];
+        assert_eq!(
+            find_api_key_with(&dirs, Some("embedded")).as_deref(),
+            Some("from-file")
+        );
+        assert_eq!(
+            find_api_key_with(&[], Some("embedded")).as_deref(),
+            Some("embedded")
+        );
+        assert_eq!(find_api_key_with(&[], Some("  ")), None);
+        assert_eq!(find_api_key_with(&[], None), None);
     }
 
     #[test]
