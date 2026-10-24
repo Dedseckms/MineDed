@@ -29,7 +29,8 @@
     "soon": "Soon",
     "optional": "Optional",
     "close": "Close",
-    "copyLink": "Copy link"
+    "copyLink": "Copy link",
+    "retry": "Retry"
   },
   "play": {
     "play": "Play",
@@ -192,7 +193,12 @@
       "url": "Server address",
       "hint": "API root of your skin/account server (authlib-injector). Empty = MineUP default.",
       "placeholder": "https://auth.example.com/api/yggdrasil"
-    }
+    },
+    "accent": "Accent color",
+    "accentDefault": "Theme default",
+    "accentCustom": "Custom color",
+    "accentSwatch": "Accent {{color}}",
+    "accentHint": "Adjusted automatically to stay readable in both themes."
   },
   "tasks": {
     "center": "Tasks",

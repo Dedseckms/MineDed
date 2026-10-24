@@ -68,13 +68,33 @@ textarea,
   outline-offset: 2px;
 }
 
-/* Light mode: no blur/backdrop effects (expensive on WebKitGTK). */
+/* Light mode: no blur/backdrop effects (expensive on WebKitGTK) and no animations at all. */
 [data-light-mode="true"] *,
 [data-light-mode="true"] *::before,
 [data-light-mode="true"] *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   filter: none !important;
+  animation: none !important;
+  transition: none !important;
+}
+
+/* High-resolution displays without OS scaling (e.g. 4K at 100%): bump the rem
+   scale so text stays readable; layout widths are rem-based and scale too. */
+@media (min-width: 2400px) and (max-resolution: 1.25dppx) {
+  html {
+    font-size: 112.5%;
+  }
+}
+
+@media (min-width: 3200px) and (max-resolution: 1.25dppx) {
+  html {
+    font-size: 125%;
+  }
+}
+
+body {
+  text-rendering: optimizeLegibility;
 }
 
 /* Reduced motion: kill CSS transitions/animations too (Motion is handled by MotionConfig). */

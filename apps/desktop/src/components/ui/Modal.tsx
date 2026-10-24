@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useId } from "react";
 import { useTranslation } from "react-i18next";
 
-import { useMotionPrefs } from "../../hooks/useAppearance";
+import { useMotionPrefs, useMotionPreset } from "../../hooks/useAppearance";
 import { Button } from "./Button";
 
 export interface ModalProps {
@@ -16,6 +16,8 @@ export interface ModalProps {
 
 export function Modal({ open, onClose, title, children, footer, wide }: ModalProps) {
   const { light } = useMotionPrefs();
+  const backdrop = useMotionPreset("backdrop");
+  const dialog = useMotionPreset("dialog");
   const titleId = useId();
 
   useEffect(() => {
@@ -31,11 +33,8 @@ export function Modal({ open, onClose, title, children, footer, wide }: ModalPro
     <AnimatePresence>
       {open ? (
         <motion.div
-          className={`fixed inset-0 z-50 flex items-center justify-center bg-overlay p-6 ${light ? "" : "backdrop-blur-sm"}`}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
+          className={`fixed inset-0 z-50 flex items-center justify-center bg-overlay p-4 sm:p-6 ${light ? "" : "backdrop-blur-sm"}`}
+          {...backdrop}
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) onClose();
           }}
@@ -45,10 +44,7 @@ export function Modal({ open, onClose, title, children, footer, wide }: ModalPro
             aria-modal="true"
             aria-labelledby={titleId}
             className={`flex max-h-full w-full flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl ${wide ? "max-w-2xl" : "max-w-md"}`}
-            initial={{ opacity: 0, scale: 0.97, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97, y: 8 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
+            {...dialog}
           >
             <h2 id={titleId} className="px-6 pt-5 pb-3 text-lg font-semibold">
               {title}

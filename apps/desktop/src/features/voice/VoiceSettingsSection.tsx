@@ -17,7 +17,7 @@ import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { LevelMeter, PercentSlider } from "../../components/ui/LevelMeter";
-import { ErrorMessage, Skeleton } from "../../components/ui/feedback";
+import { ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { Field, Segmented, Select, Switch } from "../../components/ui/form";
 import { useDraftValue } from "../../hooks/useDraftValue";
 import { deviceValue, devicesOf, fromPercent, toPercent } from "../../lib/voice";
@@ -167,7 +167,7 @@ function VoiceForm({ settings }: { settings: VoiceSettings }) {
 /** Voice settings: mode, PTT key, devices, gains, noise suppression, mic test. */
 export function VoiceSettingsSection() {
   const settings = useVoiceSettings();
-  if (settings.isPending) return <Skeleton className="h-64" />;
+  if (settings.isPending) return <ListSkeleton rows={1} rowClassName="h-64" />;
   if (settings.error) return <ErrorMessage error={settings.error} />;
   return <VoiceForm settings={settings.data} />;
 }

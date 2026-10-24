@@ -40,7 +40,8 @@ export function VirtualList<T>({
       role="list"
       aria-label={ariaLabel}
       className="overflow-y-auto"
-      style={{ height: viewport }}
+      // Never taller than ~70% of the window (1366x768): the page itself keeps scrolling.
+      style={{ height: viewport, maxHeight: "70vh" }}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
     >
       <div style={{ height: items.length * rowHeight, position: "relative" }}>

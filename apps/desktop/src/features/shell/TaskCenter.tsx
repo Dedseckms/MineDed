@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
-import { useMotionPrefs } from "../../hooks/useAppearance";
+import { useMotionPrefs, useMotionPreset } from "../../hooks/useAppearance";
 import { selectRunningCount, selectVisibleTasks, useTaskStore } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 
@@ -13,6 +13,7 @@ import { TaskProgress } from "../tasks/TaskProgress";
 export function TaskCenter() {
   const { t } = useTranslation();
   const { light } = useMotionPrefs();
+  const popover = useMotionPreset("popover");
   const [open, setOpen] = useState(false);
   const tasks = useTaskStore(useShallow(selectVisibleTasks));
   const running = useTaskStore(selectRunningCount);
@@ -59,11 +60,8 @@ export function TaskCenter() {
           <motion.div
             role="dialog"
             aria-label={t("tasks.center")}
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.15 }}
-            className={`absolute right-0 z-40 mt-2 flex max-h-[70vh] w-96 flex-col overflow-hidden rounded-xl border border-border shadow-2xl ${
+            {...popover}
+            className={`absolute right-0 z-40 mt-2 flex max-h-[70vh] w-[min(24rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-border shadow-2xl ${
               light ? "bg-surface" : "bg-surface/90 backdrop-blur-md"
             }`}
           >
