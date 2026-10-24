@@ -45,6 +45,8 @@ struct MockDl {
     files: Mutex<HashMap<String, Vec<u8>>>,
     requested: Mutex<Vec<DownloadReq>>,
     offline: AtomicBool,
+    /// URLs answering 404 in `fetch_many`.
+    missing: Mutex<Vec<String>>,
 }
 
 impl MockDl {
@@ -62,6 +64,15 @@ impl Downloader for MockDl {
     async fn fetch_many(&self, reqs: Vec<DownloadReq>, sink: &dyn ProgressSink) -> AppResult<()> {
         if self.offline.load(Ordering::SeqCst) {
             return Err(Self::offline_err());
+        }
+        if let Some(r) = reqs.iter().find(|r| {
+            self.missing
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|m| m == r.urls[0].as_str())
+        }) {
+            return Err(AppError::new(ErrorCode::NotFound, r.urls[0].to_string()));
         }
         let total = reqs.len() as u64;
         for (i, r) in reqs.iter().enumerate() {
@@ -412,6 +423,28 @@ async fn create_vanilla_and_crud() {
 
     let rec = core.recommend_memory(copy.id).await.unwrap();
     assert!(rec.max_mb >= rec.min_mb);
+}
+
+#[tokio::test]
+async fn missing_logging_config_is_optional() {
+    let w = world();
+    w.dl.missing.lock().unwrap().push(
+        "https://piston-data.mojang.com/v1/objects/bd65e7d2e3c237be76cfbef4c2405033d7f91521/client-1.12.xml"
+            .into(),
+    );
+    let core = services(&w, Arc::default());
+    core.create(spec("nolog", "1.21.1"), &RecSink::default())
+        .await
+        .unwrap();
+    assert!(w.root.join("versions/1.21.1/1.21.1.jar").exists());
+    assert!(!w.root.join("assets/log_configs/client-1.12.xml").exists());
+
+    // Served normally → downloaded.
+    w.dl.missing.lock().unwrap().clear();
+    core.create(spec("log", "1.21.1"), &RecSink::default())
+        .await
+        .unwrap();
+    assert!(w.root.join("assets/log_configs/client-1.12.xml").exists());
 }
 
 #[tokio::test]

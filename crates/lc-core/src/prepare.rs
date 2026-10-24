@@ -128,6 +128,40 @@ async fn fetch_stage(
     dl.fetch_many(reqs, &staged).await
 }
 
+/// Fetches the log4j config and renders its JVM argument. Optional: some
+/// mirrors (BMCLAPI) 404 it, so a failed download only drops the argument and
+/// the game logs plain text instead (the log parser handles both forms).
+async fn fetch_log_config(
+    paths: &Paths,
+    dl: &dyn Downloader,
+    profile: &VersionJson,
+    verify: bool,
+    sink: &dyn ProgressSink,
+) -> AppResult<Option<String>> {
+    let Some(c) = profile.logging.as_ref().and_then(|l| l.client.as_ref()) else {
+        return Ok(None);
+    };
+    let dest = safe_component(&paths.assets().join("log_configs"), &c.file.id)?;
+    let r = req(
+        &c.file.url,
+        c.file.sha1.clone(),
+        c.file.size,
+        dest.clone(),
+        ResourceKind::VersionMeta,
+    )?;
+    match fetch_stage(dl, vec![r], verify, "stages.versionMeta", sink).await {
+        Ok(()) => Ok(Some(c.argument.replace("${path}", &dest.to_string_lossy()))),
+        Err(e) if e.code == ErrorCode::Cancelled => Err(e),
+        Err(e) => {
+            sink.log(&format!(
+                "logging config unavailable, using plain console output: {}",
+                e.message
+            ));
+            Ok(None)
+        }
+    }
+}
+
 /// Ensures all files of `profile` exist. `verify = false` skips files that are
 /// already present (used by `LaunchOpts::offline_fast`).
 pub(crate) async fn prepare(
@@ -160,20 +194,8 @@ pub(crate) async fn prepare(
             ResourceKind::VersionMeta,
         )?);
     }
-    let log_cfg = profile.logging.as_ref().and_then(|l| l.client.clone());
-    let mut log_arg = None;
-    if let Some(c) = &log_cfg {
-        let dest = safe_component(&assets_root.join("log_configs"), &c.file.id)?;
-        meta.push(req(
-            &c.file.url,
-            c.file.sha1.clone(),
-            c.file.size,
-            dest.clone(),
-            ResourceKind::VersionMeta,
-        )?);
-        log_arg = Some(c.argument.replace("${path}", &dest.to_string_lossy()));
-    }
     fetch_stage(dl, meta, verify, "stages.versionMeta", sink).await?;
+    let log_arg = fetch_log_config(paths, dl, &profile, verify, sink).await?;
 
     // Stage 2: client jar.
     let client_jar = client_jar_path(paths, &profile)?;
