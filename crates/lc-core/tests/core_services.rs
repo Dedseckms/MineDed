@@ -433,11 +433,21 @@ async fn missing_logging_config_is_optional() {
             .into(),
     );
     let core = services(&w, Arc::default());
-    core.create(spec("nolog", "1.21.1"), &RecSink::default())
+    let inst = core
+        .create(spec("nolog", "1.21.1"), &RecSink::default())
         .await
         .unwrap();
     assert!(w.root.join("versions/1.21.1/1.21.1.jar").exists());
     assert!(!w.root.join("assets/log_configs/client-1.12.xml").exists());
+    // Bundled plain config is written to the instance dir instead.
+    let fallback = w
+        .root
+        .join("instances")
+        .join(inst.id.to_string())
+        .join("log4j2-fallback.xml");
+    let xml = std::fs::read_to_string(fallback).unwrap();
+    assert!(xml.contains("%msg{nolookups}"));
+    assert!(!xml.contains("${"));
 
     // Served normally → downloaded.
     w.dl.missing.lock().unwrap().clear();

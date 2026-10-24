@@ -26,8 +26,8 @@ pub(crate) struct Prepared {
     pub libs: Vec<LibFile>,
     pub client_jar: PathBuf,
     pub assets: AssetsInfo,
-    /// Rendered `-Dlog4j.configurationFile=...` argument.
-    pub log_arg: Option<String>,
+    /// Rendered `-Dlog4j.configurationFile=...` (and fallback) JVM arguments.
+    pub log_args: Vec<String>,
 }
 
 pub(crate) fn client_jar_id(profile: &VersionJson) -> &str {
@@ -128,18 +128,45 @@ async fn fetch_stage(
     dl.fetch_many(reqs, &staged).await
 }
 
-/// Fetches the log4j config and renders its JVM argument. Optional: some
-/// mirrors (BMCLAPI) 404 it, so a failed download only drops the argument and
-/// the game logs plain text instead (the log parser handles both forms).
+/// Plain-console log4j2 config used when Mojang's one cannot be downloaded.
+/// `%msg{nolookups}` keeps old log4j (MC 1.12–1.16) safe from Log4Shell;
+/// no `${...}` lookups anywhere.
+pub(crate) const FALLBACK_LOG4J: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN" packages="">
+  <Appenders>
+    <Console name="SysOut" target="SYSTEM_OUT">
+      <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg{nolookups}%n"/>
+    </Console>
+    <File name="File" fileName="logs/latest.log" append="false">
+      <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg{nolookups}%n"/>
+    </File>
+  </Appenders>
+  <Loggers>
+    <Root level="info">
+      <AppenderRef ref="SysOut"/>
+      <AppenderRef ref="File"/>
+    </Root>
+  </Loggers>
+</Configuration>
+"#;
+
+/// File name of [`FALLBACK_LOG4J`] inside the instance dir.
+pub(crate) const FALLBACK_LOG4J_FILE: &str = "log4j2-fallback.xml";
+
+/// Fetches the log4j config and renders its JVM arguments. Optional: some
+/// mirrors (BMCLAPI) 404 it; then a bundled plain-text config is written to the
+/// instance dir and `formatMsgNoLookups` is set (log4j >= 2.10). The log
+/// parser handles both XML and plain output.
 async fn fetch_log_config(
     paths: &Paths,
     dl: &dyn Downloader,
     profile: &VersionJson,
+    game_dir: &Path,
     verify: bool,
     sink: &dyn ProgressSink,
-) -> AppResult<Option<String>> {
+) -> AppResult<Vec<String>> {
     let Some(c) = profile.logging.as_ref().and_then(|l| l.client.as_ref()) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let dest = safe_component(&paths.assets().join("log_configs"), &c.file.id)?;
     let r = req(
@@ -150,14 +177,25 @@ async fn fetch_log_config(
         ResourceKind::VersionMeta,
     )?;
     match fetch_stage(dl, vec![r], verify, "stages.versionMeta", sink).await {
-        Ok(()) => Ok(Some(c.argument.replace("${path}", &dest.to_string_lossy()))),
+        Ok(()) => Ok(vec![c.argument.replace("${path}", &dest.to_string_lossy())]),
         Err(e) if e.code == ErrorCode::Cancelled => Err(e),
         Err(e) => {
             sink.log(&format!(
-                "logging config unavailable, using plain console output: {}",
+                "logging config unavailable, using bundled plain config: {}",
                 e.message
             ));
-            Ok(None)
+            let dir = game_dir.parent().unwrap_or(game_dir);
+            tokio::fs::create_dir_all(dir)
+                .await
+                .map_err(|e| io_err(dir, e))?;
+            let file = dir.join(FALLBACK_LOG4J_FILE);
+            tokio::fs::write(&file, FALLBACK_LOG4J)
+                .await
+                .map_err(|e| io_err(&file, e))?;
+            Ok(vec![
+                format!("-Dlog4j.configurationFile={}", file.to_string_lossy()),
+                "-Dlog4j2.formatMsgNoLookups=true".to_owned(),
+            ])
         }
     }
 }
@@ -195,7 +233,7 @@ pub(crate) async fn prepare(
         )?);
     }
     fetch_stage(dl, meta, verify, "stages.versionMeta", sink).await?;
-    let log_arg = fetch_log_config(paths, dl, &profile, verify, sink).await?;
+    let log_args = fetch_log_config(paths, dl, &profile, game_dir, verify, sink).await?;
 
     // Stage 2: client jar.
     let client_jar = client_jar_path(paths, &profile)?;
@@ -268,7 +306,7 @@ pub(crate) async fn prepare(
         libs,
         client_jar,
         assets,
-        log_arg,
+        log_args,
     })
 }
 
