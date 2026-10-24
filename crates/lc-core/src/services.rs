@@ -29,6 +29,7 @@ use crate::java::{command, game_executable, JavaService};
 use crate::launch::{
     build_plan, extract_natives, redacted, render_args, supports_quick_play, PlanInputs,
 };
+use crate::logparse::Log4jParser;
 use crate::meta::{Env, LibUse, VersionJson};
 use crate::prepare::{prepare, Prepared};
 use crate::system;
@@ -529,21 +530,53 @@ impl Drop for RunGuard<'_> {
     }
 }
 
-/// `fabric-loader-0.16.9-1.21.1` → `0.16.9` (best effort, for display only).
+/// Loader version from an installed profile id (best effort, for display only):
+/// `fabric-loader-0.16.9-1.21.1`, `quilt-loader-0.26.4-1.21.1` → `0.16.9`/`0.26.4`;
+/// `1.20.1-forge-47.4.28` → `47.4.28`; `neoforge-21.1.77` → `21.1.77`;
+/// legacy `1.7.10-Forge10.13.4.1614-1.7.10` → `10.13.4.1614`.
 fn loader_version_from_profile(profile: &str, mc: &str) -> Option<String> {
-    let trimmed = profile.strip_suffix(&format!("-{mc}"))?;
-    trimmed.rsplit('-').next().map(str::to_owned)
+    let mut s = profile;
+    let mut had_mc = false;
+    if let Some(t) = s.strip_suffix(&format!("-{mc}")) {
+        s = t;
+        had_mc = true;
+    }
+    if let Some(t) = s.strip_prefix(&format!("{mc}-")) {
+        s = t;
+        had_mc = true;
+    }
+    // ASCII lowercasing keeps byte offsets, so indices map back onto `s`.
+    let lower = s.to_ascii_lowercase();
+    const MARKERS: [&str; 5] = [
+        "fabric-loader-",
+        "quilt-loader-",
+        "neoforge-",
+        "forge-",
+        "forge",
+    ];
+    let version = MARKERS
+        .iter()
+        .find_map(|m| lower.find(m).map(|i| &s[i + m.len()..]))
+        .or_else(|| had_mc.then(|| s.rsplit('-').next().unwrap_or(s)))?;
+    let version = version.trim_matches('-');
+    (!version.is_empty() && version != mc).then(|| version.to_owned())
 }
 
 async fn pump(stream: impl AsyncRead + Unpin, tx: mpsc::Sender<String>) {
     let mut reader = BufReader::new(stream);
     let mut buf = Vec::new();
+    let mut parser = Log4jParser::default();
     while let Ok(true) = read_line_capped(&mut reader, &mut buf, MAX_LOG_LINE).await {
-        let line = String::from_utf8_lossy(&buf)
-            .trim_end_matches(['\r', '\n'])
-            .to_owned();
-        if tx.send(line).await.is_err() {
-            break;
+        let line = String::from_utf8_lossy(&buf);
+        for out in parser.feed(line.trim_end_matches(['\r', '\n'])) {
+            if tx.send(out).await.is_err() {
+                return;
+            }
+        }
+    }
+    for out in parser.finish() {
+        if tx.send(out).await.is_err() {
+            return;
         }
     }
 }
@@ -800,6 +833,23 @@ mod tests {
             Some("0.16.9")
         );
         assert_eq!(loader_version_from_profile("x", "1.21.1"), None);
+        let cases = [
+            ("quilt-loader-0.26.4-1.21.1", "1.21.1", "0.26.4"),
+            ("1.20.1-forge-47.4.28", "1.20.1", "47.4.28"),
+            ("1.12.2-forge-14.23.5.2860", "1.12.2", "14.23.5.2860"),
+            ("1.7.10-Forge10.13.4.1614-1.7.10", "1.7.10", "10.13.4.1614"),
+            ("neoforge-21.1.77", "1.21.1", "21.1.77"),
+            ("1.20.1-neoforge-47.1.106", "1.20.1", "47.1.106"),
+            ("1.21.1-custom-2.0", "1.21.1", "2.0"),
+        ];
+        for (profile, mc, want) in cases {
+            assert_eq!(
+                loader_version_from_profile(profile, mc).as_deref(),
+                Some(want),
+                "{profile}"
+            );
+        }
+        assert_eq!(loader_version_from_profile("1.21.1", "1.21.1"), None);
     }
 
     struct Rec(std::sync::Mutex<Vec<Vec<String>>>);
@@ -831,6 +881,20 @@ mod tests {
         assert!(!read_line_capped(&mut reader, &mut buf, MAX_LOG_LINE)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn pump_parses_log4j_xml() {
+        let data = b"<log4j:Event logger=\"a\" timestamp=\"1\" level=\"INFO\" thread=\"Render thread\">\r\n  <log4j:Message><![CDATA[Hello]]></log4j:Message>\r\n</log4j:Event>\r\nplain\n";
+        let (tx, mut rx) = mpsc::channel(16);
+        pump(&data[..], tx).await;
+        let mut got = Vec::new();
+        while let Some(l) = rx.recv().await {
+            got.push(l);
+        }
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(got[0].ends_with("[Render thread/INFO]: Hello"), "{got:?}");
+        assert_eq!(got[1], "plain");
     }
 
     #[tokio::test]

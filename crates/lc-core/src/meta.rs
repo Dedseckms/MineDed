@@ -293,7 +293,16 @@ impl Env {
             "macos" => "osx",
             _ => "linux",
         };
-        let os_version = sysinfo::System::os_version().unwrap_or_default();
+        // Mirror Java's `os.version`, which the rules were written against:
+        // "10.0" on Windows 10/11 (sysinfo reports e.g. "11 (26100)"), the
+        // kernel release on Linux.
+        let os_version = if os == "windows" {
+            "10.0".to_owned()
+        } else {
+            sysinfo::System::kernel_version()
+                .or_else(sysinfo::System::os_version)
+                .unwrap_or_default()
+        };
         Self {
             os,
             arch: std::env::consts::ARCH,
@@ -348,8 +357,9 @@ impl Rule {
     }
 }
 
-/// Full match like Java's `Matcher::matches()`; compiled patterns are cached
-/// (invalid ones cache as "never matches").
+/// Regex search (Java `Matcher::find()`, as Prism/MultiMC do): Mojang writes
+/// prefix patterns like `^10\.` meant to match `10.0`. Compiled patterns are
+/// cached (invalid ones cache as "never matches").
 fn version_matches(pattern: &str, value: &str) -> bool {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<Regex>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -357,7 +367,7 @@ fn version_matches(pattern: &str, value: &str) -> bool {
         return false;
     };
     map.entry(pattern.to_owned())
-        .or_insert_with(|| Regex::new(&format!("^(?:{pattern})$")).ok())
+        .or_insert_with(|| Regex::new(pattern).ok())
         .as_ref()
         .map(|re| re.is_match(value))
         .unwrap_or(false)
@@ -473,9 +483,30 @@ fn non_empty(url: &str) -> Option<String> {
     (!url.is_empty()).then(|| url.to_owned())
 }
 
+/// Modern jsons list `natives-<os>-arm64`/`-x86`/`-arm32` jars for every arch with
+/// only an OS rule; skip the ones for another CPU (an unsuffixed classifier is x64).
+fn foreign_arch_natives(lib: &Library, env: &Env) -> bool {
+    let Some(classifier) = parse_maven(&lib.name).and_then(|m| m.classifier) else {
+        return false;
+    };
+    let Some((_, arch)) = classifier
+        .strip_prefix("natives-")
+        .and_then(|r| r.rsplit_once('-'))
+    else {
+        return false;
+    };
+    match arch {
+        "arm64" | "aarch64" => env.arch != "aarch64",
+        "x86" => env.arch != "x86",
+        "arm32" => env.arch != "arm",
+        "x86_64" => env.arch != "x86_64",
+        _ => false,
+    }
+}
+
 /// Files of one library for `env` (empty when its rules exclude this platform).
 pub(crate) fn resolve_library(lib: &Library, env: &Env) -> Vec<LibFile> {
-    if !rules_allow(lib.rules.as_deref().unwrap_or(&[]), env) {
+    if !rules_allow(lib.rules.as_deref().unwrap_or(&[]), env) || foreign_arch_natives(lib, env) {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -662,12 +693,15 @@ mod tests {
         assert!(rules_allow(&only_x86, &env("windows", "x86")));
         assert!(!rules_allow(&only_x86, &env("windows", "x86_64")));
 
-        // Full match, like Java `matches()`: a prefix pattern alone does not match.
+        // Search semantics: Mojang's prefix pattern matches Java's "10.0".
         let win10_prefix: Vec<Rule> = serde_json::from_str(
             r#"[{"action":"allow","os":{"name":"windows","version":"^10\\."}}]"#,
         )
         .unwrap();
-        assert!(!rules_allow(&win10_prefix, &env("windows", "x86_64")));
+        assert!(rules_allow(&win10_prefix, &env("windows", "x86_64")));
+        let mut win7 = env("windows", "x86_64");
+        win7.os_version = "6.1".into();
+        assert!(!rules_allow(&win10_prefix, &win7));
         let win10_full: Vec<Rule> = serde_json::from_str(
             r#"[{"action":"allow","os":{"name":"windows","version":"^10\\..*$"}}]"#,
         )
@@ -774,6 +808,14 @@ mod tests {
             .iter()
             .any(|f| f.path.ends_with("lwjgl-3.3.3-natives-linux.jar")));
         assert!(!linux.iter().any(|f| f.path.contains("natives-windows")));
+        // Other-CPU natives are skipped; the matching ones are kept.
+        assert!(!win.iter().any(|f| f.path.contains("natives-windows-arm64")));
+        assert!(!win.iter().any(|f| f.path.contains("natives-windows-x86")));
+        let arm = resolve_libraries(&v.libraries, &env("windows", "aarch64")).unwrap();
+        assert!(arm
+            .iter()
+            .any(|f| f.path.ends_with("lwjgl-3.3.3-natives-windows-arm64.jar")));
+        assert!(!arm.iter().any(|f| f.path.contains("natives-windows-x86")));
     }
 
     #[test]
