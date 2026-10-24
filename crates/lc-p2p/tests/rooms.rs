@@ -1049,6 +1049,68 @@ async fn voice_room_via_relay_three_peers() {
     host.rooms.leave().await.unwrap();
 }
 
+/// Regression: a late joiner over relay must end up with the room's current
+/// voice states (sent right after its `Welcome`), and speaker indexes are
+/// never reused within a room.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn voice_late_joiner_gets_states_and_fresh_index() {
+    let (host, a, b, _hub) = voice_trio(true, None).await;
+    let id = |s: &Side| s.rooms.endpoint_addr().unwrap().id.to_string();
+    let a_id = id(&a);
+    a.rooms.set_voice_state(true, false).await.unwrap();
+    host.rooms.set_voice_state(false, true).await.unwrap();
+    eventually("host sees alice speaking", || {
+        last_state(&host.rec)
+            .is_some_and(|s| s.peers.iter().any(|p| p.peer_id == a_id && p.speaking))
+    })
+    .await;
+
+    let mut last_index = 1u8;
+    for round in 0..30 {
+        b.rooms.leave().await.unwrap();
+        eventually("host drops bob", || {
+            last_state(&host.rec).is_some_and(|s| s.peers.len() == 1)
+        })
+        .await;
+        b.rooms.join("ABCD-1234", None, None).await.unwrap();
+        let b_id = id(&b);
+        eventually(
+            &format!("round {round}: bob sees current voice states"),
+            || {
+                last_state(&b.rec).is_some_and(|s| {
+                    s.peers
+                        .iter()
+                        .any(|p| p.peer_id == a_id && p.speaking && !p.muted)
+                        && s.peers.iter().any(|p| p.name == "Host" && p.muted)
+                })
+            },
+        )
+        .await;
+        eventually("alice sees bob", || {
+            last_state(&a.rec).is_some_and(|s| s.peers.iter().any(|p| p.peer_id == b_id))
+        })
+        .await;
+
+        // Alice keeps her slot; Bob gets a fresh one on every rejoin.
+        a.rooms.send(None, &frame(0, 1, b"a")).await.unwrap();
+        let (from, data) = recv_dgram(&b).await;
+        assert_eq!(from, a_id);
+        assert_eq!(VoiceHeader::decode(&data).unwrap().0.speaker, 1);
+        let _ = recv_dgram(&host).await;
+        b.rooms.send(None, &frame(0, 1, b"b")).await.unwrap();
+        let (from, data) = recv_dgram(&host).await;
+        assert_eq!(from, b_id);
+        let idx = VoiceHeader::decode(&data).unwrap().0.speaker;
+        assert!(idx > last_index, "round {round}: index {idx} reused");
+        last_index = idx;
+        let (from, _) = recv_dgram(&a).await;
+        assert_eq!(from, b_id);
+    }
+    b.rooms.leave().await.unwrap();
+    a.rooms.leave().await.unwrap();
+    host.rooms.leave().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn voice_room_password_and_online_host() {
     let (hub_url, hub) = spawn_hub(vec![]).await;
