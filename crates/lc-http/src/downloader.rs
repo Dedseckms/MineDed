@@ -27,6 +27,11 @@ use crate::progress::Progress;
 use crate::route::{self, HostMemory};
 use crate::sysproxy::{self, SystemProxy};
 
+/// Refused / reset / timed out / blocked, as opposed to an HTTP error status.
+fn is_transport(err: &AppError) -> bool {
+    matches!(err.code, ErrorCode::Network | ErrorCode::Blocked) && !errors::is_http_status(err)
+}
+
 const MAX_BACKOFF: Duration = Duration::from_secs(8);
 /// How often the OS proxy settings are re-read.
 const SYSTEM_RECHECK: Duration = Duration::from_secs(15);
@@ -34,6 +39,9 @@ const HASH_BUF: usize = 64 * 1024;
 /// Target of the client handed out for `Route::Proxied` while no proxy is
 /// configured: the discard port on loopback, so every request fails fast.
 const UNCONFIGURED_PROXY: &str = "http://127.0.0.1:9";
+/// How long a host that failed at the transport level (refused, reset,
+/// timed out) stays demoted: one attempt per URL, mirrors first.
+const UNREACHABLE_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Production implementation of [`Downloader`].
 ///
@@ -49,6 +57,8 @@ pub struct HttpDownloader {
     sources: Mutex<Sources>,
     /// Hosts that `Route::Auto` currently sends to the proxy first.
     memory: Arc<HostMemory>,
+    /// Hosts that recently failed at the transport level on every route.
+    unreachable: HostMemory,
     /// `client(Route::Proxied)` without a proxy: every request fails.
     unconfigured: reqwest::Client,
     prefer_mirrors: AtomicBool,
@@ -164,6 +174,7 @@ impl HttpDownloader {
             routed: RwLock::new(routed),
             sources: Mutex::new(sources),
             memory,
+            unreachable: HostMemory::new(UNREACHABLE_TTL),
             unconfigured,
             cfg,
         })
@@ -202,9 +213,21 @@ impl HttpDownloader {
                 Err(fail) => last_err = Some(fail.err),
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            AppError::new(ErrorCode::InvalidInput, "no URL candidates").detail("url", url.as_str())
-        }))
+        Err(match last_err {
+            Some(e) => self.with_hint(e),
+            None => AppError::new(ErrorCode::InvalidInput, "no URL candidates")
+                .detail("url", url.as_str()),
+        })
+    }
+
+    /// Every candidate failed at the transport level and there is no proxy:
+    /// tells the UI to suggest one (`hint=useProxy`).
+    fn with_hint(&self, err: AppError) -> AppError {
+        if is_transport(&err) && self.routed().proxy.is_none() {
+            err.detail("hint", "useProxy")
+        } else {
+            err
+        }
     }
 
     fn routed(&self) -> Routed {
@@ -299,51 +322,74 @@ impl HttpDownloader {
         let legs = self.legs(url, route).map_err(AttemptError::fatal)?;
         let n = legs.len();
         let mut last: Option<AttemptError> = None;
-        for (i, (leg, client)) in legs.into_iter().enumerate() {
-            let has_next = i + 1 < n;
-            for attempt in 0..self.cfg.attempts_per_url {
-                if cancel.is_some_and(CancelToken::is_cancelled) {
-                    return Err(AttemptError::fatal(errors::cancelled()));
-                }
-                let fail = match op(client.clone()).await {
-                    Ok(v) => {
-                        if i > 0 {
-                            match leg {
-                                Leg::Proxy => self.memory.remember(url),
-                                Leg::Direct => self.memory.forget(url),
+        // A host that just failed at the transport level gets one try per
+        // URL, so a blocked origin costs one timeout before the mirror.
+        let attempts = if self.unreachable.contains(url) {
+            1
+        } else {
+            self.cfg.attempts_per_url
+        };
+        let res = 'legs: {
+            for (i, (leg, client)) in legs.into_iter().enumerate() {
+                let has_next = i + 1 < n;
+                for attempt in 0..attempts {
+                    if cancel.is_some_and(CancelToken::is_cancelled) {
+                        return Err(AttemptError::fatal(errors::cancelled()));
+                    }
+                    let fail = match op(client.clone()).await {
+                        Ok(v) => {
+                            if i > 0 {
+                                match leg {
+                                    Leg::Proxy => self.memory.remember(url),
+                                    Leg::Direct => self.memory.forget(url),
+                                }
+                            }
+                            break 'legs Ok(v);
+                        }
+                        Err(fail) => fail,
+                    };
+                    if fail.is_terminal() {
+                        break 'legs Err(fail);
+                    }
+                    tracing::debug!(url = %url, ?leg, attempt, error = %fail.err, "attempt failed");
+                    let escalate_now = has_next
+                        && route::worth_proxy(&fail.err)
+                        && !errors::is_http_status(&fail.err);
+                    let retry = fail.retry && !escalate_now && attempt + 1 < attempts;
+                    let delay = self.backoff(attempt, fail.retry_after);
+                    last = Some(fail);
+                    if !retry {
+                        break;
+                    }
+                    match cancel {
+                        Some(c) => {
+                            if let Err(e) = sleep_or_cancel(delay, c).await {
+                                break 'legs Err(AttemptError::fatal(e));
                             }
                         }
-                        return Ok(v);
+                        None => tokio::time::sleep(delay).await,
                     }
-                    Err(fail) => fail,
-                };
-                if fail.is_terminal() {
-                    return Err(fail);
                 }
-                tracing::debug!(url = %url, ?leg, attempt, error = %fail.err, "attempt failed");
-                let escalate_now =
-                    has_next && route::worth_proxy(&fail.err) && !errors::is_http_status(&fail.err);
-                let retry = fail.retry && !escalate_now && attempt + 1 < self.cfg.attempts_per_url;
-                let delay = self.backoff(attempt, fail.retry_after);
-                last = Some(fail);
-                if !retry {
+                let Some(fail) = &last else { break };
+                if !has_next || !route::worth_proxy(&fail.err) {
                     break;
                 }
-                match cancel {
-                    Some(c) => sleep_or_cancel(delay, c)
-                        .await
-                        .map_err(AttemptError::fatal)?,
-                    None => tokio::time::sleep(delay).await,
+                tracing::info!(url = %url, from = ?leg, error = %fail.err, "route failed; trying the other route");
+            }
+            Err(last.unwrap_or_else(|| {
+                AttemptError::fatal(AppError::internal("no download attempt made"))
+            }))
+        };
+        match &res {
+            Ok(_) => self.unreachable.forget(url),
+            Err(fail) if is_transport(&fail.err) => {
+                if self.unreachable.insert(url).is_some() {
+                    tracing::info!(url = %url, "host unreachable; demoted for a while");
                 }
             }
-            let Some(fail) = &last else { break };
-            if !has_next || !route::worth_proxy(&fail.err) {
-                break;
-            }
-            tracing::info!(url = %url, from = ?leg, error = %fail.err, "route failed; trying the other route");
+            Err(_) => {}
         }
-        Err(last
-            .unwrap_or_else(|| AttemptError::fatal(AppError::internal("no download attempt made"))))
+        res
     }
 
     fn host_semaphore(&self, url: &Url) -> Arc<Semaphore> {
@@ -361,9 +407,15 @@ impl HttpDownloader {
     /// Candidate order per the mirror trust policy (CONTRACTS §2): third-party
     /// mirrors may go first (`prefer_mirrors`) only when the result is
     /// verified by SHA-1; unverified requests always try the original first.
+    /// Verified requests also move recently unreachable hosts to the end.
     fn candidates(&self, urls: &[Url], verified: bool) -> Vec<Url> {
         let prefer = verified && self.prefer_mirrors.load(Ordering::Relaxed);
-        mirrors::expand_all(urls, self.cfg.use_bmclapi, prefer)
+        let mut out = mirrors::expand_all(urls, self.cfg.use_bmclapi, prefer);
+        if verified {
+            // Stable: the original order is kept within each group.
+            out.sort_by_key(|u| self.unreachable.contains(u));
+        }
+        out
     }
 
     /// Serialises work on one destination path; entries are dropped when idle.
@@ -497,7 +549,8 @@ impl HttpDownloader {
             }
         }
         prog.rollback(counted.swap(0, Ordering::Relaxed));
-        let err = last_err.unwrap_or_else(|| AppError::internal("no download attempt made"));
+        let err = self
+            .with_hint(last_err.unwrap_or_else(|| AppError::internal("no download attempt made")));
         tracing::warn!(dest = %req.dest.display(), error = %err, "download failed");
         Err(err.detail("path", req.dest.display().to_string()))
     }
