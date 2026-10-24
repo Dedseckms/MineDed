@@ -530,32 +530,39 @@ export type SearchQuery = {
 	limit: number,
 };
 
-/**  Global launcher settings (`settings_get` / `settings_set`). */
+/**
+ *  Global launcher settings (`settings_get` / `settings_set`).
+ *  Missing fields (older settings files) take their `Default` values.
+ */
 export type Settings = {
-	language: Language,
-	theme: Theme,
+	language?: Language,
+	theme?: Theme,
 	/**  Accent colour as #rrggbb; None = theme default. */
-	accentColor: string | null,
+	accentColor?: string | null,
+	/**  Built-in background id (UI-defined); `None` = default. */
+	background?: string | null,
+	/**  Translucent window (Mica/Acrylic where supported). Ignored in light mode. */
+	translucent?: boolean,
 	/**  No blur, reduced motion, fewer previews. Auto-enabled on weak hardware. */
-	lightMode: boolean,
-	reduceMotion: boolean,
+	lightMode?: boolean,
+	reduceMotion?: boolean,
 	/**  Root for instances, libraries, assets. `None` = OS default data dir. */
-	gameDir: string | null,
-	defaultMemory: MemoryCfg,
+	gameDir?: string | null,
+	defaultMemory?: MemoryCfg,
 	/**  Global Java override; per-instance config wins. */
-	javaPath: string | null,
-	defaultJvmArgs: string[],
-	maxParallelDownloads: number,
+	javaPath?: string | null,
+	defaultJvmArgs?: string[],
+	maxParallelDownloads?: number,
 	/**  Prefer mirrors (BMCLAPI, own mirror) over official hosts. */
-	preferMirrors: boolean,
+	preferMirrors?: boolean,
 	/**  Manual proxy; `None` = direct (or built-in VPN when enabled). */
-	proxy: ProxyCfg | null,
-	closeOnLaunch: boolean,
-	autoUpdate: boolean,
+	proxy?: ProxyCfg | null,
+	closeOnLaunch?: boolean,
+	autoUpdate?: boolean,
 	/**  Hub API root, e.g. `https://mc.example.ru/api/v1`; empty = [`DEFAULT_HUB_URL`]. */
-	hubUrl: string,
+	hubUrl?: string,
 	/**  API root of the owner's skin/account server (authlib-injector), `None` = not configured. */
-	skinServer: string | null,
+	skinServer?: string | null,
 };
 
 export type Skin = {

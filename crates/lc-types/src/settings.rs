@@ -72,13 +72,18 @@ mod tests {
 pub const DEFAULT_HUB_URL: &str = "https://relay.dedseckms.ru/api/v1";
 
 /// Global launcher settings (`settings_get` / `settings_set`).
+/// Missing fields (older settings files) take their `Default` values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub language: Language,
     pub theme: Theme,
     /// Accent colour as #rrggbb; None = theme default.
     pub accent_color: Option<String>,
+    /// Built-in background id (UI-defined); `None` = default.
+    pub background: Option<String>,
+    /// Translucent window (Mica/Acrylic where supported). Ignored in light mode.
+    pub translucent: bool,
     /// No blur, reduced motion, fewer previews. Auto-enabled on weak hardware.
     pub light_mode: bool,
     pub reduce_motion: bool,
@@ -107,6 +112,8 @@ impl Default for Settings {
             language: Language::Ru,
             theme: Theme::System,
             accent_color: None,
+            background: None,
+            translucent: true,
             light_mode: false,
             reduce_motion: false,
             game_dir: None,

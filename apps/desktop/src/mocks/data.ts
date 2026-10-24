@@ -188,6 +188,8 @@ export function defaultSettings(): Settings {
     language: "ru",
     theme: "system",
   accentColor: null,
+  background: null,
+  translucent: true,
     lightMode: false,
     reduceMotion: false,
     gameDir: null,
