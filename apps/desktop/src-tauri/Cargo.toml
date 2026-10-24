@@ -35,6 +35,11 @@ tokio.workspace = true
 url.workspace = true
 # release: self-update (signed bundles, mirrored latest.json)
 tauri-plugin-updater = "2.10"
+# lead: one running instance; file logs
+tauri-plugin-single-instance = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
 
 [lints]
 workspace = true
