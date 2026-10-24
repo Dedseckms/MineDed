@@ -23,6 +23,7 @@ import {
 import { useDraftValue } from "../../hooks/useDraftValue";
 import { ACCENT_PRESETS, isHexColor } from "../../lib/color";
 import { MemoryEditor, useFormatMb } from "../common/MemoryEditor";
+import { AboutSection } from "../updates/AboutSection";
 import { VoiceSettingsSection } from "../voice/VoiceSettingsSection";
 
 type ThemeChoice = "dark" | "light" | "system";
@@ -374,6 +375,8 @@ export function SettingsScreen() {
     <div className="flex flex-col gap-6">
       <AppearanceSection settings={settings.data} />
       <VoiceSettingsSection />
+      {/* Before the game section: its sticky save bar must stay the last element. */}
+      <AboutSection settings={settings.data} />
       <GameSection settings={settings.data} />
     </div>
   );

@@ -21,6 +21,7 @@ import { MultiplayerScreen } from "../rooms/MultiplayerScreen";
 import { SkinsScreen } from "../skins/SkinsScreen";
 import { VoiceHeaderToggle } from "../voice/VoicePanel";
 import { VpnScreen } from "../vpn/VpnScreen";
+import { UpdateBanner } from "../updates/UpdateBanner";
 import { TaskCenter } from "./TaskCenter";
 
 const ICONS: Record<Section, IconName> = {
@@ -158,6 +159,7 @@ export function AppShell() {
               <CurrentAccount />
             </div>
           </header>
+          <UpdateBanner />
           <main className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto" data-testid="main">
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
