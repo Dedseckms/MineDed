@@ -552,7 +552,7 @@ export type Settings = {
 	proxy: ProxyCfg | null,
 	closeOnLaunch: boolean,
 	autoUpdate: boolean,
-	/**  Hub API root, e.g. `https://mc.example.ru/api/v1`. */
+	/**  Hub API root, e.g. `https://mc.example.ru/api/v1`; empty = [`DEFAULT_HUB_URL`]. */
 	hubUrl: string,
 	/**  API root of the owner's skin/account server (authlib-injector), `None` = not configured. */
 	skinServer: string | null,

@@ -68,6 +68,9 @@ mod tests {
     }
 }
 
+/// Hub (rooms/signaling) API root used when `Settings::hub_url` is empty.
+pub const DEFAULT_HUB_URL: &str = "https://relay.dedseckms.ru/api/v1";
+
 /// Global launcher settings (`settings_get` / `settings_set`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -92,7 +95,7 @@ pub struct Settings {
     pub proxy: Option<ProxyCfg>,
     pub close_on_launch: bool,
     pub auto_update: bool,
-    /// Hub API root, e.g. `https://mc.example.ru/api/v1`.
+    /// Hub API root, e.g. `https://mc.example.ru/api/v1`; empty = [`DEFAULT_HUB_URL`].
     pub hub_url: String,
     /// API root of the owner's skin/account server (authlib-injector), `None` = not configured.
     pub skin_server: Option<String>,
@@ -119,7 +122,7 @@ impl Default for Settings {
             proxy: None,
             close_on_launch: false,
             auto_update: true,
-            hub_url: String::new(),
+            hub_url: DEFAULT_HUB_URL.to_owned(),
             skin_server: None,
         }
     }

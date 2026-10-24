@@ -418,7 +418,10 @@ impl P2pRooms {
         let settings = self.inner.settings.get().await?;
         HubClient::new(
             self.inner.downloader.client(Route::Direct),
-            &settings.hub_url,
+            match settings.hub_url.trim() {
+                "" => lc_types::settings::DEFAULT_HUB_URL,
+                url => url,
+            },
         )
     }
 
