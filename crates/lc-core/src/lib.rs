@@ -4,6 +4,7 @@ pub mod contract;
 mod instances;
 mod java;
 mod launch;
+mod logparse;
 mod meta;
 mod prepare;
 mod services;
