@@ -94,36 +94,29 @@ impl DraslValidator {
     }
 
     async fn lookup(&self, token: &str) -> Result<Option<Identity>, ApiError> {
-        let body = serde_json::json!({ "accessToken": token }).to_string();
-        let (status, _) = self
-            .call(Method::POST, "/authserver/validate", token, Some(body))
-            .await?;
-        if status.is_server_error() {
-            return Err(ApiError::upstream("drasl error").detail("status", status.as_str()));
-        }
-        if status != StatusCode::NO_CONTENT && status != StatusCode::OK {
-            return Ok(None);
-        }
-        // Valid token. Identity is best effort: a token-derived key still lets the
-        // host close its room with `hostToken`.
-        let profile = match self
+        // Drasl's `/authserver/validate` needs the launcher's clientToken, which
+        // the hub never sees; the bearer-authenticated profile endpoint validates
+        // the token and yields the identity in one call.
+        let (status, bytes) = self
             .call(
                 Method::GET,
                 "/minecraftservices/minecraft/profile",
                 token,
                 None,
             )
-            .await
-        {
-            Ok((StatusCode::OK, bytes)) => serde_json::from_slice::<Profile>(&bytes).ok(),
-            _ => None,
-        };
-        Ok(Some(match profile {
-            Some(p) => Identity {
+            .await?;
+        if status.is_server_error() {
+            return Err(ApiError::upstream("drasl error").detail("status", status.as_str()));
+        }
+        if status != StatusCode::OK {
+            return Ok(None);
+        }
+        Ok(Some(match serde_json::from_slice::<Profile>(&bytes) {
+            Ok(p) => Identity {
                 user_id: p.id,
                 name: p.name,
             },
-            None => Identity {
+            Err(_) => Identity {
                 user_id: format!("token:{}", short_key(token)),
                 name: "Player".into(),
             },
@@ -191,10 +184,10 @@ mod tests {
             .route(
                 "/authlib-injector/minecraftservices/minecraft/profile",
                 get(|h: HeaderMap| async move {
-                    if h.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer good") {
-                        (StatusCode::OK, r#"{"id":"abc","name":"Steve"}"#)
-                    } else {
-                        (StatusCode::UNAUTHORIZED, "{}")
+                    match h.get("authorization").and_then(|v| v.to_str().ok()) {
+                        Some("Bearer good") => (StatusCode::OK, r#"{"id":"abc","name":"Steve"}"#),
+                        Some("Bearer noprofile") => (StatusCode::OK, "not json"),
+                        _ => (StatusCode::UNAUTHORIZED, "{}"),
                     }
                 }),
             );
