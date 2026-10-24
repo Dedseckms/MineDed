@@ -965,6 +965,17 @@ impl Inner {
 
 #[async_trait]
 impl PackIo for ContentServices {
+    // TODO(mods): implemented in the modpack-catalog task.
+    async fn install_remote(
+        &self,
+        _source: lc_types::content::ContentSourceKind,
+        _project_id: &str,
+        _version_id: Option<&str>,
+        _sink: &dyn ProgressSink,
+    ) -> AppResult<Instance> {
+        Err(AppError::not_implemented("PackIo::install_remote"))
+    }
+
     async fn import(&self, path: &str, sink: &dyn ProgressSink) -> AppResult<Instance> {
         let p = PathBuf::from(path);
         let pp = p.clone();

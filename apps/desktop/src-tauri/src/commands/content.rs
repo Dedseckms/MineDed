@@ -154,6 +154,32 @@ pub async fn instance_import(
     ))
 }
 
+/// Installs a Modrinth/CurseForge modpack as a new instance (`versionId` null = latest).
+#[tauri::command]
+#[specta::specta]
+pub async fn modpack_install(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: ContentSourceKind,
+    project_id: String,
+    version_id: Option<String>,
+    on_event: Channel<TaskEvent>,
+) -> AppResult<TaskId> {
+    let svc = state.packs.clone();
+    Ok(spawn_task(
+        &app,
+        &state.tasks,
+        TaskKind::InstanceImport,
+        "tasks.modpackInstall",
+        on_event,
+        move |sink| async move {
+            svc.install_remote(source, &project_id, version_id.as_deref(), &*sink)
+                .await
+                .map(|_| ())
+        },
+    ))
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn instance_export(

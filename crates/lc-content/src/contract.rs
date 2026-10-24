@@ -61,6 +61,15 @@ pub trait ContentService: Send + Sync {
 pub trait PackIo: Send + Sync {
     /// Detects format by content; creates a new instance.
     async fn import(&self, path: &str, sink: &dyn ProgressSink) -> AppResult<Instance>;
+    /// Downloads a modpack version (`version_id`; `None` = latest) from Modrinth
+    /// (.mrpack) or CurseForge (zip), verifies it and imports it as a new instance.
+    async fn install_remote(
+        &self,
+        source: ContentSourceKind,
+        project_id: &str,
+        version_id: Option<&str>,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<Instance>;
     async fn export(
         &self,
         instance: InstanceId,

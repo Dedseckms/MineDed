@@ -73,6 +73,16 @@ impl PackIo for StubContent {
         Err(AppError::not_implemented("PackIo::import"))
     }
 
+    async fn install_remote(
+        &self,
+        _source: lc_types::content::ContentSourceKind,
+        _project_id: &str,
+        _version_id: Option<&str>,
+        _sink: &dyn ProgressSink,
+    ) -> AppResult<Instance> {
+        Err(AppError::not_implemented("PackIo::install_remote"))
+    }
+
     async fn export(
         &self,
         _instance: InstanceId,
