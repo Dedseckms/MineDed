@@ -36,6 +36,12 @@ const BACKEND_KEYS = [
   // Self-updater (`commands/app.rs`) sends bare `check` / `download` / `install` (see `stageKey`).
   "stages.check",
   "stages.install",
+  // Remote modpack install (`lc-content` packs.rs).
+  "stages.packDownload",
+  "stages.packResolve",
+  "stages.packMods",
+  "stages.packOverrides",
+  "stages.packLoader",
   "memory.reason.default",
   "memory.reason.largeModpack",
   "memory.reason.lowTotalRam",
