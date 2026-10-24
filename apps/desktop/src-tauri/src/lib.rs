@@ -43,6 +43,7 @@ pub fn run() {
     let builder = bindings::specta_builder();
 
     let result = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
@@ -55,6 +56,7 @@ pub fn run() {
                 });
             }
             app.manage(state);
+            commands::app::spawn_auto_check(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!());
