@@ -1,0 +1,20 @@
+# Website https://mineup.dedseckms.ru (static files from repo site/, deployed to
+# /opt/relay/site and served read-only by mineup-relay-site on 127.0.0.1:SITE_PORT).
+# Imported by the host Caddy via `import /opt/relay/caddy/*.caddy`.
+mineup.dedseckms.ru {
+	encode zstd gzip
+	header {
+		Content-Security-Policy "default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+	@assets path *.css *.js *.svg
+	header @assets Cache-Control "public, max-age=86400"
+	@write not method GET HEAD
+	respond @write 405
+	reverse_proxy 127.0.0.1:18091
+}

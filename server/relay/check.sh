@@ -20,6 +20,8 @@ echo "== updates status"
 curl -fsS "http://127.0.0.1:${UPDATES_PORT:-18090}/status.json" && echo || fail "updates status"
 echo "== updates via Caddy (expect 200)"
 curl -sS -o /dev/null -w '%{http_code}\n' https://relay.dedseckms.ru/updates/status.json
+echo "== site via Caddy (expect 200)"
+curl -sS -o /dev/null -w '%{http_code}\n' https://mineup.dedseckms.ru/
 echo "== join unknown room (expect 404)"
 curl -sS -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' \
   -d '{"endpointId":"probe"}' "$H/rooms/AAAA-AAAA/join"

@@ -14,6 +14,7 @@
 | Порты | `127.0.0.1:18080` → hub 8080 (`HUB_PORT`); `127.0.0.1:13340` → relay 3340 (`RELAY_HTTP_PORT`); `127.0.0.1:18090` → updates-web 8080 (`UPDATES_PORT`); при `QAD=1`: `0.0.0.0:7842/udp` (`QAD_PORT`) |
 | Volume | mineup-relay_updates_data — только зеркало релизов (перекачивается, бэкап не нужен). hub и relay без состояния (комнаты в памяти hub) |
 | updates | mineup/updates-mirror:0.1.0 (alpine 3.20.3 + curl + jq, updates/mirror.sh), usybox:1.37.0-musl httpd. Контейнеры mineup-relay-updates-mirror, mineup-relay-updates-web |
+| Сайт | `mineup.dedseckms.ru` → `mineup-relay-site` (busybox httpd, `./site` ro, `127.0.0.1:18091` = `SITE_PORT`, 32 MiB / 0.2 CPU), `caddy/site.caddy` с CSP/HSTS/nosniff/X-Frame-Options |
 | Домен | `relay.dedseckms.ru`: `/api/v1/*` → hub, `/updates/*` → updates-web, остальное → iroh-relay (`caddy/relay.caddy`) |
 
 Изоляция и лимиты: оба контейнера `user 65534`, `cap_drop: [ALL]`, `no-new-privileges`,
@@ -158,3 +159,13 @@ deploy.ps1 не загрузил бинарь (`hub/hub` оставался от
 Health `{"status":"ok","version":"1.0.0"}`; анонимный open-room create → 201, DELETE по hostToken → 204.
 mihomo/caddy active, Drasl 200. Тег образа остаётся `mineup/hub:0.1.0` (`HUB_VERSION` в .env не задан).
 Откат: вернуть `backups/hub-prev-*` в `hub/hub` и `./start.sh`.
+
+### 2026-10-25 — сайт mineup.dedseckms.ru (server-ops, с разрешения владельца)
+Файлы `site/` (main 578b5ca, без README) → `/opt/relay/site`; загрузка
+`backups/upload-20261024-220240.tar`, прежние файлы `backups/relay-20261024-220240.tar.gz`,
+`.env` (+`SITE_PORT=18091`) → `backups/env-site.bak`. `./start.sh` поднял `mineup-relay-site`
+(healthy). Caddy: бэкап `Caddyfile.bak-mineup-site-*`, новый `caddy/site.caddy` подхвачен
+существующим импортом, validate OK, reload. `https://mineup.dedseckms.ru/` → 200 text/html,
+заголовки безопасности на месте, README.md → 404. hub/updates/Drasl 200, mihomo/caddy active.
+Откат: `sudo docker compose -p mineup-relay stop site`, переименовать `caddy/site.caddy` в
+`site.caddy.off` + validate/reload.
