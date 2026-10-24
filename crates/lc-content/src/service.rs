@@ -1,5 +1,5 @@
 //! `ContentServices`: `ContentService` + `PackIo` + `PresetService` on top of
-//! Modrinth / CurseForge and core's `InstanceService`.
+//! Modrinth and core's `InstanceService`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,6 @@ use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 
 use crate::api::{Api, DlHttp, Http};
 use crate::contract::ContentService;
-use crate::curseforge::{default_env_dirs, find_api_key, no_key_error, CurseForgeSource};
 use crate::index::{base_name, key, ContentIndex, IndexEntry};
 use crate::modmeta::{read_jar_meta_async, ModMeta};
 use crate::modrinth::ModrinthSource;
@@ -40,7 +39,6 @@ pub(crate) struct Inner {
     pub instances: Arc<dyn InstanceService>,
     pub system: Arc<dyn SystemProbe>,
     pub modrinth: Arc<ModrinthSource>,
-    pub curseforge: Option<Arc<CurseForgeSource>>,
 }
 
 /// Real content services. Cheap to clone; implements `ContentService`,
@@ -71,19 +69,16 @@ impl DiskFile {
 }
 
 impl ContentServices {
-    /// CurseForge is enabled when `CURSEFORGE_API_KEY` is set in the environment
-    /// or a `.env` (executable dir, data root), or embedded into the release
-    /// build (`option_env!`, lowest priority); otherwise its calls
-    /// fail with `AuthRequired` and Modrinth keeps working.
+    /// Modrinth only: CurseForge is turned off (owner decision); requests for it
+    /// fail with `InvalidInput` + `reason=curseforgeDisabled`.
     pub fn new(
         paths: Paths,
         downloader: Arc<dyn Downloader>,
         instances: Arc<dyn InstanceService>,
         system: Arc<dyn SystemProbe>,
     ) -> Self {
-        let key = find_api_key(&default_env_dirs(paths.root()));
         let http: Arc<dyn Http> = Arc::new(DlHttp::new(downloader.clone()));
-        Self::with_parts(paths, downloader, instances, system, http, key)
+        Self::with_parts(paths, downloader, instances, system, http)
     }
 
     pub(crate) fn with_parts(
@@ -92,13 +87,11 @@ impl ContentServices {
         instances: Arc<dyn InstanceService>,
         system: Arc<dyn SystemProbe>,
         http: Arc<dyn Http>,
-        cf_key: Option<String>,
     ) -> Self {
         let api = Arc::new(Api::new(http, paths.cache().join("content")));
         Self {
             inner: Arc::new(Inner {
-                modrinth: Arc::new(ModrinthSource::new(api.clone())),
-                curseforge: cf_key.map(|k| Arc::new(CurseForgeSource::new(api, k))),
+                modrinth: Arc::new(ModrinthSource::new(api)),
                 paths,
                 dl: downloader,
                 instances,
@@ -106,11 +99,15 @@ impl ContentServices {
             }),
         }
     }
+}
 
-    /// Whether a CurseForge API key was found.
-    pub fn curseforge_enabled(&self) -> bool {
-        self.inner.curseforge.is_some()
-    }
+/// CurseForge is turned off: its API needs a key the project does not use.
+pub(crate) fn curseforge_disabled() -> AppError {
+    AppError::new(
+        ErrorCode::InvalidInput,
+        "CurseForge is not supported; use Modrinth",
+    )
+    .detail("reason", "curseforgeDisabled")
 }
 
 pub(crate) fn target_of(inst: &Instance) -> Target {
@@ -124,11 +121,7 @@ impl Inner {
     pub fn catalog(&self, source: ContentSourceKind) -> AppResult<Arc<dyn Catalog>> {
         match source {
             ContentSourceKind::Modrinth => Ok(self.modrinth.clone()),
-            ContentSourceKind::CurseForge => self
-                .curseforge
-                .clone()
-                .map(|c| c as Arc<dyn Catalog>)
-                .ok_or_else(no_key_error),
+            ContentSourceKind::CurseForge => Err(curseforge_disabled()),
             ContentSourceKind::Local => Err(AppError::new(
                 ErrorCode::InvalidInput,
                 "local files have no remote catalogue",
@@ -370,7 +363,7 @@ impl Inner {
     ) -> AppResult<HashMap<(ContentSourceKind, String), ContentVersion>> {
         let target = target_of(inst);
         let mut out = HashMap::new();
-        for source in [ContentSourceKind::Modrinth, ContentSourceKind::CurseForge] {
+        for source in [ContentSourceKind::Modrinth] {
             let items: Vec<UpdateItem> = idx
                 .files
                 .values()

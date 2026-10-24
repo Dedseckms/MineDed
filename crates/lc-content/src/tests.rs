@@ -26,7 +26,6 @@ use crate::source::Target;
 use crate::util::sha1_hex;
 
 const MR: &str = "https://api.modrinth.com/v2";
-const CF: &str = "https://api.curseforge.com";
 
 #[derive(Default)]
 struct Dl {
@@ -189,7 +188,7 @@ struct Env {
     svc: ContentServices,
 }
 
-fn env(cf_key: Option<&str>) -> Env {
+fn env() -> Env {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::new(dir.path());
     let http = Arc::new(FakeHttp::default());
@@ -198,14 +197,8 @@ fn env(cf_key: Option<&str>) -> Env {
         paths: paths.clone(),
         map: Mutex::new(HashMap::new()),
     });
-    let svc = ContentServices::with_parts(
-        paths,
-        dl.clone(),
-        inst.clone(),
-        Arc::new(Sys),
-        http.clone(),
-        cf_key.map(str::to_owned),
-    );
+    let svc =
+        ContentServices::with_parts(paths, dl.clone(), inst.clone(), Arc::new(Sys), http.clone());
     Env {
         _dir: dir,
         http,
@@ -279,7 +272,7 @@ fn mr_pick(p: &str) -> ContentVersionRef {
 
 #[tokio::test]
 async fn shader_pulls_iris_and_full_lifecycle() {
-    let e = env(None);
+    let e = env();
     let id = e.add_instance("1.21.1", LoaderKind::Fabric);
     e.project("SHADERxx", "complementary", "shader");
     e.project("YL57xq9U", "iris", "mod");
@@ -379,7 +372,7 @@ async fn shader_pulls_iris_and_full_lifecycle() {
 
 #[tokio::test]
 async fn shader_loader_choice_per_loader() {
-    let e = env(None);
+    let e = env();
     e.project("GchcoXML", "oculus", "mod");
     e.project("sk9rgfiA", "embeddium", "mod");
     let oc = e.mr_version("GchcoXML", "oc1", "oculus.jar", &["forge"], &[]);
@@ -430,13 +423,20 @@ async fn shader_loader_choice_per_loader() {
     assert_eq!(manual[0].project_id, "optifine");
 }
 
+fn is_cf_disabled(err: &AppError) -> bool {
+    err.code == ErrorCode::InvalidInput
+        && err
+            .details
+            .as_ref()
+            .is_some_and(|d| d.get("reason").map(String::as_str) == Some("curseforgeDisabled"))
+}
+
 #[tokio::test]
-async fn curseforge_disabled_without_key_modrinth_works() {
-    let e = env(None);
-    assert!(!e.svc.curseforge_enabled());
+async fn curseforge_is_disabled_modrinth_works() {
+    let e = env();
     let q = SearchQuery {
         source: ContentSourceKind::CurseForge,
-        kind: ContentKind::Mod,
+        kind: ContentKind::Modpack,
         text: "jei".into(),
         mc: None,
         loader: None,
@@ -445,42 +445,22 @@ async fn curseforge_disabled_without_key_modrinth_works() {
         offset: 0,
         limit: 10,
     };
-    let err = e.svc.search(q.clone()).await.unwrap_err();
-    assert_eq!(err.code, ErrorCode::AuthRequired);
-    e.http.route(
-        &format!("{MR}/search"),
-        r#"{"hits":[{"project_id":"P","slug":"p","title":"P","project_type":"mod"}],"offset":0,"limit":10,"total_hits":1}"#,
-    );
-    let page = e
+    assert!(is_cf_disabled(&e.svc.search(q.clone()).await.unwrap_err()));
+    let err = e
         .svc
-        .search(SearchQuery {
-            source: ContentSourceKind::Modrinth,
-            ..q
-        })
+        .versions(ContentSourceKind::CurseForge, "238222", Default::default())
         .await
-        .unwrap();
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.total, 1);
-}
-
-#[tokio::test]
-async fn curseforge_opt_out_becomes_manual_download() {
-    let e = env(Some("test-key"));
+        .unwrap_err();
+    assert!(is_cf_disabled(&err));
+    let sink = NullSink::default();
+    let err = e
+        .svc
+        .install_remote(ContentSourceKind::CurseForge, "900", None, &sink)
+        .await
+        .unwrap_err();
+    assert!(is_cf_disabled(&err));
     let id = e.add_instance("1.20.1", LoaderKind::Forge);
-    let mods: serde_json::Value =
-        serde_json::from_str(include_str!("../tests/fixtures/curseforge/mods.json")).unwrap();
-    let denied = serde_json::json!({"data": mods["data"][1]});
-    e.http
-        .route(&format!("{CF}/v1/mods/1001"), denied.to_string());
-    e.http.route(
-        &format!("{CF}/v1/mods/1001/files"),
-        include_str!("../tests/fixtures/curseforge/files.json"),
-    );
-    e.http.route(
-        &format!("POST {CF}/v1/mods/files"),
-        include_str!("../tests/fixtures/curseforge/files.json"),
-    );
-    let plan = e
+    let err = e
         .svc
         .resolve(
             id,
@@ -491,23 +471,59 @@ async fn curseforge_opt_out_becomes_manual_download() {
             }],
         )
         .await
-        .unwrap();
-    assert!(plan.install.is_empty());
-    assert_eq!(plan.manual.len(), 1);
-    assert_eq!(
-        plan.manual[0].url,
-        "https://www.curseforge.com/minecraft/mc-mods/denied-mod/download/4711"
+        .unwrap_err();
+    assert!(is_cf_disabled(&err));
+
+    // A CurseForge zip from disk: same clear error, no instance created.
+    let zip = e._dir.path().join("cf.zip");
+    std::fs::write(
+        &zip,
+        zip_bytes(
+            e._dir.path(),
+            &[(
+                "manifest.json",
+                include_bytes!("../tests/fixtures/packs/manifest.json").to_vec(),
+            )],
+        ),
+    )
+    .unwrap();
+    let err = e
+        .svc
+        .import(zip.to_str().unwrap(), &sink)
+        .await
+        .unwrap_err();
+    assert!(is_cf_disabled(&err));
+    // Only `id` from above.
+    assert_eq!(e.inst.map.lock().unwrap().len(), 1);
+    // CurseForge is never contacted.
+    assert!(e
+        .http
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|c| !c.contains("curseforge")));
+
+    e.http.route(
+        &format!("{MR}/search"),
+        r#"{"hits":[{"project_id":"P","slug":"p","title":"P","project_type":"mod"}],"offset":0,"limit":10,"total_hits":1}"#,
     );
-    // Required dependency 2002 is unknown → reported, not fatal.
-    assert!(plan.conflicts.iter().any(|c| c.project_id == "2002"));
-    // Installing the plan never downloads the opted-out file.
-    e.svc.install(id, plan, &NullSink::default()).await.unwrap();
-    assert!(!e.inst.game_dir(id).join("mods/somemod-1.2.3.jar").exists());
+    let page = e
+        .svc
+        .search(SearchQuery {
+            source: ContentSourceKind::Modrinth,
+            kind: ContentKind::Mod,
+            ..q
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.total, 1);
 }
 
 #[tokio::test]
 async fn preset_installs_mods_and_flags() {
-    let e = env(None);
+    let e = env();
     let id = e.add_instance("1.21.1", LoaderKind::Fabric);
     e.project("AANobbMI", "sodium", "mod");
     let so = e.mr_version("AANobbMI", "so1", "sodium.jar", &["fabric"], &[]);
@@ -632,7 +648,7 @@ impl Env {
 
 #[tokio::test]
 async fn modrinth_modpack_installs_from_catalog() {
-    let e = env(None);
+    let e = env();
     e.mr_modpack(false);
 
     // Search and versions for modpacks.
@@ -727,7 +743,7 @@ async fn modrinth_modpack_installs_from_catalog() {
 #[tokio::test]
 async fn modpack_failures_leave_no_instance() {
     // Bad sha512 of the pack itself.
-    let e = env(None);
+    let e = env();
     e.mr_modpack(true);
     let sink = NullSink::default();
     let err = e
@@ -739,7 +755,7 @@ async fn modpack_failures_leave_no_instance() {
     assert!(e.inst.map.lock().unwrap().is_empty());
 
     // Cancelled before anything is created.
-    let e = env(None);
+    let e = env();
     e.mr_modpack(false);
     let err = e
         .svc
@@ -750,7 +766,7 @@ async fn modpack_failures_leave_no_instance() {
     assert!(e.inst.map.lock().unwrap().is_empty());
 
     // A pack mod that fails to download: no instance, staging cleaned.
-    let e = env(None);
+    let e = env();
     let url = e.mr_modpack(false);
     e.dl.files
         .lock()
@@ -766,133 +782,4 @@ async fn modpack_failures_leave_no_instance() {
     assert!(e.staging_is_empty());
     // The verified pack stays cached for a retry.
     assert!(e._dir.path().join("cache/content/packs").exists());
-}
-
-#[tokio::test]
-async fn curseforge_modpack_installs_and_respects_opt_out() {
-    let e = env(Some("test-key"));
-    let packs: serde_json::Value =
-        serde_json::from_str(include_str!("../tests/fixtures/curseforge/modpack.json")).unwrap();
-    for p in packs["data"].as_array().unwrap() {
-        e.http.route(
-            &format!("{CF}/v1/mods/{}", p["id"]),
-            serde_json::json!({ "data": p }).to_string(),
-        );
-    }
-    // Mod referenced by the manifest.
-    let jar = b"somemod".to_vec();
-    let jar_url = "https://edge.forgecdn.net/files/4/711/somemod-1.2.3.jar";
-    let mods: serde_json::Value =
-        serde_json::from_str(include_str!("../tests/fixtures/curseforge/mods.json")).unwrap();
-    e.http.route(
-        &format!(r#"POST {CF}/v1/mods {{"modIds":[1001]}}"#),
-        serde_json::json!({"data": [mods["data"][0]]}).to_string(),
-    );
-    e.http.route(
-        &format!(r#"POST {CF}/v1/mods/files {{"fileIds":[4711]}}"#),
-        serde_json::json!({"data": [{"id": 4711, "modId": 1001, "displayName": "Some Mod",
-            "fileName": "somemod-1.2.3.jar", "releaseType": 1, "fileLength": jar.len(),
-            "hashes": [{"value": sha1_hex(&jar), "algo": 1}], "downloadUrl": jar_url,
-            "gameVersions": ["1.20.1", "Forge"]}]})
-        .to_string(),
-    );
-    let manifest = serde_json::json!({
-        "minecraft": {"version": "1.20.1", "modLoaders": [{"id": "forge-47.3.0", "primary": true}]},
-        "manifestType": "minecraftModpack", "manifestVersion": 1, "name": "inner", "version": "1.0",
-        "author": "packer", "files": [{"projectID": 1001, "fileID": 4711, "required": true}],
-        "overrides": "overrides"
-    });
-    let zip = zip_bytes(
-        e._dir.path(),
-        &[
-            ("manifest.json", manifest.to_string().into_bytes()),
-            ("overrides/config/b.txt", b"b".to_vec()),
-        ],
-    );
-    let zip_url = "https://edge.forgecdn.net/files/9/0/Tiny%20Pack-1.0.zip";
-    let file = |id: u32, server: bool, date: &str| {
-        serde_json::json!({"id": id, "modId": 900, "displayName": "Tiny Pack 1.0",
-            "fileName": "Tiny Pack-1.0.zip", "releaseType": 1, "fileDate": date,
-            "fileLength": zip.len(), "isServerPack": server,
-            "hashes": [{"value": sha1_hex(&zip).to_uppercase(), "algo": 1}],
-            "downloadUrl": zip_url, "gameVersions": ["1.20.1"]})
-    };
-    e.http.route(
-        &format!("{CF}/v1/mods/900/files"),
-        serde_json::json!({"data": [file(9000, false, "2025-01-01"), file(9001, true, "2025-01-02")]})
-            .to_string(),
-    );
-    {
-        let mut f = e.dl.files.lock().unwrap();
-        f.insert(jar_url.into(), jar);
-        f.insert(zip_url.into(), zip.clone());
-        f.insert(
-            "https://media.forgecdn.net/avatars/thumbnails/1/2/256/256/tiny.png".into(),
-            PNG.to_vec(),
-        );
-    }
-
-    // Versions list the client pack with mc + loader (from latestFilesIndexes).
-    let versions = e
-        .svc
-        .versions(
-            ContentSourceKind::CurseForge,
-            "900",
-            lc_types::content::ContentFilter::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(versions.len(), 1);
-    assert_eq!(versions[0].version_id, "9000");
-    assert_eq!(versions[0].mc_versions, vec!["1.20.1"]);
-    assert_eq!(versions[0].loaders, vec![LoaderKind::Forge]);
-
-    let sink = NullSink::default();
-    let inst = e
-        .svc
-        .install_remote(ContentSourceKind::CurseForge, "900", None, &sink)
-        .await
-        .unwrap();
-    assert_eq!(inst.name, "Tiny Pack");
-    assert_eq!(inst.loader.kind, LoaderKind::Forge);
-    assert_eq!(inst.loader.version.as_deref(), Some("47.3.0"));
-    assert_eq!(inst.icon.as_deref(), Some("icon.png"));
-    let game = e.inst.game_dir(inst.id);
-    assert!(game.join("mods/somemod-1.2.3.jar").exists());
-    assert!(game.join("config/b.txt").exists());
-    let list = e.svc.list(inst.id).await.unwrap();
-    assert_eq!(list[0].source, ContentSourceKind::CurseForge);
-    assert!(e.staging_is_empty());
-
-    // allowModDistribution=false on the pack → manual download with the page URL.
-    e.http.route(
-        &format!("{CF}/v1/mods/901/files"),
-        serde_json::json!({"data": [{"id": 9100, "modId": 901, "fileName": "locked.zip",
-            "releaseType": 1, "downloadUrl": null,
-            "hashes": [{"value": "da39a3ee5e6b4b0d3255bfef95601890afd80709", "algo": 1}]}]})
-        .to_string(),
-    );
-    let err = e
-        .svc
-        .install_remote(ContentSourceKind::CurseForge, "901", None, &sink)
-        .await
-        .unwrap_err();
-    assert_eq!(err.code, ErrorCode::ManualDownloadRequired);
-    let details = err.details.unwrap();
-    assert_eq!(details["fileName"], "locked.zip");
-    assert_eq!(
-        details["projectUrl"],
-        "https://www.curseforge.com/minecraft/modpacks/locked-pack"
-    );
-    assert!(details["url"]
-        .starts_with("https://www.curseforge.com/minecraft/modpacks/locked-pack/download/"));
-
-    // Without a key CurseForge packs fail cleanly.
-    let e = env(None);
-    let err = e
-        .svc
-        .install_remote(ContentSourceKind::CurseForge, "900", None, &sink)
-        .await
-        .unwrap_err();
-    assert_eq!(err.code, ErrorCode::AuthRequired);
 }

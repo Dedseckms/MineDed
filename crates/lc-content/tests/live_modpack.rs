@@ -1,24 +1,19 @@
-//! Live checks (network, ignored by default): install small real modpacks
+//! Live check (network, ignored by default): installs a small real Modrinth modpack
 //! through the real `CoreServices` + loader registry and check that the
 //! instance has everything needed to launch.
 //!
 //! `cargo test -p lc-content --test live_modpack -- --ignored --nocapture`
 //! Modrinth pack: `MINEUP_LIVE_PACK` (slug/id), default `fabulously-optimized`.
-//! CurseForge pack: `MINEUP_LIVE_CF_PACK` (project id), default: search for
-//! "Fabulously Optimized". The CF key is taken from the launcher's `.env` in
-//! `MINEUP_LIVE_ENV_DIR` (default `%APPDATA%/ru.dedseckms.mineup`), copied into
-//! the temporary data root only, and never printed.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use lc_accounts::{AccountsService, MemoryTokenStore};
-use lc_content::{ContentService, ContentServices, PackIo};
+use lc_content::{ContentServices, PackIo};
 use lc_core::{CoreServices, GameObserver, InstanceService};
 use lc_http::{DownloaderConfig, HttpDownloader};
 use lc_runtime::{NullSink, Paths};
-use lc_types::content::{ContentKind, ContentSourceKind, SearchQuery, SortBy};
+use lc_types::content::ContentSourceKind;
 use lc_types::events::{InstanceLogPayload, InstanceStatePayload};
 use lc_types::instance::Instance;
 use lc_types::version::LoaderKind;
@@ -37,13 +32,9 @@ struct Live {
     content: ContentServices,
 }
 
-fn live(env_file: Option<PathBuf>) -> Live {
+fn live() -> Live {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::new(dir.path());
-    if let Some(f) = env_file {
-        // `ContentServices::new` reads `<data root>/.env`.
-        std::fs::copy(f, dir.path().join(".env")).unwrap();
-    }
     let dl: Arc<dyn lc_http::Downloader> =
         Arc::new(HttpDownloader::new(DownloaderConfig::default()).unwrap());
     let accounts = Arc::new(AccountsService::new(
@@ -106,78 +97,11 @@ impl Live {
 #[ignore = "network: downloads a real modpack, vanilla files and the loader"]
 async fn installs_real_modrinth_pack() {
     let pack = std::env::var("MINEUP_LIVE_PACK").unwrap_or_else(|_| "fabulously-optimized".into());
-    let l = live(None);
+    let l = live();
     let inst = l
         .content
         .install_remote(
             ContentSourceKind::Modrinth,
-            &pack,
-            None,
-            &NullSink::default(),
-        )
-        .await
-        .unwrap();
-    l.check_launch_ready(&inst).await;
-}
-
-fn launcher_env_file() -> Option<PathBuf> {
-    let dir = std::env::var_os("MINEUP_LIVE_ENV_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("ru.dedseckms.mineup"))
-        })?;
-    let f = dir.join(".env");
-    f.exists().then_some(f)
-}
-
-#[tokio::test]
-#[ignore = "network + CurseForge key: downloads a real CurseForge modpack"]
-async fn installs_real_curseforge_pack() {
-    let l = live(launcher_env_file());
-    assert!(l.content.curseforge_enabled(), "no CurseForge key found");
-    let pack = match std::env::var("MINEUP_LIVE_CF_PACK") {
-        Ok(p) => p,
-        Err(_) => {
-            let page = l
-                .content
-                .search(SearchQuery {
-                    source: ContentSourceKind::CurseForge,
-                    kind: ContentKind::Modpack,
-                    text: "Fabulously Optimized".into(),
-                    mc: None,
-                    loader: None,
-                    categories: vec![],
-                    sort: SortBy::Relevance,
-                    offset: 0,
-                    limit: 10,
-                })
-                .await
-                .unwrap();
-            assert!(page.items.iter().all(|p| p.kind == ContentKind::Modpack));
-            let hit = page
-                .items
-                .iter()
-                .find(|p| p.slug == "fabulously-optimized")
-                .or_else(|| page.items.first())
-                .expect("no modpack found");
-            println!("CF pack {} ({})", hit.title, hit.project_id);
-            hit.project_id.clone()
-        }
-    };
-    let versions = l
-        .content
-        .versions(ContentSourceKind::CurseForge, &pack, Default::default())
-        .await
-        .unwrap();
-    assert!(!versions.is_empty());
-    println!(
-        "latest: {} mc={:?} loaders={:?}",
-        versions[0].name, versions[0].mc_versions, versions[0].loaders
-    );
-    let inst = l
-        .content
-        .install_remote(
-            ContentSourceKind::CurseForge,
             &pack,
             None,
             &NullSink::default(),

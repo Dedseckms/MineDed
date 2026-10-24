@@ -1,4 +1,5 @@
-//! Modpack import/export: Modrinth `.mrpack`, CurseForge zip, launcher zip.
+//! Modpack import/export: Modrinth `.mrpack`, launcher zip; CurseForge zip is
+//! export-only (importing one needs the CurseForge API, which is turned off).
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -16,23 +17,20 @@ use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::PackIo;
-use crate::curseforge::no_key_error;
 use crate::index::{key, ContentIndex, IndexEntry};
-use crate::service::{ContentServices, Inner};
+use crate::service::{curseforge_disabled, ContentServices, Inner};
 use crate::util::{file_hashes, io_err, join, parse_url, safe_join, CONTENT_DIRS};
 
 pub(crate) const MRPACK_INDEX: &str = "modrinth.index.json";
 pub(crate) const CF_MANIFEST: &str = "manifest.json";
 pub(crate) const LAUNCHER_MANIFEST: &str = "mineup-pack.json";
 
-/// Hosts `.mrpack` downloads may come from (Modrinth spec + CurseForge CDN).
-const ALLOWED_HOSTS: [&str; 6] = [
+/// Hosts `.mrpack` downloads may come from (Modrinth spec).
+const ALLOWED_HOSTS: [&str; 4] = [
     "cdn.modrinth.com",
     "github.com",
     "raw.githubusercontent.com",
     "gitlab.com",
-    "edge.forgecdn.net",
-    "mediafilez.forgecdn.net",
 ];
 
 /// Unpacking limits for untrusted archives.
@@ -376,6 +374,8 @@ pub(crate) fn mrpack_loader_key(kind: LoaderKind) -> Option<&'static str> {
 }
 
 /// `forge-47.2.0` / `neoforge-21.1.77` / `fabric-0.16.9` / `quilt-0.26.0`.
+/// Test-only: checks exported CurseForge manifests (import is turned off).
+#[cfg(test)]
 pub(crate) fn cf_target(m: &CfManifest) -> AppResult<(String, LoaderRef)> {
     let mc = m.minecraft.version.clone();
     let primary = m
@@ -900,108 +900,7 @@ impl Inner {
         Ok(cidx)
     }
 
-    async fn import_cf(
-        &self,
-        path: &Path,
-        meta: &PackMeta,
-        sink: &dyn ProgressSink,
-    ) -> AppResult<Instance> {
-        let cf = self.curseforge.clone().ok_or_else(no_key_error)?;
-        sink.progress(0, None, "stages.packResolve");
-        let p = path.to_path_buf();
-        let bytes = join(
-            tokio::task::spawn_blocking(move || read_entry(&mut open_zip(&p)?, CF_MANIFEST)).await,
-        )?;
-        let m: CfManifest = parse(&bytes, CF_MANIFEST)?;
-        let (mc, loader) = cf_target(&m)?;
-        let ids: Vec<u64> = m
-            .files
-            .iter()
-            .filter(|f| f.required)
-            .map(|f| f.file_id)
-            .collect();
-        let files = cf.files_with_mods(&ids).await?;
-        if files.len() < ids.len() {
-            sink.log(&format!(
-                "{} pack file(s) are no longer available on CurseForge",
-                ids.len() - files.len()
-            ));
-        }
-        // (url, sha1, size, relative path, index key, entry)
-        let mut planned = Vec::new();
-        let mut manual = 0usize;
-        for (v, kind, rf) in &files {
-            let Ok(dir) = crate::util::kind_dir(*kind) else {
-                continue;
-            };
-            crate::util::check_file_name(&v.file_name)?;
-            let Some(url) = &rf.url else {
-                manual += 1;
-                sink.log(&format!(
-                    "manual download required: {} → {} (put it into {dir}/)",
-                    v.file_name, rf.manual_url
-                ));
-                continue;
-            };
-            let entry = IndexEntry {
-                kind: *kind,
-                source: ContentSourceKind::CurseForge,
-                project_id: v.project_id.clone(),
-                version_id: v.version_id.clone(),
-                title: None,
-                version_number: Some(v.version_number.clone()),
-                sha1: rf.sha1.clone(),
-                sha512: None,
-                size: Some(v.size),
-                url: Some(url.clone()),
-            };
-            planned.push((
-                parse_url(url)?,
-                rf.sha1.clone(),
-                v.size,
-                (dir, v.file_name.clone()),
-                key(dir, &v.file_name),
-                entry,
-            ));
-        }
-        if manual > 0 {
-            sink.log(&format!(
-                "{manual} file(s) must be downloaded by hand (allowModDistribution=false)"
-            ));
-        }
-        sink.check_cancelled()?;
-
-        let staging = self.staging_dir().await?;
-        let r = async {
-            sink.progress(0, Some(planned.len() as u64), "stages.packMods");
-            let mut reqs = Vec::new();
-            let mut cidx = ContentIndex::default();
-            for (url, sha1, size, (dir, name), k, entry) in planned {
-                reqs.push(DownloadReq {
-                    urls: vec![url],
-                    sha1,
-                    size: (size > 0).then_some(size),
-                    dest: staging.join(dir).join(name),
-                    kind: ResourceKind::Content,
-                });
-                cidx.files.insert(k, entry);
-            }
-            if !reqs.is_empty() {
-                self.dl.fetch_many(reqs, sink).await?;
-            }
-            sink.check_cancelled()?;
-            sink.progress(0, None, "stages.packOverrides");
-            let (p, g, o) = (path.to_path_buf(), staging.clone(), m.overrides.clone());
-            join(tokio::task::spawn_blocking(move || extract_prefix(&p, &o, &g)).await)?;
-            self.finish_pack(&staging, &m.name, mc, loader, cidx, meta, sink)
-                .await
-        }
-        .await;
-        let _ = tokio::fs::remove_dir_all(&staging).await;
-        r
-    }
-
-    /// Downloads a catalogue modpack into the cache (hash-checked) and imports it.
+    /// Downloads a Modrinth modpack into the cache (hash-checked) and imports it.
     async fn install_remote(
         &self,
         source: ContentSourceKind,
@@ -1009,24 +908,15 @@ impl Inner {
         version_id: Option<&str>,
         sink: &dyn ProgressSink,
     ) -> AppResult<Instance> {
-        sink.progress(0, None, "stages.packDownload");
-        let (pf, want) = match source {
-            ContentSourceKind::Modrinth => (
-                self.modrinth.pack_file(project_id, version_id).await?,
-                Detected::Mrpack,
-            ),
-            ContentSourceKind::CurseForge => (
-                self.curseforge
-                    .clone()
-                    .ok_or_else(no_key_error)?
-                    .pack_file(project_id, version_id)
-                    .await?,
-                Detected::CurseForge,
-            ),
+        match source {
+            ContentSourceKind::Modrinth => {}
+            ContentSourceKind::CurseForge => return Err(curseforge_disabled()),
             ContentSourceKind::Local => {
                 return Err(bad_pack("local files have no remote catalogue"));
             }
-        };
+        }
+        sink.progress(0, None, "stages.packDownload");
+        let pf = self.modrinth.pack_file(project_id, version_id).await?;
         if !allowed_download(&pf.url) {
             return Err(bad_pack("modpack download host is not allowed").detail("url", &pf.url));
         }
@@ -1038,17 +928,12 @@ impl Inner {
             "modpack {} (version {}): {}",
             pf.title, pf.version_id, pf.file_name
         ));
-        let ext = if want == Detected::Mrpack {
-            "mrpack"
-        } else {
-            "zip"
-        };
         let dest = self
             .paths
             .cache()
             .join("content")
             .join("packs")
-            .join(format!("{sha1}.{ext}"));
+            .join(format!("{sha1}.mrpack"));
         self.dl
             .fetch_many(
                 vec![DownloadReq {
@@ -1072,7 +957,7 @@ impl Inner {
         sink.check_cancelled()?;
         let d = dest.clone();
         let names = join(tokio::task::spawn_blocking(move || entry_names(&d)).await)?;
-        if detect(&names) != Some(want) {
+        if detect(&names) != Some(Detected::Mrpack) {
             let _ = tokio::fs::remove_file(&dest).await;
             return Err(bad_pack("downloaded modpack has an unexpected format"));
         }
@@ -1080,11 +965,7 @@ impl Inner {
             name: Some(pf.title.clone()),
             icon_url: pf.icon_url.clone(),
         };
-        let r = if want == Detected::Mrpack {
-            self.import_mrpack(&dest, &meta, sink).await
-        } else {
-            self.import_cf(&dest, &meta, sink).await
-        };
+        let r = self.import_mrpack(&dest, &meta, sink).await;
         // Kept on failure: a retry reuses the verified download.
         if r.is_ok() {
             let _ = tokio::fs::remove_file(&dest).await;
@@ -1281,9 +1162,8 @@ impl PackIo for ContentServices {
                     .import_mrpack(&p, &PackMeta::default(), sink)
                     .await
             }
-            Some(Detected::CurseForge) => {
-                self.inner.import_cf(&p, &PackMeta::default(), sink).await
-            }
+            // Its mods can only be resolved through the CurseForge API.
+            Some(Detected::CurseForge) => Err(curseforge_disabled()),
             Some(Detected::Launcher) => self.inner.import_launcher(&p, sink).await,
             None => Err(bad_pack("unknown modpack format")),
         }
