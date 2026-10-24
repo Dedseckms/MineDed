@@ -24,7 +24,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libasound2-dev libx11-dev libxdo-dev pkg-config patchelf libssl-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

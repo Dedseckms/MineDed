@@ -30,12 +30,46 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi", "appimage", "deb"],
+    "createUpdaterArtifacts": true,
+    "publisher": "Dedseckms",
+    "homepage": "https://github.com/Dedseckms/MineUP",
+    "license": "GPL-3.0-or-later",
+    "category": "Game",
+    "shortDescription": "Minecraft launcher",
+    "longDescription": "MineUP: cross-platform Minecraft launcher with mod loaders, modpacks, P2P rooms and voice chat.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Russian", "English"],
+        "displayLanguageSelector": true
+      },
+      "wix": {
+        "language": ["ru-RU", "en-US"]
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "games"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxNDZGMjVFMUQzNzJCRjYKUldUMkt6Y2RYdkpHOFpQZHVOY2lvTDM5VTVjRkhEK3phOTBYcm5hR1UvSVF4T2JOZFVvUzFEVFcK",
+      "endpoints": [
+        "https://github.com/Dedseckms/MineUP/releases/latest/download/latest.json",
+        "https://relay.dedseckms.ru/updates/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
