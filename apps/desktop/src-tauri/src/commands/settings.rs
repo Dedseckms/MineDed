@@ -2,7 +2,7 @@
 
 use lc_types::settings::Settings;
 use lc_types::AppResult;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::state::AppState;
 
@@ -14,8 +14,13 @@ pub async fn settings_get(state: State<'_, AppState>) -> AppResult<Settings> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn settings_set(state: State<'_, AppState>, settings: Settings) -> AppResult<()> {
-    // Proxy applies immediately; game dir / parallelism take effect on restart.
+pub async fn settings_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> AppResult<()> {
+    // Proxy and window look apply immediately; game dir / parallelism on restart.
     state.downloader.set_manual_proxy(settings.proxy.clone());
+    crate::apply_window_effects(&app, &settings);
     state.settings.set(settings).await
 }

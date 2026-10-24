@@ -39,6 +39,38 @@ fn build_state(app: &tauri::AppHandle) -> Result<state::AppState, Box<dyn std::e
     )?)
 }
 
+/// Mica on Windows 11, blur on Windows 10, none when `translucent` is off or in
+/// light mode. No-op elsewhere (Linux keeps a solid window).
+pub(crate) fn apply_window_effects(
+    app: &tauri::AppHandle,
+    settings: &lc_types::settings::Settings,
+) {
+    #[cfg(windows)]
+    {
+        use tauri::utils::config::WindowEffectsConfig;
+        use tauri::window::Effect;
+        let Some(w) = app.get_webview_window("main") else {
+            return;
+        };
+        let effect = if !settings.translucent || settings.light_mode {
+            None
+        } else if windows_version::OsVersion::current().build >= 22000 {
+            Some(Effect::Mica)
+        } else {
+            Some(Effect::Blur)
+        };
+        let config = effect.map(|e| WindowEffectsConfig {
+            effects: vec![e],
+            ..Default::default()
+        });
+        if let Err(e) = w.set_effects(config) {
+            tracing::warn!("window effects: {e}");
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (app, settings);
+}
+
 /// Keeps the non-blocking log writer alive for the app's lifetime.
 struct LogGuard(#[allow(dead_code)] Option<tracing_appender::non_blocking::WorkerGuard>);
 
@@ -80,6 +112,9 @@ pub fn run() {
             app.manage(LogGuard(log_guard));
             builder.mount_events(app);
             let state = build_state(app.handle())?;
+            if let Ok(s) = tauri::async_runtime::block_on(state.settings.get()) {
+                apply_window_effects(app.handle(), &s);
+            }
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "MineUP started");
             if let Some(vpn) = state.mihomo.clone() {
                 tauri::async_runtime::spawn(async move {
