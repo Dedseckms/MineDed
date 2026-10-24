@@ -11,7 +11,7 @@
 | Windows 10/11 | `MineUP_x.y.z_x64-setup.exe` (или `.msi`) |
 | Linux | `MineUP_x.y.z_amd64.AppImage` (сделайте исполняемым) или `.deb` |
 
-Если GitHub недоступен, те же файлы лежат на зеркале: <https://relay.dedseckms.ru/updates/>. Лаунчер обновляется сам (сначала GitHub, затем зеркало); обновления подписаны.
+Если GitHub недоступен, те же файлы лежат на зеркале — откройте <https://relay.dedseckms.ru/updates/latest.json>, там прямые ссылки на файлы последней версии (например `https://relay.dedseckms.ru/updates/MineUP_1.0.1_x64-setup.exe`). Лаунчер обновляется сам (сначала GitHub, затем зеркало); обновления подписаны.
 
 ## Быстрый старт
 
