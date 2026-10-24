@@ -144,8 +144,23 @@ const CF_SHADERS: Row[] = [
   ["385587", "bsl-shaders-cf", "BSL Shaders", "CaptTatsu", 20_100_000, [], "semi-realistic", "Bright, soft and lively shader pack."],
 ];
 
+const MR_MODPACKS: Row[] = [
+  ["1KVo5zza", "fabulously-optimized", "Fabulously Optimized", "robotkoer", 14_800_000, ["fabric"], "optimization,lightweight", "Improved performance, nicer graphics and modern features, while still feeling like vanilla.", { mc: ["1.21.10", "1.21.8", "1.21.5", "1.21.4", "1.21.1", "1.20.1"] }],
+  ["ZsLzSFnK", "cobblemon-fabric", "Cobblemon Official Modpack", "Cobblemon", 3_100_000, ["fabric"], "adventure,multiplayer", "The official Cobblemon modpack: catch, train and battle in Minecraft.", { mc: ["1.21.1", "1.20.1"] }],
+  ["8Bf7rCjA", "better-mc-neoforge", "Better MC [NEOFORGE]", "SHXRKIE", 2_400_000, ["neoForge"], "adventure,quests", "Improves vanilla with hundreds of mods: new biomes, structures, mobs and quests.", { mc: ["1.21.1"] }],
+  ["lR5jBg3k", "simply-optimized", "Simply Optimized", "Sky", 1_900_000, ["fabric", "quilt"], "optimization", "A simple, stable and highly compatible optimization modpack.", { mc: ["1.21.4", "1.21.1", "1.20.1"] }],
+];
+
+const CF_MODPACKS: Row[] = [
+  ["715572", "all-the-mods-9", "All the Mods 9", "ATMTeam", 9_600_000, ["forge"], "kitchen-sink,tech,magic", "All the Mods started out as a private pack for just a few friends of ours that turned into something others wanted to play.", { mc: ["1.20.1"] }],
+  ["452013", "rlcraft", "RLCraft", "Shivaxi", 21_300_000, ["forge"], "hardcore,adventure", "A modpack specially designed to bring an incredibly hardcore and semi-realism challenge.", { mc: ["1.12.2"], manual: true }],
+  ["520914", "create-above-and-beyond", "Create: Above and Beyond", "simibubi", 6_700_000, ["forge"], "tech,quests", "An expert-ish modpack themed around Create and automation.", { mc: ["1.16.5"] }],
+];
+
 export const CATALOG: MockProject[] = [
   ...MR_MODS.map((r, i) => project("modrinth", "mod", r, i)),
+  ...MR_MODPACKS.map((r, i) => project("modrinth", "modpack", r, i + 90)),
+  ...CF_MODPACKS.map((r, i) => project("curseForge", "modpack", r, i + 95)),
   ...MR_PACKS.map((r, i) => project("modrinth", "resourcePack", r, i + 30)),
   ...MR_SHADERS.map((r, i) => project("modrinth", "shader", r, i + 40)),
   ...CF_MODS.map((r, i) => project("curseForge", "mod", r, i + 50)),
@@ -157,9 +172,12 @@ export function findProject(source: ContentSourceKind, projectId: string): MockP
   return CATALOG.find((p) => p.source === source && p.projectId === projectId);
 }
 
-/** Loaders only matter for mods; packs and shaders fit any instance. */
+/** Mods and modpacks are tied to a loader and a Minecraft version. */
+export const loaderBound = (kind: ContentKind): boolean => kind === "mod" || kind === "modpack";
+
+/** Loaders only matter for mods and modpacks; packs and shaders fit any instance. */
 function loaderFits(p: MockProject, loader: LoaderKind | null): boolean {
-  if (p.kind !== "mod" || loader === null) return true;
+  if (!loaderBound(p.kind) || loader === null) return true;
   if (loader === "vanilla") return false;
   return p.loaders.includes(loader);
 }
@@ -176,7 +194,7 @@ export function searchCatalog(q: SearchQuery): SearchPage {
         p.title.toLowerCase().includes(text) ||
         p.slug.includes(text) ||
         p.description.toLowerCase().includes(text)) &&
-      (q.mc === null || p.kind !== "mod" || p.mc.includes(q.mc)) &&
+      (q.mc === null || !loaderBound(p.kind) || p.mc.includes(q.mc)) &&
       loaderFits(p, q.loader) &&
       (q.categories.length === 0 || q.categories.some((c) => p.categories.includes(c))),
   );
@@ -213,8 +231,9 @@ function hashNum(s: string): number {
   return h >>> 0;
 }
 
-function fileExt(kind: ContentKind): string {
-  return kind === "mod" ? "jar" : "zip";
+function fileExt(p: MockProject): string {
+  if (p.kind === "modpack") return p.source === "modrinth" ? "mrpack" : "zip";
+  return p.kind === "mod" ? "jar" : "zip";
 }
 
 /** Every version of a project, newest first. */
@@ -234,9 +253,9 @@ export function projectVersions(p: MockProject): ContentVersion[] {
         name: `${p.title} ${versionNumber}`,
         versionNumber,
         mcVersions: [mc],
-        loaders: p.kind === "mod" ? [...p.loaders] : [],
+        loaders: loaderBound(p.kind) ? [...p.loaders] : [],
         published,
-        fileName: `${p.slug}-${versionNumber.replace("+", "-")}.${fileExt(p.kind)}`,
+        fileName: `${p.slug}-${versionNumber.replace("+", "-")}.${fileExt(p)}`,
         size: 80_000 + (hashNum(versionId) % 12_000_000),
         sha1: hashNum(versionId).toString(16).padStart(8, "0").repeat(5),
         dependencies: [
@@ -259,7 +278,8 @@ export function filterVersions(list: ContentVersion[], filter: ContentFilter): C
 }
 
 export function manualUrl(p: MockProject, v: ContentVersion): string {
-  const section = p.kind === "mod" ? "mc-mods" : p.kind === "shader" ? "shaders" : "texture-packs";
+  const section =
+    p.kind === "mod" ? "mc-mods" : p.kind === "shader" ? "shaders" : p.kind === "modpack" ? "modpacks" : "texture-packs";
   return `https://www.curseforge.com/minecraft/${section}/${p.slug}/files/${hashNum(v.versionId) % 9_000_000}`;
 }
 
