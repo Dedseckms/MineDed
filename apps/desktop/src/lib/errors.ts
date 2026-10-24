@@ -66,6 +66,7 @@ export const KNOWN_REASONS = [
   "instanceRequired",
   "relayUnreachable",
   "rateLimited",
+  "curseforgeDisabled",
 ] as const;
 export type KnownReason = (typeof KNOWN_REASONS)[number];
 

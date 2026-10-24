@@ -6,16 +6,19 @@ import { api } from "../../api/client";
 import { useStartTask } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
-import { Field, Segmented, TextInput } from "../../components/ui/form";
+import { Field, TextInput } from "../../components/ui/form";
 import { ErrorMessage } from "../../components/ui/feedback";
 import { PACK_FORMATS, packExt, withPackExt } from "../../lib/content";
 import { validateFilePath } from "../../lib/validation";
 import { useTaskView } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 
+/** Only Modrinth `.mrpack` export is offered (CurseForge is turned off). */
+const FORMAT: PackFormat = PACK_FORMATS[0];
+
 export function ExportDialog({ instance, onClose }: { instance: Instance | null; onClose: () => void }) {
   const { t } = useTranslation();
-  const [format, setFormat] = useState<PackFormat>("mrpack");
+  const format = FORMAT;
   const [path, setPath] = useState("");
   const [touched, setTouched] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -70,19 +73,7 @@ export function ExportDialog({ instance, onClose }: { instance: Instance | null;
           submit();
         }}
       >
-        <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">{t("export.format")}</span>
-          <Segmented<PackFormat>
-            ariaLabel={t("export.format")}
-            value={format}
-            onChange={(f) => {
-              setFormat(f);
-              setPath((p) => withPackExt(p, f));
-            }}
-            options={PACK_FORMATS.map((f) => ({ value: f, label: t(`export.formats.${f}`) }))}
-          />
-          <p className="text-xs text-muted">{t(`export.formatHint.${format}`)}</p>
-        </div>
+        <p className="text-sm text-muted">{t("export.hint")}</p>
         <Field label={t("export.path")} error={touched ? error : null} hint={t("export.pathHint")}>
           {(id, d, inv) => (
             <TextInput
@@ -90,11 +81,11 @@ export function ExportDialog({ instance, onClose }: { instance: Instance | null;
               aria-describedby={d}
               invalid={inv}
               value={path}
-              placeholder={t(`export.pathPlaceholder.${format}`)}
+              placeholder={t("export.pathPlaceholder")}
               onChange={(e) => setPath(e.target.value)}
               onBlur={() => {
                 setTouched(true);
-                if (path.trim() !== "" && !/\.(mrpack|zip)$/i.test(path.trim())) setPath(withPackExt(path, format));
+                if (path.trim() !== "" && !/\.mrpack$/i.test(path.trim())) setPath(withPackExt(path, FORMAT));
               }}
             />
           )}

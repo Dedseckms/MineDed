@@ -380,38 +380,25 @@
       "instanceRequired": "Pick an instance for a game room (same version and mods as the host).",
       "relayUnreachable": "The relay server is unreachable. Check your internet or turn on the VPN.",
       "rateLimited": "Too many attempts. Wait a little and try again.",
-      "rateLimitedRetry": "Too many attempts. Try again in {{seconds}} s."
+      "rateLimitedRetry": "Too many attempts. Try again in {{seconds}} s.",
+      "curseforgeDisabled": "CurseForge is turned off: the launcher works with Modrinth only. Look for the pack or mod on Modrinth."
     }
   },
   "import": {
     "button": "Import from file",
     "title": "Import modpack",
     "submit": "Import",
-    "hint": "Supported: Modrinth .mrpack and CurseForge modpack .zip.",
+    "hint": "Only Modrinth modpacks (.mrpack) are supported.",
     "path": "Pack file",
-    "pathHint": "Full path to the file on this computer",
+    "pathHint": "Full path to the .mrpack file on this computer",
     "pathPlaceholder": "C:\\Users\\me\\Downloads\\pack.mrpack"
   },
   "export": {
     "title": "Export “{{name}}”",
-    "format": "Format",
-    "formats": {
-      "mrpack": "Modrinth (.mrpack)",
-      "curseForgeZip": "CurseForge (.zip)",
-      "launcherZip": "Full backup (.zip)"
-    },
-    "formatHint": {
-      "mrpack": "Mod list with download links plus configs — small file, imports into any Modrinth-compatible launcher.",
-      "curseForgeZip": "CurseForge manifest with overrides — for the CurseForge app and compatible launchers.",
-      "launcherZip": "The whole instance folder including worlds — for backups and moving to another PC."
-    },
+    "hint": "The instance is saved as a Modrinth pack (.mrpack): mod list with download links plus configs — a small file that imports into any Modrinth-compatible launcher.",
     "path": "Save to",
     "pathHint": "Full path including the file name",
-    "pathPlaceholder": {
-      "mrpack": "C:\\Users\\me\\Desktop\\pack.mrpack",
-      "curseForgeZip": "C:\\Users\\me\\Desktop\\pack.zip",
-      "launcherZip": "C:\\Users\\me\\Desktop\\backup.zip"
-    },
+    "pathPlaceholder": "C:\\Users\\me\\Desktop\\pack.mrpack",
     "done": "Saved to {{path}}"
   },
   "preset": {

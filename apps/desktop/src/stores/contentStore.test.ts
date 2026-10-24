@@ -20,10 +20,9 @@ describe("contentStore", () => {
     const s = useContentStore.getState();
     s.setText("iris");
     s.setCompatibleOnly(false);
-    s.setSource("curseForge");
     s.browse("shader");
     expect(selectFilters(useContentStore.getState())).toMatchObject({
-      source: "curseForge",
+      source: "modrinth",
       kind: "shader",
       text: "",
       compatibleOnly: true,

@@ -67,7 +67,8 @@ export function validateFilePath(path: string, exts: readonly string[]): Validat
   return null;
 }
 
-export const IMPORT_EXTS = [".mrpack", ".zip"] as const;
+/** Modpack import accepts Modrinth `.mrpack` only (CurseForge is turned off). */
+export const IMPORT_EXTS = [".mrpack"] as const;
 export const SKIN_EXTS = [".png"] as const;
 
 // ---- URLs -------------------------------------------------------------------

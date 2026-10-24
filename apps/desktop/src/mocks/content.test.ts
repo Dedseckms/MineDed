@@ -37,8 +37,11 @@ describe("mock catalog", () => {
     expect([...p1.items, ...p2.items].some((p) => p.slug === "oculus")).toBe(false);
     const text = unwrap(await api.contentSearch(query({ text: "sodium", sort: "relevance" })));
     expect(text.items[0]?.title).toBe("Sodium");
-    const shaders = unwrap(await api.contentSearch(query({ kind: "shader", source: "curseForge" })));
-    expect(shaders.items.every((p) => p.kind === "shader" && p.source === "curseForge")).toBe(true);
+    const shaders = unwrap(await api.contentSearch(query({ kind: "shader" })));
+    expect(shaders.items.every((p) => p.kind === "shader" && p.source === "modrinth")).toBe(true);
+    // CurseForge is turned off: requests fail with a known reason.
+    const cf = await api.contentSearch(query({ source: "curseForge" }));
+    expect(cf.status === "error" && cf.error.details?.reason).toBe("curseforgeDisabled");
     expect((await api.contentSearch(query({ limit: 0 }))).status).toBe("error");
   });
 
@@ -71,13 +74,11 @@ describe("mock resolve", () => {
     expect(empty.alreadyInstalled).toEqual(["50dA9Sha"]);
   });
 
-  it("reports conflicts and manual downloads", async () => {
+  it("reports conflicts", async () => {
     const api = createMockCommands();
     const canvas = await api.contentResolve("inst-fabric", [{ source: "modrinth", projectId: "fRiHVvU7", versionId: "fRiHVvU7-1.20.1-0" }]);
     expect(unwrap(canvas).conflicts).toEqual([{ projectId: "fRiHVvU7", withProjectId: "AANobbMI", reason: "incompatible" }]);
-    const manual = unwrap(await api.contentResolve("inst-big", [{ source: "curseForge", projectId: "263420", versionId: null }]));
-    expect(manual.install).toEqual([]);
-    expect(manual.manual[0]?.url).toMatch(/^https:\/\/www\.curseforge\.com\//);
+    expect(unwrap(canvas).manual).toEqual([]);
     const none = await api.contentResolve("inst-survival", [{ source: "modrinth", projectId: "AANobbMI", versionId: null }]);
     expect(none.status === "error" && none.error.code).toBe("notFound");
   });

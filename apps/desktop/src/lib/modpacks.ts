@@ -1,4 +1,4 @@
-// Pure helpers for the modpack catalog (ready-made instances from Modrinth / CurseForge).
+// Pure helpers for the modpack catalog (ready-made instances from Modrinth).
 import type { ContentFilter, Instance, InstanceId, LoaderKind, SearchQuery, SortBy } from "../bindings";
 import { PAGE_SIZE, type SearchSource } from "./content";
 import { toAppError } from "./errors";
