@@ -1,5 +1,7 @@
 //! Minimal client for the rooms part of the hub API (`server/openapi/hub.yaml`).
 
+use std::time::Duration;
+
 use lc_accounts::Secret;
 use lc_types::room::{InstanceSig, RoomAuthMode, RoomKind};
 use lc_types::{AppError, AppResult, ErrorCode, RoomId};
@@ -71,10 +73,14 @@ struct HubError {
     details: Option<std::collections::BTreeMap<String, String>>,
 }
 
+/// Whole-request limit for every hub call (connect + response body).
+pub(crate) const HUB_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 pub(crate) struct HubClient {
     client: reqwest::Client,
     base: String,
+    timeout: Duration,
 }
 
 impl HubClient {
@@ -90,7 +96,11 @@ impl HubClient {
                     .detail("setting", "hubUrl"),
             );
         }
-        Ok(Self { client, base })
+        Ok(Self {
+            client,
+            base,
+            timeout: HUB_TIMEOUT,
+        })
     }
 
     pub async fn create_room(
@@ -104,6 +114,13 @@ impl HubClient {
             rb = rb.bearer_auth(token.expose());
         }
         self.send_json(rb, &url).await
+    }
+
+    /// Overrides the per-request limit (tests).
+    #[cfg(test)]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     pub async fn join_room(
@@ -131,18 +148,23 @@ impl HubClient {
     /// Best effort: the room also expires on its own.
     pub async fn close_room(&self, room_id: RoomId, host_token: &Secret) -> AppResult<()> {
         let url = format!("{}/rooms/{room_id}", self.base);
-        let resp = self
-            .client
-            .delete(&url)
-            .bearer_auth(host_token.expose())
-            .send()
+        let call = async {
+            let resp = self
+                .client
+                .delete(&url)
+                .bearer_auth(host_token.expose())
+                .send()
+                .await
+                .map_err(|e| network(&url, &e))?;
+            if resp.status().is_success() {
+                Ok(())
+            } else {
+                Err(status_error(resp, &url).await)
+            }
+        };
+        tokio::time::timeout(self.timeout, call)
             .await
-            .map_err(|e| network(&url, &e))?;
-        if resp.status().is_success() {
-            Ok(())
-        } else {
-            Err(status_error(resp, &url).await)
-        }
+            .map_err(|_| hub_timeout(&url))?
     }
 
     async fn send_json<T: for<'de> Deserialize<'de>>(
@@ -150,21 +172,36 @@ impl HubClient {
         rb: reqwest::RequestBuilder,
         url: &str,
     ) -> AppResult<T> {
-        let resp = rb.send().await.map_err(|e| network(url, &e))?;
-        if !resp.status().is_success() {
-            return Err(status_error(resp, url).await);
-        }
-        let bytes = resp.bytes().await.map_err(|e| network(url, &e))?;
-        serde_json::from_slice(&bytes).map_err(|e| {
-            AppError::new(ErrorCode::Network, format!("unexpected hub response: {e}"))
-                .detail("url", url)
-        })
+        let call = async {
+            let resp = rb.send().await.map_err(|e| network(url, &e))?;
+            if !resp.status().is_success() {
+                return Err(status_error(resp, url).await);
+            }
+            let bytes = resp.bytes().await.map_err(|e| network(url, &e))?;
+            serde_json::from_slice(&bytes).map_err(|e| {
+                AppError::new(ErrorCode::Network, format!("unexpected hub response: {e}"))
+                    .detail("url", url)
+                    .detail("source", "hub")
+            })
+        };
+        tokio::time::timeout(self.timeout, call)
+            .await
+            .map_err(|_| hub_timeout(url))?
     }
+}
+
+fn hub_timeout(url: &str) -> AppError {
+    AppError::new(ErrorCode::Network, "hub did not answer in time")
+        .detail("url", url)
+        .detail("source", "hub")
+        .detail("reason", "timeout")
 }
 
 fn network(url: &str, e: &reqwest::Error) -> AppError {
     // reqwest errors carry the URL only, never headers (no token leak).
-    AppError::new(ErrorCode::Network, format!("hub request failed: {e}")).detail("url", url)
+    AppError::new(ErrorCode::Network, format!("hub request failed: {e}"))
+        .detail("url", url)
+        .detail("source", "hub")
 }
 
 async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
@@ -179,7 +216,12 @@ async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
         .await
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok());
+    let hub_expired = body
+        .as_ref()
+        .is_some_and(|b| b.code.as_deref() == Some("authExpired"));
     let code = match status.as_u16() {
+        // The hub rejected our bearer (as opposed to "no bearer sent").
+        401 if hub_expired => ErrorCode::AuthExpired,
         401 => ErrorCode::AuthRequired,
         403 => ErrorCode::PermissionDenied,
         404 => ErrorCode::NotFound,
@@ -194,6 +236,7 @@ async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
         .unwrap_or_else(|| format!("hub returned {status}"));
     let mut err = AppError::new(code, message)
         .detail("url", url)
+        .detail("source", "hub")
         .detail("status", status.as_u16().to_string());
     let (hub_code, details) = body.map(|b| (b.code, b.details)).unwrap_or_default();
     if let Some(hub_code) = hub_code {
@@ -263,6 +306,95 @@ mod tests {
         assert_eq!(d["retryAfter"], "30");
         assert_eq!(d["hubCode"], "rateLimited");
         assert_eq!(d["status"], "429");
+    }
+
+    async fn serve(app: axum::Router) -> HubClient {
+        use lc_http::{Downloader, Route, StubDownloader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        HubClient::new(
+            StubDownloader.client(Route::Direct),
+            &format!("http://{addr}/api/v1"),
+        )
+        .unwrap()
+    }
+
+    fn voice_req() -> CreateRoomReq {
+        CreateRoomReq {
+            endpoint_id: "e".into(),
+            kind: RoomKind::Voice,
+            sig: None,
+            auth_mode: RoomAuthMode::Yggdrasil,
+            max_peers: 8,
+            password_protected: false,
+        }
+    }
+
+    /// Regression (v1.0.1): a rejected bearer showed up as "add an account".
+    #[tokio::test]
+    async fn rejected_bearer_is_auth_expired_from_hub() {
+        use axum::http::StatusCode;
+        use axum::routing::post;
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/rooms",
+                post(|| async {
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        axum::Json(serde_json::json!({
+                            "code": "authExpired", "message": "token is invalid or expired"
+                        })),
+                    )
+                }),
+            )
+            .route(
+                "/api/v1/rooms/{code}/join",
+                post(|| async {
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        axum::Json(serde_json::json!({
+                            "code": "authRequired", "message": "bearer token required"
+                        })),
+                    )
+                }),
+            );
+        let hub = serve(app).await;
+        let token = Secret::new("t");
+        let err = hub
+            .create_room(&voice_req(), Some(&token))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::AuthExpired);
+        let d = err.details.unwrap();
+        assert_eq!(d["source"], "hub");
+        assert_eq!(d["status"], "401");
+        assert_eq!(d["hubCode"], "authExpired");
+        let err = hub
+            .join_room("ABCD-1234", "e", "Steve", None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::AuthRequired);
+    }
+
+    #[tokio::test]
+    async fn silent_hub_times_out() {
+        use axum::routing::post;
+        let app = axum::Router::new().route(
+            "/api/v1/rooms",
+            post(|| async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                "late"
+            }),
+        );
+        let hub = serve(app).await.with_timeout(Duration::from_millis(300));
+        let t = std::time::Instant::now();
+        let err = hub.create_room(&voice_req(), None).await.unwrap_err();
+        assert!(t.elapsed() < Duration::from_secs(5));
+        assert_eq!(err.code, ErrorCode::Network);
+        let d = err.details.unwrap();
+        assert_eq!(d["reason"], "timeout");
+        assert_eq!(d["source"], "hub");
     }
 
     #[test]
