@@ -12,8 +12,11 @@ mineup.dedseckms.ru {
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
 	}
-	@assets path *.css *.js *.svg
-	header @assets Cache-Control "public, max-age=86400"
+	# HTML must revalidate; assets are versioned (?v=N) in index.html and may cache 7 days.
+	@html path / /index.html
+	header @html Cache-Control "no-cache"
+	@assets path *.css *.js *.svg *.webp
+	header @assets Cache-Control "public, max-age=604800"
 	@write not method GET HEAD
 	respond @write 405
 	reverse_proxy 127.0.0.1:18091
