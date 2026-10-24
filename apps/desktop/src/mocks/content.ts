@@ -96,6 +96,11 @@ const MR_MODS: Row[] = [
   ["XaDC71GB", "xaeros-world-map", "Xaero's World Map", "xaero96", 26_700_000, ANY, "map", "Adds a self-writing world map to the game."],
   ["GchcoXML", "oculus", "Oculus", "Asek3", 9_800_000, ["forge"], "decoration", "A fork of Iris for Forge.", { requires: ["sk9rgfiA"], mc: ["1.20.1", "1.19.2", "1.18.2"] }],
   ["sk9rgfiA", "embeddium", "Embeddium", "embeddedt", 12_200_000, FORGES, "optimization", "Rendering optimization mod for Forge and NeoForge based on Sodium.", { mc: ["1.21.1", "1.20.1", "1.19.2", "1.18.2"] }],
+  // Borderless fullscreen mods (real Modrinth ids, see lib/borderless.ts).
+  ["UIexcMP1", "borderless-fullscreen", "Borderless Fullscreen", "Ideal", 2_900_000, ["fabric"], "utility", "Makes fullscreen borderless.", { mc: ["1.21.10", "1.21.8", "1.21.5", "1.21.4", "1.21.1", "1.20.1"] }],
+  ["kYq5qkSL", "borderless-mining", "Borderless Mining", "comp500", 9_500_000, ["fabric", "quilt", "forge"], "utility", "Changes the fullscreen option to a borderless window.", { mc: ["1.20.1", "1.19.4", "1.19.2", "1.18.2", "1.16.5"] }],
+  ["KxYAzYLi", "borderless-mining-updated", "Borderless Mining Updated", "community", 800_000, ["fabric", "neoForge"], "utility", "Borderless fullscreen for recent versions.", { mc: ["1.21.10"] }],
+  ["CnalMsa0", "borderless-window", "Borderless Window", "community", 210_000, FORGES, "utility", "Borderless windowed fullscreen for Forge and NeoForge.", { mc: ["1.21.1", "1.20.1", "1.19.2", "1.18.2", "1.16.5"] }],
 ];
 
 const MR_PACKS: Row[] = [

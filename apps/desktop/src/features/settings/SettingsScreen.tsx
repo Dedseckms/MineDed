@@ -22,6 +22,8 @@ import {
 } from "../../lib/validation";
 import { useDraftValue } from "../../hooks/useDraftValue";
 import { ACCENT_PRESETS, isHexColor } from "../../lib/color";
+import { BACKGROUND_IDS, type BackgroundId, resolveBackground } from "../../lib/backdrop";
+import { BackgroundScene } from "../appearance/backgrounds";
 import { MemoryEditor, useFormatMb } from "../common/MemoryEditor";
 import { AboutSection } from "../updates/AboutSection";
 import { VoiceSettingsSection } from "../voice/VoiceSettingsSection";
@@ -94,6 +96,45 @@ export function AccentPicker({ value, onChange }: { value: string | null; onChan
   );
 }
 
+/** Built-in background previews (static) plus "none". */
+export function BackgroundPicker({ value, onChange }: { value: BackgroundId | null; onChange: (v: BackgroundId | null) => void }) {
+  const { t } = useTranslation();
+  const tile = (selected: boolean) =>
+    `relative aspect-video w-full cursor-pointer overflow-hidden rounded-lg border-2 text-left transition-colors ${
+      selected ? "border-accent" : "border-border hover:border-muted"
+    }`;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span id="background-label" className="text-sm font-medium">
+        {t("settings.background")}
+      </span>
+      <div role="radiogroup" aria-labelledby="background-label" className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+        <button type="button" role="radio" aria-checked={value === null} onClick={() => onChange(null)} className={`${tile(value === null)} bg-surface-2`}>
+          <span className="absolute inset-0 grid place-items-center text-xs text-muted">{t("settings.backgroundNone")}</span>
+        </button>
+        {BACKGROUND_IDS.map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="radio"
+            aria-checked={value === id}
+            aria-label={t(`settings.backgrounds.${id}`)}
+            title={t(`settings.backgrounds.${id}`)}
+            onClick={() => onChange(id)}
+            className={tile(value === id)}
+          >
+            <BackgroundScene id={id} className="absolute inset-0" />
+            <span className="absolute inset-x-0 bottom-0 truncate bg-surface px-1.5 py-0.5 text-[0.7rem] text-text">
+              {t(`settings.backgrounds.${id}`)}
+            </span>
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-muted">{t("settings.backgroundHint")}</p>
+    </div>
+  );
+}
+
 /** Theme, language and performance flags: saved and applied immediately. */
 function AppearanceSection({ settings }: { settings: Settings }) {
   const { t } = useTranslation();
@@ -129,6 +170,14 @@ function AppearanceSection({ settings }: { settings: Settings }) {
           ]}
         />
       </div>
+      <Switch
+        checked={settings.translucent && !settings.lightMode}
+        disabled={settings.lightMode}
+        onChange={(translucent) => set({ translucent })}
+        label={t("settings.translucent")}
+        description={t(settings.lightMode ? "settings.translucentLightHint" : "settings.translucentHint")}
+      />
+      <BackgroundPicker value={resolveBackground(settings.background)} onChange={(background) => set({ background })} />
       <Switch
         checked={settings.lightMode}
         onChange={(lightMode) => set({ lightMode })}

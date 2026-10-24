@@ -16,6 +16,10 @@
   --color-warning: #fbbf24;
   --color-info: #60a5fa;
   --color-overlay: rgb(0 0 0 / 0.55);
+  /* Shell surfaces (sidebar, header, sections, cards) and the layer under them.
+     Opaque by default; tinted when something sits behind the window (below). */
+  --color-panel: var(--color-surface);
+  --color-scrim: transparent;
   --font-sans: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
@@ -55,6 +59,78 @@ body {
 :root[data-overlay="true"],
 :root[data-overlay="true"] body {
   background: transparent;
+}
+
+/* Translucent window (Mica/Acrylic) and built-in backgrounds.
+   Alphas must match SCRIM_ALPHA / PANEL_ALPHA in src/lib/backdrop.ts (tested for WCAG AA).
+   Dialogs, menus, toasts and inputs keep opaque bg-surface / bg-surface-2. */
+:root[data-translucent="true"],
+:root[data-translucent="true"] body {
+  background: transparent;
+}
+
+:root[data-backdrop="true"] {
+  --color-scrim: color-mix(in srgb, var(--color-bg) 65%, transparent);
+}
+
+:root[data-tinted="true"] {
+  --color-panel: color-mix(in srgb, var(--color-surface) 85%, transparent);
+}
+
+/* Secondary text placed straight on the scrim (outside panels) is not AA on a bright
+   backdrop: promote it to the main text colour there. */
+:root[data-backdrop="true"] main .text-muted:not(.bg-panel *, .bg-surface *, .bg-surface-2 *, .bg-bg *) {
+  color: var(--color-text);
+}
+
+:root[data-tinted="true"] .shell-panel {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.12),
+    0 4px 16px rgb(0 0 0 / 0.08);
+}
+
+/* Background scenes: compositor-only drifts (transform), off in light mode / reduced motion. */
+@keyframes bg-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes bg-sway {
+  from {
+    transform: translate3d(-1.2%, 0, 0);
+  }
+  to {
+    transform: translate3d(1.2%, 0, 0);
+  }
+}
+
+.bg-drift {
+  animation: bg-drift 160s linear infinite;
+  will-change: transform;
+}
+
+.bg-sway {
+  animation: bg-sway 40s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+[data-light-mode="true"] .bg-drift,
+[data-light-mode="true"] .bg-sway,
+[data-reduce-motion="true"] .bg-drift,
+[data-reduce-motion="true"] .bg-sway {
+  animation: none !important;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-drift,
+  .bg-sway {
+    animation: none !important;
+  }
 }
 
 input,

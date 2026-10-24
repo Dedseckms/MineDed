@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import type { AppError } from "../bindings";
+
 export type ToastTone = "info" | "warning" | "danger";
 
 export interface ToastAction {
@@ -17,6 +19,8 @@ export interface Toast {
   /** Optional backend-provided i18n key shown under the message. */
   detailKey?: string;
   action?: ToastAction;
+  /** Error behind the toast: enables "More" (code, details, copy) and proxy hints. */
+  error?: AppError;
   /** Identical `dedupeKey`s replace each other instead of stacking. */
   dedupeKey?: string;
 }

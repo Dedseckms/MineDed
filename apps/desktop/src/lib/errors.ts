@@ -58,3 +58,61 @@ export function errorKey(e: unknown): `errors.${ErrorCode}` {
 export function isNotImplemented(e: unknown): boolean {
   return e != null && toAppError(e).code === "notImplemented";
 }
+
+/** `details.reason` values with a friendly message (`errors.reason.<reason>`). */
+export const KNOWN_REASONS = [
+  "authModeMismatch",
+  "yggdrasilAccountRequired",
+  "instanceRequired",
+  "relayUnreachable",
+  "rateLimited",
+] as const;
+export type KnownReason = (typeof KNOWN_REASONS)[number];
+
+/** Detail keys shown first in the "More" block, in this order. */
+const DETAIL_ORDER = ["reason", "step", "source", "status", "hint"];
+
+export interface ErrorView {
+  code: ErrorCode;
+  /** i18n key of the main message: a known reason wins over the code. */
+  messageKey: string;
+  params: Record<string, string>;
+  /** All details, the well-known ones first. */
+  details: Array<[string, string]>;
+  /** Backend suggests a proxy / VPN (`details.hint = useProxy`). */
+  suggestProxy: boolean;
+  /** Plain text for the "Copy" button (code, developer message, details). */
+  copyText: string;
+}
+
+function knownReason(details: Record<string, string>, code: ErrorCode): KnownReason | null {
+  const r = details.reason ?? details.hubCode ?? (code === "rateLimited" ? "rateLimited" : undefined);
+  return r && (KNOWN_REASONS as readonly string[]).includes(r) ? (r as KnownReason) : null;
+}
+
+/** Everything the UI shows about an error: translated message, details and actions. */
+export function errorView(e: unknown): ErrorView {
+  const err = toAppError(e);
+  const raw = err.details ?? {};
+  const reason = knownReason(raw, err.code);
+  const params: Record<string, string> = {};
+  let messageKey: string = `errors.${err.code}`;
+  if (reason === "rateLimited") {
+    const retry = raw.retryAfter;
+    messageKey = retry && /^\d+$/.test(retry) ? "errors.reason.rateLimitedRetry" : "errors.reason.rateLimited";
+    if (retry) params.seconds = retry;
+  } else if (reason) {
+    messageKey = `errors.reason.${reason}`;
+  }
+  const rank = (k: string) => {
+    const i = DETAIL_ORDER.indexOf(k);
+    return i === -1 ? DETAIL_ORDER.length : i;
+  };
+  const details = Object.entries(raw).sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+  const copyText = [
+    `code: ${err.code}`,
+    ...(err.message ? [`message: ${err.message}`] : []),
+    ...details.map(([k, v]) => `${k}: ${v}`),
+  ].join("\n");
+  return { code: err.code, messageKey, params, details, suggestProxy: raw.hint === "useProxy", copyText };
+}
