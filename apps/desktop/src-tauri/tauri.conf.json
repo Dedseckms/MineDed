@@ -21,7 +21,21 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' asset: http://asset.localhost https: data: blob:",
+        "font-src": "'self' data:",
+        "media-src": "'self' asset: http://asset.localhost data: blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost asset: http://asset.localhost",
+        "worker-src": "'self' blob:",
+        "object-src": "'none'",
+        "frame-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      },
+      "dangerousDisableAssetCspModification": ["style-src"],
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/skins/**"]
