@@ -17,7 +17,9 @@ use lc_http::{DownloadReq, Downloader, ResourceKind, Route, StubDownloader};
 use lc_loaders::LoaderRegistry;
 use lc_runtime::{CancelToken, Paths, ProgressSink};
 use lc_types::events::{InstanceLogPayload, InstanceStatePayload};
-use lc_types::instance::{InstancePatch, InstanceSpec, JavaCfg, LaunchOpts, LoaderRef, RunState};
+use lc_types::instance::{
+    InstancePatch, InstanceSpec, JavaCfg, LaunchOpts, LoaderRef, PerfPreset, RunState,
+};
 use lc_types::settings::ProxyCfg;
 use lc_types::task::TaskEvent;
 use lc_types::version::{LoaderKind, VersionFilter, VersionKind};
@@ -355,6 +357,22 @@ async fn create_vanilla_and_crud() {
         .unwrap();
     assert_eq!(upd.name, "Renamed");
     assert_eq!(upd.jvm_args, vec!["-XX:+UseZGC".to_string()]);
+    let upd = core
+        .update(
+            inst.id,
+            InstancePatch {
+                preset: Some(PerfPreset::Potato),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(upd.preset, Some(PerfPreset::Potato));
+    assert_eq!(upd.name, "Renamed", "other fields untouched");
+    assert_eq!(
+        core.get(inst.id).await.unwrap().preset,
+        Some(PerfPreset::Potato)
+    );
     let bad = core
         .update(
             inst.id,
