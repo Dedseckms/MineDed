@@ -74,6 +74,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             vpn::vpn_select,
             vpn::vpn_test_latency,
             vpn::vpn_mineded_access,
+            vpn::vpn_set_source,
             vpn::vpn_apps,
             vpn::vpn_set_apps,
             vpn::vpn_running_apps,
