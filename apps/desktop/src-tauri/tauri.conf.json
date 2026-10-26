@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MineUP",
-  "mainBinaryName": "MineUP",
+  "productName": "MineDed",
+  "mainBinaryName": "MineDed",
   "identifier": "ru.dedseckms.mineup",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "MineUP",
+        "title": "MineDed",
         "width": 1200,
         "height": 760,
         "minWidth": 960,
@@ -33,11 +33,11 @@
     "targets": ["nsis", "msi", "appimage", "deb"],
     "createUpdaterArtifacts": true,
     "publisher": "Dedseckms",
-    "homepage": "https://github.com/Dedseckms/MineUP",
+    "homepage": "https://github.com/Dedseckms/MineDed",
     "license": "GPL-3.0-or-later",
     "category": "Game",
     "shortDescription": "Minecraft launcher",
-    "longDescription": "MineUP: cross-platform Minecraft launcher with mod loaders, modpacks, P2P rooms and voice chat.",
+    "longDescription": "MineDed: cross-platform Minecraft launcher with mod loaders, modpacks, P2P rooms and voice chat.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -49,10 +49,12 @@
       "nsis": {
         "installMode": "currentUser",
         "languages": ["Russian", "English"],
-        "displayLanguageSelector": true
+        "displayLanguageSelector": true,
+        "installerHooks": "nsis/hooks.nsh"
       },
       "wix": {
-        "language": ["ru-RU", "en-US"]
+        "language": ["ru-RU", "en-US"],
+        "upgradeCode": "b65e742b-ee38-5c9c-8d5c-b0e6dfca319a"
       }
     },
     "linux": {
@@ -65,7 +67,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxNDZGMjVFMUQzNzJCRjYKUldUMkt6Y2RYdkpHOFpQZHVOY2lvTDM5VTVjRkhEK3phOTBYcm5hR1UvSVF4T2JOZFVvUzFEVFcK",
       "endpoints": [
-        "https://github.com/Dedseckms/MineUP/releases/latest/download/latest.json",
+        "https://github.com/Dedseckms/MineDed/releases/latest/download/latest.json",
         "https://relay.dedseckms.ru/updates/latest.json"
       ],
       "windows": {

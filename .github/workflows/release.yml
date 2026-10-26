@@ -38,7 +38,7 @@ jobs:
             --jq "[.[] | select(.tag_name == \"$TAG\")][0].id // empty")
           if [ -z "$id" ]; then
             id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
-              -f tag_name="$TAG" -f name="MineUP $TAG" -f body="MineUP $TAG" \
+              -f tag_name="$TAG" -f name="MineDed $TAG" -f body="MineDed $TAG" \
               -F draft=true --jq .id)
           fi
           test -n "$id"
