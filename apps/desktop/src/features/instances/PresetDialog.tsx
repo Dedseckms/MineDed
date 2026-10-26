@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { Instance, PerfPreset } from "../../bindings";
-import { api } from "../../api/client";
-import { qk, useStartTask } from "../../api/queries";
+import { usePresetApply } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { Badge, ErrorMessage } from "../../components/ui/feedback";
@@ -17,10 +16,8 @@ export function PresetDialog({ instance, onClose }: { instance: Instance | null;
   const [choice, setChoice] = useState<PerfPreset>("balanced");
   const [taskId, setTaskId] = useState<string | null>(null);
   const task = useTaskView(taskId);
-  const apply = useStartTask<{ id: string; preset: PerfPreset }>({
-    run: (v, ch) => api.presetApply(v.id, v.preset, ch),
-    invalidate: instance ? [qk.instances, qk.content(instance.id)] : [qk.instances],
-  });
+  // Re-reads the instance on finish, so the "current" badge follows the persisted preset.
+  const apply = usePresetApply();
 
   const resetApply = apply.reset;
   const currentPreset = instance?.preset ?? null;
@@ -83,6 +80,7 @@ export function PresetDialog({ instance, onClose }: { instance: Instance | null;
           ))}
         </div>
         {task ? <TaskProgress task={task} /> : null}
+        {done ? <p className="text-sm text-muted">{t("preset.appliedHint")}</p> : null}
         <ErrorMessage error={apply.error} />
       </div>
     </Modal>

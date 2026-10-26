@@ -19,8 +19,10 @@ import type {
   Instance,
   InstanceId,
   InstancePatch,
+  InstanceSpec,
   LoaderKind,
   Peer,
+  PerfPreset,
   RoomAuthMode,
   SearchQuery,
   Settings,
@@ -35,10 +37,13 @@ import type {
   VpnNode,
 } from "../bindings";
 import { nextOffset } from "../lib/content";
+import { toAppError } from "../lib/errors";
 import { findNewInstance } from "../lib/modpacks";
 import { withPeerVolume } from "../lib/voice";
 import { selectNode } from "../lib/vpn";
+import { useNavStore } from "../stores/navStore";
 import { useRoomStore } from "../stores/roomStore";
+import { useToastStore } from "../stores/toastStore";
 import { useVoiceStore } from "../stores/voiceStore";
 import { useTaskStore } from "../stores/taskStore";
 import { createTaskChannel } from "./channel";
@@ -636,4 +641,100 @@ export function useInstallModpack(onInstalled?: (instance: Instance) => void) {
     [qc, mutate],
   );
   return { ...start, install };
+}
+
+// ---- presets ---------------------------------------------------------------
+
+export interface PresetApplyVars {
+  id: InstanceId;
+  preset: PerfPreset;
+  /** Shows "Open instance" in the success toast (the user is elsewhere). */
+  offerOpen?: boolean;
+}
+
+/** Toast after a successful `preset_apply`: where to look for the changes. */
+export function notifyPresetApplied(v: PresetApplyVars): void {
+  useToastStore.getState().push({
+    tone: "info",
+    messageKey: "preset.applied",
+    detailKey: "preset.appliedHint",
+    dedupeKey: `preset:${v.id}`,
+    action: v.offerOpen
+      ? { labelKey: "preset.openInstance", run: () => useNavStore.getState().showInstance(v.id) }
+      : undefined,
+  });
+}
+
+/**
+ * Starts `preset_apply` (a `presetApply` task). On success re-reads the
+ * instance (the backend persists `preset`, memory, JVM args) and its content,
+ * and shows a toast.
+ */
+export function usePresetApply() {
+  const qc = useQueryClient();
+  return useStartTask<PresetApplyVars>({
+    run: (v, ch) => api.presetApply(v.id, v.preset, ch),
+    onFinished: (error, v) => {
+      void qc.invalidateQueries({ queryKey: qk.instances });
+      void qc.invalidateQueries({ queryKey: qk.content(v.id) });
+      void qc.invalidateQueries({ queryKey: qk.ramRecommend(v.id) });
+      if (!error) notifyPresetApplied(v);
+    },
+  });
+}
+
+export interface CreateInstanceVars {
+  spec: InstanceSpec;
+  /** Applied as a follow-up `presetApply` task once the instance exists. */
+  preset: PerfPreset | null;
+}
+
+/**
+ * Creates an instance (`instance_create`) and, if a preset was chosen, chains
+ * `preset_apply` on the new instance after a successful finish. The create
+ * task has no result, so the new instance is found by diffing the list
+ * (same name, id not present before the start).
+ */
+export function useCreateInstance() {
+  const qc = useQueryClient();
+  const apply = usePresetApply();
+  const applyAsync = apply.mutateAsync;
+  const start = useStartTask<CreateInstanceVars & { before: InstanceId[] }>({
+    // The preset label is persisted by `preset_apply` itself, so the badge never
+    // claims a preset whose mods/settings were not applied.
+    run: (v, ch) => api.instanceCreate({ ...v.spec, preset: null }, ch),
+    invalidate: [qk.instances],
+    onFinished: (error, v) => {
+      const preset = v.preset;
+      if (error || preset === null) return;
+      void (async () => {
+        const list = unwrap(await api.instanceList());
+        qc.setQueryData(qk.instances, list);
+        const created = findNewInstance(
+          v.before,
+          list.filter((i) => i.name === v.spec.name),
+        );
+        if (!created) return;
+        // mutateAsync (not per-call callbacks): the dialog may be closed by now.
+        await applyAsync({ id: created.id, preset, offerOpen: true }).catch((e: unknown) => {
+          useToastStore.getState().push({
+            tone: "danger",
+            messageKey: "preset.applyFailed",
+            params: { name: created.name },
+            error: toAppError(e),
+          });
+        });
+      })().catch(() => qc.invalidateQueries({ queryKey: qk.instances }));
+    },
+  });
+  const mutateAsync = start.mutateAsync;
+  const create = useCallback(
+    async (v: CreateInstanceVars): Promise<TaskId> => {
+      // Fresh list, not the cache: the diff must not pick up an older instance.
+      const list = v.preset === null ? [] : await api.instanceList().then(unwrap).catch((): Instance[] => []);
+      return mutateAsync({ ...v, before: list.map((i) => i.id) });
+    },
+    [mutateAsync],
+  );
+  return { ...start, create };
 }

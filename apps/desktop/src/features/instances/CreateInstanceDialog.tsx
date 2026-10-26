@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { LoaderKind, PerfPreset, VersionKind } from "../../bindings";
-import { api } from "../../api/client";
-import { qk, useLoaderVersions, useStartTask, useVersions } from "../../api/queries";
+import { useCreateInstance, useLoaderVersions, useVersions } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/form";
@@ -14,14 +13,6 @@ import { PRESETS } from "./PresetDialog";
 
 const LOADERS: LoaderKind[] = ["vanilla", "fabric", "quilt", "forge", "neoForge"];
 type KindFilter = Extract<VersionKind, "release" | "snapshot">;
-
-interface CreateVars {
-  name: string;
-  mc: string;
-  loader: LoaderKind;
-  loaderVersion: string | null;
-  preset: PerfPreset | null;
-}
 
 export function CreateInstanceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
@@ -35,20 +26,8 @@ export function CreateInstanceDialog({ open, onClose }: { open: boolean; onClose
   const versions = useVersions([kind]);
   const loaderVersions = useLoaderVersions(loader, mc);
 
-  const create = useStartTask<CreateVars>({
-    run: (v, ch) =>
-      api.instanceCreate(
-        {
-          name: v.name,
-          mc: v.mc,
-          loader: { kind: v.loader, version: v.loader === "vanilla" ? null : v.loaderVersion },
-          preset: v.preset,
-          icon: null,
-        },
-        ch,
-      ),
-    invalidate: [qk.instances],
-  });
+  const create = useCreateInstance();
+  const startCreate = create.create;
 
   // Default to the newest version of the selected kind.
   useEffect(() => {
@@ -82,16 +61,16 @@ export function CreateInstanceDialog({ open, onClose }: { open: boolean; onClose
   const submit = () => {
     setTouched(true);
     if (!canSubmit) return;
-    create.mutate(
-      {
+    startCreate({
+      spec: {
         name: name.trim(),
         mc,
-        loader,
-        loaderVersion: needsLoaderVersion ? loaderVersion : null,
-        preset: preset === "" ? null : preset,
+        loader: { kind: loader, version: needsLoaderVersion ? loaderVersion : null },
+        preset: null,
+        icon: null,
       },
-      { onSuccess: onClose },
-    );
+      preset: preset === "" ? null : preset,
+    }).then(onClose, () => {}); // The error is shown via `create.error`.
   };
 
   return (

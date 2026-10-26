@@ -410,6 +410,10 @@
     "optional": "Optimization preset",
     "none": "None",
     "noneHint": "You can apply a preset later on the instance page",
+    "applied": "Preset applied",
+    "appliedHint": "See the changes in the Mods tab, the memory settings and the in-game video settings.",
+    "applyFailed": "Could not apply the preset to “{{name}}”",
+    "openInstance": "Open instance",
     "potato": {
       "title": "Potato",
       "description": "Maximum FPS on weak PCs: short render distance, simple graphics, minimum memory."
