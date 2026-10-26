@@ -296,6 +296,8 @@ export type InstancePatch = {
 	memory: MemoryCfg | null,
 	jvmArgs: string[] | null,
 	icon: string | null,
+	/**  Set by `PresetService::apply` once the preset is fully applied. */
+	preset?: PerfPreset | null,
 };
 
 /**  What guests must match to join (same game, loader and mod set). */

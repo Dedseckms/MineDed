@@ -76,6 +76,10 @@ pub struct InstancePatch {
     pub memory: Option<MemoryCfg>,
     pub jvm_args: Option<Vec<String>>,
     pub icon: Option<String>,
+    /// Set by `PresetService::apply` once the preset is fully applied.
+    #[serde(default)]
+    #[specta(optional)]
+    pub preset: Option<PerfPreset>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
