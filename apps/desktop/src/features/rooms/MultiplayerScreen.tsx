@@ -14,6 +14,7 @@ import { isSpeaking } from "../../lib/voice";
 import { useNavStore } from "../../stores/navStore";
 import { useVoiceStore } from "../../stores/voiceStore";
 import { PeerVoiceControls, SpeakingAvatar, VoiceControls } from "../voice/VoicePanel";
+import { HostPackSection } from "./HostPack";
 import { RoomChat } from "./RoomChat";
 import { CreateRoomForm, CreateVoiceRoomForm, JoinRoomForm } from "./RoomForms";
 
@@ -204,6 +205,7 @@ function RoomView({ room }: { room: RoomState }) {
           setConfirm(true);
         }}
       />
+      {!host && room.kind === "game" && room.sig ? <HostPackSection room={room} sig={room.sig} /> : null}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="flex flex-col gap-6">
           <VoiceControls />

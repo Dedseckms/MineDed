@@ -388,7 +388,8 @@
       "vpnUnavailable": "MineDed VPN is temporarily unavailable. Try again later.",
       "uacDeclined": "Administrator rights were not granted, and the “Selected programs” mode needs them. Allow the request or pick another mode.",
       "helperFailed": "Couldn't start the VPN helper with administrator rights.",
-      "vpnNotRunning": "The VPN is off. Turn on the VPN to check the ping."
+      "vpnNotRunning": "The VPN is off. Turn on the VPN to check the ping.",
+      "hostTooOld": "The host has an old launcher version — ask them to update."
     }
   },
   "dialog": {
@@ -701,6 +702,19 @@
       "pickFile": "Choose file…",
       "fileHint": "A mihomo/Clash config (YAML) or a list of vless://, trojan://… links"
     },
+    "own": {
+      "title": "Own subscriptions",
+      "intro": "Your own subscription by link or from a file, with its own nodes.",
+      "inactiveNodes": "MineDed VPN is in use now. Press “Use” to switch to this subscription and see its nodes."
+    },
+    "source": {
+      "active": "In use",
+      "notSet": "Not set up",
+      "use": "Use",
+      "useNamed": "Use {{name}}",
+      "mineded": "MineDed VPN",
+      "own": "own subscriptions"
+    },
     "nodes": {
       "title": "Nodes ({{n}})",
       "label": "VPN nodes",
@@ -744,6 +758,21 @@
       "codePlaceholder": "ABCD-1234",
       "submit": "Join",
       "denied": "Wrong room password."
+    },
+    "pack": {
+      "title": "Host's pack",
+      "summary": "The host plays: {{loader}} {{mc}}",
+      "intro": "You have no matching instance. The launcher downloads the host's pack, sets it up and adds the server to the game.",
+      "noMatch": "None of your instances matches the host's pack.",
+      "matching": "Looking for a matching instance…",
+      "download": "Download and play",
+      "later": "Later",
+      "auto": "Always download automatically",
+      "ready": "Instance: {{name}}",
+      "play": "Play",
+      "manual": "Pick an instance manually",
+      "manualHint": "Usually not needed: the launcher finds or downloads the host's pack itself.",
+      "attach": "Use this instance"
     },
     "role": {
       "host": "You are the host",
@@ -814,7 +843,7 @@
       "voice": "Voice only"
     },
     "kindHint": {
-      "game": "Friend's world: pick the same instance as the host.",
+      "game": "Friend's world: the launcher finds or downloads the host's pack.",
       "voice": "Chat and voice only — for playing together on a regular server."
     },
     "voiceCreate": {

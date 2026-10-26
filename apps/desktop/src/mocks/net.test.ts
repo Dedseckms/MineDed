@@ -69,6 +69,17 @@ describe("mock vpn", () => {
     expect(blocked).toEqual(["sub.blocked.invalid"]);
   });
 
+  it("keeps both subscriptions and switches the active source", async () => {
+    const bus = createMockBus();
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+    expect(unwrap(await api.vpnState())).toMatchObject({ source: null, hasOwn: false, hasMineded: false });
+    expect((await api.vpnSetSource("own")).status).toBe("error");
+    unwrap(await api.vpnImportSubscriptionFile("C:\\subs\\my.yaml"));
+    expect(unwrap(await api.vpnState())).toMatchObject({ source: "own", hasOwn: true });
+    expect(unwrap(await api.vpnNodes())).toHaveLength(MOCK_NODES.length);
+    expect((await api.vpnSetSource("mineded")).status).toBe("error");
+  });
+
   it("latency is deterministic and sometimes times out", () => {
     const all = MOCK_NODES.flatMap((n) => [1, 2, 3].map((r) => mockLatency(n.name, r)));
     expect(all.some((v) => v === null)).toBe(true);
@@ -141,6 +152,38 @@ describe("mock rooms", () => {
     unwrap(await api.roomLeave());
   });
 
+  it("game room without instance: attach a matching one or download the host pack", async () => {
+    const bus = createMockBus();
+    const api = createMockCommands({}, { bus, tickMs: 10 });
+    const code = async (p: Promise<{ status: string; error?: { code: string } }>) => {
+      const r = await p;
+      return r.status === "error" ? r.error?.code : "ok";
+    };
+    const game = unwrap(await api.roomJoin("ABCD-1234", null, null));
+    expect(game.sig).toMatchObject({ mc: "1.21.1", loader: "fabric" });
+    expect(await code(api.roomAttachInstance("inst-big"))).toBe("conflict");
+    expect(await code(api.roomAttachInstance("inst-fabric"))).toBe("ok");
+    unwrap(await api.roomLeave());
+
+    unwrap(await api.roomJoin("PACK-1234", null, null));
+    expect(await code(api.roomAttachInstance("inst-big"))).toBe("conflict");
+    const events: TaskEvent[] = [];
+    unwrap(await api.roomDownloadHostPack(channel(events)));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(events.at(-1)).toMatchObject({ type: "finished", error: null });
+    const created = unwrap(await api.instanceList()).find((i) => i.id.startsWith("inst-hostpack-"));
+    expect(created).toMatchObject({ mc: "1.20.1", loader: { kind: "forge" } });
+    expect(await code(api.roomAttachInstance(created?.id ?? ""))).toBe("ok");
+    unwrap(await api.roomLeave());
+
+    unwrap(await api.roomJoin("OLDH-1234", null, null));
+    const old: TaskEvent[] = [];
+    unwrap(await api.roomDownloadHostPack(channel(old)));
+    await vi.advanceTimersByTimeAsync(500);
+    const last = old.at(-1);
+    expect(last?.type === "finished" && last.error?.details?.reason).toBe("hostTooOld");
+  });
+
   it("voice room: create without instance; join VOX codes with instance=null", async () => {
     const bus = createMockBus();
     const api = createMockCommands({}, { bus, tickMs: 10 });
@@ -149,8 +192,6 @@ describe("mock rooms", () => {
     expect(room).toMatchObject({ kind: "voice", sig: null, localAddr: null, role: "host" });
     unwrap(await api.roomLeave());
 
-    const game = await api.roomJoin("ABCD-1234", null, null);
-    expect(game.status === "error" && game.error.code).toBe("invalidInput");
     const joined = unwrap(await api.roomJoin("VOXA-1234", null, null));
     expect(joined).toMatchObject({ kind: "voice", sig: null, localAddr: null, role: "guest" });
     unwrap(await api.roomLeave());

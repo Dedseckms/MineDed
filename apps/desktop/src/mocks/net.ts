@@ -17,6 +17,7 @@ import type {
   VpnAccess,
   VpnApp,
   VpnNode,
+  VpnSource,
   VpnState,
   commands,
 } from "../bindings";
@@ -33,6 +34,7 @@ export interface NetMockContext {
   tickMs: number;
   wait: () => Promise<void>;
   findInstance: (id: InstanceId) => Instance | undefined;
+  addInstance: (inst: Instance) => void;
   findAccount: (id: AccountId) => Account | undefined;
   /** Name of the default account (sender of own chat messages). */
   selfName: () => string;
@@ -108,14 +110,31 @@ function makeCode(seed: number): string {
   return out;
 }
 
+/**
+ * Modpack of a mock host joined without an instance. Codes starting with
+ * "PACK" (or "OLD": host launcher too old to share it) get a pack no seeded
+ * instance matches; others get 1.21.1 Fabric, which `inst-fabric` matches.
+ */
+export function mockHostSig(code: string): InstanceSig {
+  return code.startsWith("PACK") || code.startsWith("OLD")
+    ? { mc: "1.20.1", loader: "forge", loaderVersion: "1.20.1-47.3.0", modsHash: "f".repeat(64) }
+    : { mc: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", modsHash: "0".repeat(64) };
+}
+
+/** Mods hash of instances imported from a host pack (others hash to zeros). */
+const packHashes = new Map<InstanceId, string>();
+
 function sigOf(inst: Instance): InstanceSig {
   return {
     mc: inst.mc,
     loader: inst.loader.kind,
     loaderVersion: inst.loader.version,
-    modsHash: "0".repeat(64),
+    modsHash: packHashes.get(inst.id) ?? "0".repeat(64),
   };
 }
+
+const sameSig = (a: InstanceSig, b: InstanceSig) =>
+  a.mc === b.mc && a.loader === b.loader && a.loaderVersion === b.loaderVersion && a.modsHash === b.modsHash;
 
 export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
   const { bus, tickMs, wait } = ctx;
@@ -125,18 +144,37 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
   let nodes: VpnNode[] = [];
   let pingRound = 0;
   let vpn: VpnState = { mode: "off", running: false, node: null, latencyMs: null, subscriptionUpdated: null, error: null };
+  // Both subscriptions are kept; `nodes` belongs to `source`, `other` to the inactive one.
+  let source: VpnSource | null = null;
+  let hasOwn = false;
+  let hasMineded = false;
+  let other: VpnNode[] = [];
+  const activate = (src: VpnSource, list: VpnNode[]) => {
+    if (source !== null && source !== src) other = nodes;
+    nodes = list;
+    source = src;
+  };
+  const snap = (): VpnState => ({ ...vpn, source, hasMineded, hasOwn });
+  const syncRunningNode = () => {
+    const sel = nodes.find((n) => n.selected) ?? null;
+    if (vpn.running) vpn = { ...vpn, node: sel?.name ?? null, latencyMs: sel?.latencyMs ?? null };
+  };
 
   const loadNodes = () => {
-    const prev = nodes.find((n) => n.selected)?.name;
-    nodes = MOCK_NODES.map((n, i) => ({
-      ...n,
-      latencyMs: null,
-      selected: prev ? n.name === prev : i === 0,
-    }));
-    const sel = nodes.find((n) => n.selected) ?? null;
-    vpn = { ...vpn, subscriptionUpdated: new Date().toISOString(), node: vpn.running ? (sel?.name ?? null) : vpn.node, error: null };
+    const prev = source === "own" ? nodes.find((n) => n.selected)?.name : undefined;
+    activate(
+      "own",
+      MOCK_NODES.map((n, i) => ({
+        ...n,
+        latencyMs: null,
+        selected: prev ? n.name === prev : i === 0,
+      })),
+    );
+    hasOwn = true;
+    vpn = { ...vpn, subscriptionUpdated: new Date().toISOString(), error: null };
+    syncRunningNode();
   };
-  const emitVpn = () => bus.emit("vpnState", { ...vpn });
+  const emitVpn = () => bus.emit("vpnState", snap());
   let apps: VpnApp[] = [];
   const minededKeys = new Map<AccountId, VpnAccess>();
   const nextReset = () => {
@@ -226,7 +264,21 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
     // ---- VPN ----
     vpnState: async () => {
       await wait();
-      return ok({ ...vpn });
+      return ok(snap());
+    },
+
+    vpnSetSource: async (src) => {
+      await wait();
+      if (src === "own" ? !hasOwn : !hasMineded) return err("invalidInput", `mock: ${src} subscription is not configured`);
+      if (src !== source) {
+        const prev = nodes;
+        nodes = other;
+        other = prev;
+        source = src;
+        syncRunningNode();
+        emitVpn();
+      }
+      return ok(snap());
     },
 
     vpnSetSubscription: async (list) => {
@@ -249,8 +301,14 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
 
     vpnRefresh: async (ch) => {
       await wait();
-      if (urls.length === 0) return err("invalidInput", "mock: no subscription configured");
+      const mineded = source === "mineded";
+      if (urls.length === 0 && !mineded) return err("invalidInput", "mock: no subscription configured");
       const id = ctx.runTask("vpnUpdate", "tasks.vpnUpdate", ch, [{ stage: "stages.download", total: 240_000 }], () => {
+        if (mineded) {
+          vpn = { ...vpn, subscriptionUpdated: new Date().toISOString(), error: null };
+          emitVpn();
+          return null;
+        }
         if (urls.some((u) => /blocked/i.test(u))) {
           const e: AppError = { code: "blocked", message: "mock: subscription host blocked", details: { host: "sub.blocked.invalid" } };
           bus.emit("netBlocked", { host: "sub.blocked.invalid", suggestionKey: "net.blockedHint" });
@@ -276,9 +334,10 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       if (!access) {
         const full = /full/i.test(acc.name);
         access = { quotaBytes: MINEDED_QUOTA, usedBytes: full ? MINEDED_QUOTA : 0, resetAt: nextReset(), enabled: !full };
-        urls = ["https://hub.mineup.invalid/sub/personal"];
-        nodes = [{ ...MINEDED_NODE, latencyMs: null, selected: true }];
+        activate("mineded", [{ ...MINEDED_NODE, latencyMs: null, selected: true }]);
+        hasMineded = true;
         vpn = { ...vpn, subscriptionUpdated: new Date().toISOString(), error: null };
+        syncRunningNode();
         emitVpn();
       } else if (vpn.running && access.enabled) {
         const used = Math.min(access.quotaBytes, access.usedBytes + MINEDED_STEP);
@@ -324,7 +383,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
           ? { ...vpn, mode, running: false, node: null, latencyMs: null, error: null }
           : { ...vpn, mode, running: true, node: sel?.name ?? null, latencyMs: sel?.latencyMs ?? null, error: null };
       emitVpn();
-      return ok({ ...vpn });
+      return ok(snap());
     },
 
     vpnNodes: async () => {
@@ -424,8 +483,8 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       return ok(structuredClone(room));
     },
 
-    // Codes starting with "VOX" are voice rooms (instance ignored); joining a
-    // game room needs an instance.
+    // Codes starting with "VOX" are voice rooms (instance ignored); a game room
+    // joined without an instance gets the host pack from `mockHostSig`.
     roomJoin: async (input, instance, password) => {
       await wait();
       const inst = instance ? ctx.findInstance(instance) : undefined;
@@ -439,7 +498,6 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       const locked = code.startsWith("LOCK");
       if (locked && password !== "secret") return err("permissionDenied", "mock: wrong room password");
       const voice = code.startsWith("VOX");
-      if (!voice && !inst) return err("invalidInput", "mock: this is a game room, pick an instance", { kind: "game" });
       if (code.startsWith("SIG")) return err("conflict", "mock: instance does not match the host", { expected: "1.21.1 fabric" });
       roomSeq += 1;
       const roomId = `room-${roomSeq}`;
@@ -450,7 +508,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
         role: "guest",
         authMode: "open",
         kind: voice ? "voice" : "game",
-        sig: !voice && inst ? sigOf(inst) : null,
+        sig: voice ? null : inst ? sigOf(inst) : mockHostSig(code),
         peers: [hostPeer],
         expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString(),
         link: `${ROOM_LINK_PREFIX}${code}`,
@@ -461,6 +519,56 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       // Hole punching succeeds a bit later.
       later(tickMs * 8, () => updatePeer(roomId, { ...hostPeer, path: "direct", rttMs: 31 }));
       return ok(structuredClone(room));
+    },
+
+    roomAttachInstance: async (instance) => {
+      await wait();
+      if (!room || room.role !== "guest" || room.kind !== "game" || !room.sig)
+        return err("invalidInput", "mock: only guests of game rooms can attach an instance", { reason: "notGameGuest" });
+      const inst = ctx.findInstance(instance);
+      if (!inst) return err("notFound", `mock: instance ${instance} not found`);
+      if (!sameSig(room.sig, sigOf(inst))) return err("conflict", "mock: instance does not match the host");
+      return ok(structuredClone(room));
+    },
+
+    roomDownloadHostPack: async (ch) => {
+      await wait();
+      const current = room;
+      if (!current || current.role !== "guest" || current.kind !== "game" || !current.sig)
+        return err("invalidInput", "mock: the room has no modpack", { reason: "notGameRoom" });
+      const sig = current.sig;
+      const id = ctx.runTask(
+        "instanceImport",
+        "tasks.instanceImport",
+        ch,
+        [
+          { stage: "stages.download", total: 48_000_000 },
+          { stage: "stages.libraries", total: null },
+        ],
+        () => {
+          if (current.code.startsWith("OLD"))
+            return { code: "notImplemented", message: "mock: the host's launcher is too old", details: { reason: "hostTooOld" } };
+          roomSeq += 1;
+          const instId = `inst-hostpack-${roomSeq}`;
+          packHashes.set(instId, sig.modsHash);
+          ctx.addInstance({
+            id: instId,
+            name: `${current.peers[0]?.name ?? "Host"} ${sig.mc}`,
+            mc: sig.mc,
+            loader: { kind: sig.loader, version: sig.loaderVersion },
+            java: { path: null, major: 17 },
+            memory: { minMb: 1024, maxMb: 4096, auto: true },
+            jvmArgs: [],
+            preset: null,
+            icon: null,
+            createdAt: new Date().toISOString(),
+            lastPlayed: null,
+            playtimeSec: 0,
+          });
+          return null;
+        },
+      );
+      return ok(id);
     },
 
     roomLeave: async () => {

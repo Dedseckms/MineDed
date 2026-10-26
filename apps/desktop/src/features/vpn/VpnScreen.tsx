@@ -33,6 +33,7 @@ import { useTaskView } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 import { AppsSection } from "./AppsSection";
 import { MinededCard } from "./MinededCard";
+import { SourceControl } from "./SourceControl";
 
 const NODE_ROW = 52;
 const NODE_VIEWPORT = 416;
@@ -97,7 +98,8 @@ function StatusSection({ state, hasNodes }: { state: VpnState; hasNodes: boolean
 
 type SubSource = "url" | "file";
 
-function SubscriptionSection() {
+/** The user's own subscriptions (URL or file); its nodes are listed below it while in use. */
+function SubscriptionSection({ state }: { state: VpnState | undefined }) {
   const { t } = useTranslation();
   const [source, setSource] = useState<SubSource>("url");
   const [text, setText] = useState("");
@@ -117,13 +119,20 @@ function SubscriptionSection() {
 
   return (
     <Section
-      title={t("vpn.sub.title")}
+      title={t("vpn.own.title")}
       actions={
-        <Button size="sm" icon={<Icon name="refresh" />} loading={refreshing} onClick={() => refresh.mutate()}>
-          {t("vpn.sub.refresh")}
-        </Button>
+        <div className="flex items-center gap-2" data-testid="vpn-source-own">
+          <SourceControl which="own" state={state} />
+          <Button size="sm" icon={<Icon name="refresh" />} loading={refreshing} onClick={() => refresh.mutate()}>
+            {t("vpn.sub.refresh")}
+          </Button>
+        </div>
       }
     >
+      <p className="text-sm text-muted">{t("vpn.own.intro")}</p>
+      {state?.source === "mineded" && state.hasOwn ? (
+        <p className="text-xs text-muted">{t("vpn.own.inactiveNodes")}</p>
+      ) : null}
       <Segmented<SubSource>
         ariaLabel={t("vpn.sub.source")}
         value={source}
@@ -324,7 +333,13 @@ export function VpnScreen() {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted">{t("vpn.intro")}</p>
-      <MinededCard state={state.data} />
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <MinededCard state={state.data} />
+        <div className="flex flex-col gap-6">
+          <SubscriptionSection state={state.data} />
+          {state.data?.source === "mineded" ? null : <NodesSection running={state.data?.running ?? false} />}
+        </div>
+      </div>
       {state.isPending ? (
         <ListSkeleton rows={1} rowClassName="h-40" />
       ) : state.error ? (
@@ -333,8 +348,6 @@ export function VpnScreen() {
         <StatusSection state={state.data} hasNodes={(nodes.data?.length ?? 0) > 0} />
       )}
       <AppsSection />
-      <SubscriptionSection />
-      <NodesSection running={state.data?.running ?? false} />
     </div>
   );
 }

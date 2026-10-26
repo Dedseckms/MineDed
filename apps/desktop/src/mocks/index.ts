@@ -858,6 +858,10 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       tickMs,
       wait,
       findInstance,
+      addInstance: (inst) => {
+        instances = [...instances, inst];
+        installed[inst.id] = [];
+      },
       findAccount: (id) => accounts.find((a) => a.id === id),
       runTask,
       selfName: () => (accounts.find((a) => a.isDefault) ?? accounts[0])?.name ?? "Player",

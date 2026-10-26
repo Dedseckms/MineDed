@@ -88,7 +88,6 @@ describe("Multiplayer screen (mocks)", () => {
     expect(await screen.findByText(i18n.t("validation.room.link"))).toBeTruthy();
 
     fireEvent.change(codeInput, { target: { value: "mineup://join/lock-1234" } });
-    await screen.findAllByRole("option", { name: /1\.21/ });
     fireEvent.click(screen.getByRole("button", { name: "Join" }));
     expect(await screen.findByText("Wrong room password.")).toBeTruthy();
 
@@ -102,9 +101,25 @@ describe("Multiplayer screen (mocks)", () => {
     expect(screen.getByText("Steve_Host")).toBeTruthy();
     expect(screen.getByTestId("server-added").textContent).toContain("MineDed — Steve_Host");
     expect(screen.queryByTestId("world-closed")).toBeNull();
+    // No instance picked: the matching local one (Fabric 1.21.1) is attached by itself.
+    expect((await screen.findByTestId("host-pack-ready")).textContent).toContain("Fabric 1.21.1");
 
     fireEvent.click(screen.getByRole("button", { name: "Leave" }));
     await confirmIn("Leave the room?", "Leave");
     expect(await screen.findByLabelText("Code or link")).toBeTruthy();
   });
+
+  it("guest: no matching instance → download the host's pack → play", async () => {
+    await act(async () => useNavStore.getState().go("multiplayer"));
+    renderApp();
+    fireEvent.change(await screen.findByLabelText("Code or link"), { target: { value: "PACK-1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+    const dialog = await screen.findByRole("dialog", { name: "Host's pack" });
+    expect(within(dialog).getByText(/The host plays: Forge .* 1\.20\.1/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Download and play" }));
+    const ready = await screen.findByTestId("host-pack-ready", {}, { timeout: 6000 });
+    fireEvent.click(within(ready.parentElement as HTMLElement).getByRole("button", { name: "Play" }));
+    expect(useNavStore.getState()).toMatchObject({ section: "play" });
+    expect(useNavStore.getState().playInstance).toMatch(/^inst-hostpack-/);
+  }, 15_000);
 });

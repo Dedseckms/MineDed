@@ -12,6 +12,7 @@ import { Field, Select } from "../../components/ui/form";
 import { toAppError } from "../../lib/errors";
 import { minededAccounts, minededUsage, toGb } from "../../lib/vpn";
 import { useNavStore } from "../../stores/navStore";
+import { SourceControl } from "./SourceControl";
 
 function OpenAccounts() {
   const { t } = useTranslation();
@@ -65,14 +66,19 @@ export function MinededCard({ state }: { state: VpnState | undefined }) {
 
   const data = access.data ?? null;
   const exhausted = data ? minededUsage(data).exhausted : false;
-  const running = !!state?.running && !!data;
+  const running = !!state?.running && !!data && state.source !== "own";
   const error = connect.error ?? access.error ?? setMode.error;
   const authExpired = error != null && toAppError(error).code === "authExpired";
 
   return (
     <Section
       title={t("vpn.mineded.title")}
-      actions={running ? <Badge tone="accent">{t("vpn.mineded.connected")}</Badge> : null}
+      actions={
+        <div className="flex items-center gap-2" data-testid="vpn-source-mineded">
+          {running ? <Badge tone="accent">{t("vpn.mineded.connected")}</Badge> : null}
+          <SourceControl which="mineded" state={state} />
+        </div>
+      }
     >
       <p className="text-sm text-muted">{t("vpn.mineded.intro")}</p>
       {accounts.isPending ? (

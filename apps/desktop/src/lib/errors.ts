@@ -71,6 +71,7 @@ export const KNOWN_REASONS = [
   "uacDeclined",
   "helperFailed",
   "vpnNotRunning",
+  "hostTooOld",
 ] as const;
 export type KnownReason = (typeof KNOWN_REASONS)[number];
 
