@@ -42,11 +42,31 @@ pub struct VpnAccess {
     pub enabled: bool,
 }
 
+/// Which subscription the VPN uses. Both are stored independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum VpnSource {
+    /// Personal MineDed VPN key from hub (`VpnController::mineded_access`).
+    Mineded,
+    /// The user's own subscription (URL or imported file).
+    Own,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VpnState {
     pub mode: VpnMode,
     pub running: bool,
+    /// Active subscription; `None` when neither is configured.
+    #[serde(default)]
+    #[specta(optional)]
+    pub source: Option<VpnSource>,
+    #[serde(default)]
+    #[specta(optional)]
+    pub has_mineded: Option<bool>,
+    #[serde(default)]
+    #[specta(optional)]
+    pub has_own: Option<bool>,
     pub node: Option<String>,
     pub latency_ms: Option<u32>,
     /// RFC 3339 of the last successful subscription refresh.

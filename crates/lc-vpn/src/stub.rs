@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
-use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnState};
+use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnSource, VpnState};
 use lc_types::{AppError, AppResult};
 use url::Url;
 
@@ -20,6 +20,9 @@ impl VpnController for StubVpn {
             latency_ms: None,
             subscription_updated: None,
             error: None,
+            source: None,
+            has_mineded: None,
+            has_own: None,
         })
     }
 
@@ -63,6 +66,10 @@ impl VpnController for StubVpn {
         _provision: bool,
     ) -> AppResult<Option<VpnAccess>> {
         Err(AppError::not_implemented("VpnController::mineded_access"))
+    }
+
+    async fn set_source(&self, _source: VpnSource) -> AppResult<VpnState> {
+        Err(AppError::not_implemented("VpnController::set_source"))
     }
 
     async fn apps(&self) -> AppResult<Vec<VpnApp>> {
