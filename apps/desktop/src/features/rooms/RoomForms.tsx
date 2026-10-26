@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
 import { ErrorMessage } from "../../components/ui/feedback";
-import { Field, Segmented, Select, TextInput } from "../../components/ui/form";
+import { Field, Segmented, Select, Switch, TextInput } from "../../components/ui/form";
 import { toAppError } from "../../lib/errors";
 import {
   ROOM_PASSWORD_MAX,
@@ -17,6 +17,7 @@ import {
   passwordOrNull,
   validateRoomPassword,
 } from "../../lib/rooms";
+import { useHostPackStore } from "../../stores/hostPackStore";
 import { useNavStore } from "../../stores/navStore";
 
 /** Instance picker shared by both forms; defaults to the Play screen selection. */
@@ -193,6 +194,9 @@ export function JoinRoomForm() {
   const selectPlayInstance = useNavStore((s) => s.selectPlayInstance);
   const [kind, setKind] = useState<RoomKind>("game");
   const voice = kind === "voice";
+  // Game rooms: the instance is matched (or downloaded) after joining; picking one is optional.
+  const [manual, setManual] = useState(false);
+  const pickManually = !voice && manual;
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [touched, setTouched] = useState(false);
@@ -219,13 +223,18 @@ export function JoinRoomForm() {
         onSubmit={(e) => {
           e.preventDefault();
           setTouched(true);
-          if (!parsed.ok || (!voice && !pick.value) || pwError) return;
-          const instance = voice ? null : pick.value;
+          if (!parsed.ok || (pickManually && !pick.value) || pwError) return;
+          const instance = pickManually ? pick.value : null;
           join.mutate(
             { code: parsed.code, instance, password: passwordOrNull(password) },
             {
-              onSuccess: () => {
-                if (instance) selectPlayInstance(instance);
+              onSuccess: (room) => {
+                if (instance) {
+                  selectPlayInstance(instance);
+                  const packs = useHostPackStore.getState();
+                  packs.begin(room.roomId);
+                  packs.attach(room.roomId, instance);
+                }
                 setCode("");
                 setPassword("");
                 setTouched(false);
@@ -267,7 +276,12 @@ export function JoinRoomForm() {
           />
           <p className="text-xs text-muted">{t(`rooms.kindHint.${kind}`)}</p>
         </div>
-        {voice ? null : <InstanceField pick={pick} />}
+        {voice ? null : (
+          <div className="flex flex-col gap-2">
+            <Switch checked={manual} onChange={setManual} label={t("rooms.pack.manual")} description={t("rooms.pack.manualHint")} />
+            {manual ? <InstanceField pick={pick} /> : null}
+          </div>
+        )}
         <PasswordField
           value={password}
           error={pwError}
@@ -277,7 +291,7 @@ export function JoinRoomForm() {
           }}
         />
         <div className="flex justify-end">
-          <Button type="submit" variant="primary" icon={<Icon name="link" />} disabled={(!voice && !pick.value) || !!pwError} loading={join.isPending}>
+          <Button type="submit" variant="primary" icon={<Icon name="link" />} disabled={(pickManually && !pick.value) || !!pwError} loading={join.isPending}>
             {t("rooms.join.submit")}
           </Button>
         </div>

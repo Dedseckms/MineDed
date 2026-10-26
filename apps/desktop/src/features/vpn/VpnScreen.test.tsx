@@ -73,7 +73,7 @@ describe("VPN screen (mocks)", () => {
     await act(async () => useNavStore.getState().go("vpn"));
     renderApp();
     fireEvent.click(await screen.findByRole("radio", { name: "From file" }));
-    const sub = section("Subscription");
+    const sub = section("Own subscriptions");
     setMockFilePicker(async () => null);
     fireEvent.click(within(sub).getByRole("button", { name: "Choose file…" }));
     setMockFilePicker(async () => "C:\\missing.yaml");
@@ -94,6 +94,13 @@ describe("VPN screen (mocks)", () => {
     expect(unwrap(await api.vpnNodes()).map((n) => n.name)).toEqual(["MineDed NL"]);
     fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
     expect(await screen.findByRole("button", { name: "Connect to MineDed VPN" })).toBeTruthy();
+
+    // Both subscriptions are kept: MineDed is in use, the own one can be switched back to.
+    expect(within(screen.getByTestId("vpn-source-mineded")).getByText("In use")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Use own subscriptions" }));
+    expect(await within(screen.getByTestId("vpn-source-own")).findByText("In use")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Use MineDed VPN" })).toBeTruthy();
+    expect(unwrap(await api.vpnState()).source).toBe("own");
   }, 10_000);
 
   it("apps editor: presets, running programs, file, remove, save", async () => {

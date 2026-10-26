@@ -20,6 +20,7 @@ import type {
   Instance,
   InstanceId,
   InstancePatch,
+  InstanceSig,
   InstanceSpec,
   LoaderKind,
   Peer,
@@ -37,8 +38,10 @@ import type {
   VpnApp,
   VpnMode,
   VpnNode,
+  VpnSource,
 } from "../bindings";
 import { nextOffset } from "../lib/content";
+import { hostPackCandidates } from "../lib/rooms";
 import { toAppError } from "../lib/errors";
 import { findNewInstance } from "../lib/modpacks";
 import { withPeerVolume } from "../lib/voice";
@@ -413,6 +416,16 @@ export function useImportVpnFile() {
   });
 }
 
+/** Switches the active subscription (MineDed / own); its nodes replace the list. */
+export function useSetVpnSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (source: VpnSource) => unwrap(await api.vpnSetSource(source)),
+    onSuccess: (state) => qc.setQueryData(qk.vpnState, state),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.vpnNodes }),
+  });
+}
+
 export function useSetVpnMode() {
   const qc = useQueryClient();
   return useMutation({
@@ -472,6 +485,8 @@ export function useMinededConnect() {
       const access = unwrap(await api.vpnMinededAccess(account, true));
       qc.setQueryData(qk.minededAccess(account), access);
       if (!access || minededUsage(access).exhausted) return access;
+      // "Connect to MineDed" also makes MineDed the active subscription.
+      if (unwrap(await api.vpnState()).source === "own") unwrap(await api.vpnSetSource("mineded"));
       const apps = unwrap(await api.vpnApps());
       qc.setQueryData(qk.vpnState, unwrap(await api.vpnSetMode(minededMode(apps))));
       return access;
@@ -533,6 +548,54 @@ export function useJoinRoom() {
     mutationFn: async (v: { code: string; instance: InstanceId | null; password: string | null }) =>
       unwrap(await api.roomJoin(v.code, v.instance, v.password)),
     onSuccess: (state) => qc.setQueryData(qk.room, state),
+  });
+}
+
+/** Game room guest: binds the room to a local instance (backend checks the sig). */
+export function useAttachRoomInstance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (instance: InstanceId) => unwrap(await api.roomAttachInstance(instance)),
+    onSuccess: (state) => qc.setQueryData(qk.room, state),
+  });
+}
+
+/**
+ * Game room guest: tries local instances that may match the host's pack
+ * (newest first) until the backend accepts one. Resolves with the attached
+ * instance or `null` when none matches.
+ */
+export async function autoAttachHostPack(instances: readonly Instance[], sig: InstanceSig): Promise<InstanceId | null> {
+  for (const inst of hostPackCandidates(instances, sig)) {
+    const res = await api.roomAttachInstance(inst.id);
+    if (res.status === "ok") return inst.id;
+  }
+  return null;
+}
+
+/**
+ * Downloads the host's pack (`room_download_host_pack`); the backend imports
+ * it and attaches the room. `onDone` gets the task error or the re-read list.
+ */
+export function useDownloadHostPack(onDone: (error: AppError | null, instances: Instance[]) => void) {
+  const qc = useQueryClient();
+  return useStartTask<void>({
+    run: (_v, ch) => api.roomDownloadHostPack(ch),
+    onFinished: (error) => {
+      if (error) {
+        onDone(error, []);
+        return;
+      }
+      void (async () => {
+        const list = unwrap(await api.instanceList());
+        qc.setQueryData(qk.instances, list);
+        void qc.invalidateQueries({ queryKey: qk.room });
+        onDone(null, list);
+      })().catch((e: unknown) => {
+        void qc.invalidateQueries({ queryKey: qk.instances });
+        onDone(toAppError(e), []);
+      });
+    },
   });
 }
 

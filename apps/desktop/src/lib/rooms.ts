@@ -1,6 +1,22 @@
 // Pure helpers for P2P rooms and chat (no React, no backend calls).
-import type { Account, ChatMessage, PathKind, RoomAuthMode, RoomPeerEvent, RoomState } from "../bindings";
+import type { Account, ChatMessage, Instance, InstanceSig, PathKind, RoomAuthMode, RoomPeerEvent, RoomState } from "../bindings";
 import type { ValidationKey } from "./validation";
+
+/**
+ * Local instances that may match the host's pack: same game, loader and
+ * loader version, newest first. The mods hash is only known to the backend,
+ * so `room_attach_instance` makes the final check (`conflict` on mismatch).
+ */
+export function hostPackCandidates(instances: readonly Instance[], sig: InstanceSig): Instance[] {
+  return instances
+    .filter(
+      (i) =>
+        i.mc === sig.mc &&
+        i.loader.kind === sig.loader &&
+        (sig.loaderVersion === null || i.loader.version === sig.loaderVersion),
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
 
 export const ROOM_LINK_PREFIX = "mineup://join/";
 export const ROOM_PASSWORD_MIN = 4;
