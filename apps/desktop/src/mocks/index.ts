@@ -27,8 +27,10 @@ import {
   validateSkinName,
   validateSkinSource,
 } from "../lib/validation";
+import type { ContentAddLocal } from "../api/localContent";
+import { LOCAL_EXTS, isLocalKind, pickLoaderVersion } from "../lib/content";
+import { fileName } from "../lib/path";
 import { type MockBus, mockBus } from "./bus";
-import { pickLoaderVersion } from "../lib/content";
 import {
   filterVersions,
   findProject,
@@ -819,7 +821,35 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
     // ---- self-update ----
     ...createUpdateMocks({ bus, wait, runTask }),
   };
-  return impl;
+
+  // `content_add_local` is not in the generated bindings yet: kept outside the
+  // `Partial<Commands>` literal so it typechecks before and after regeneration.
+  const contentAddLocal: ContentAddLocal = async (instanceId, kind, paths) => {
+    await wait();
+    if (!findInstance(instanceId)) return notFound(`instance ${instanceId}`);
+    if (!isLocalKind(kind)) return fail(appError("invalidInput", `mock: kind ${kind} cannot be added from disk`));
+    const exts: readonly string[] = LOCAL_EXTS[kind];
+    const names = paths.map(fileName);
+    if (names.length === 0 || names.some((n) => !exts.some((e) => n.toLowerCase().endsWith(`.${e}`)))) {
+      return fail(appError("invalidInput", "mock: unsupported file type"));
+    }
+    if (paths.some((p) => /missing/i.test(p))) return notFound("file");
+    const added: InstalledContent[] = names.map((n) => ({
+      fileName: n,
+      kind,
+      enabled: true,
+      source: "local",
+      projectId: null,
+      versionId: null,
+      title: null,
+      versionNumber: null,
+      updateAvailable: false,
+    }));
+    const keep = (installed[instanceId] ?? []).filter((c) => !names.includes(c.fileName));
+    installed[instanceId] = [...keep, ...added];
+    return ok(added.map((c) => ({ ...c })));
+  };
+  return Object.assign(impl, { contentAddLocal });
 }
 
 export function createMockCommands(extra: Partial<Commands> = {}, opts: MockOptions = {}): Commands {

@@ -66,8 +66,8 @@ export async function runDemo(api: Commands, bus: MockBus, p: DemoParams): Promi
   await api.vpnSetSubscription(["https://sub.mineded.dedseckms.ru/s/7f3c9a"]);
   await api.vpnImportSubscriptionFile("C:\\Users\\Player\\Downloads\\mineup.yaml");
   await api.vpnSelect("🇫🇮 Helsinki");
-  await api.vpnTestLatency();
   await api.vpnSetMode("launcherAndGame");
+  await api.vpnTestLatency();
 
   // Borderless fullscreen keeps the voice panel compact (no "exclusive fullscreen" warning steps).
   const plan = await api.contentResolve("inst-fabric", [{ source: "modrinth", projectId: "UIexcMP1", versionId: null }]);
