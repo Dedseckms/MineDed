@@ -33,6 +33,8 @@ export const commands = {
 	contentList: (instance: InstanceId) => typedError<InstalledContent[], AppError>(__TAURI_INVOKE("content_list", { instance })),
 	contentSetEnabled: (instance: InstanceId, fileName: string, enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("content_set_enabled", { instance, fileName, enabled })),
 	contentRemove: (instance: InstanceId, fileName: string) => typedError<null, AppError>(__TAURI_INVOKE("content_remove", { instance, fileName })),
+	/**  Copies local files/folders into the instance (`kind` picks the folder; wrong type → `invalidInput`). */
+	contentAddLocal: (instance: InstanceId, kind: ContentKind, paths: string[]) => typedError<InstalledContent[], AppError>(__TAURI_INVOKE("content_add_local", { instance, kind, paths })),
 	contentUpdateAll: (instance: InstanceId, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("content_update_all", { instance, onEvent })),
 	presetApply: (instance: InstanceId, preset: PerfPreset, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("preset_apply", { instance, preset, onEvent })),
 	instanceImport: (path: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_import", { path, onEvent })),
