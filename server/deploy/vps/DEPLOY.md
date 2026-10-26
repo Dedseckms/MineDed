@@ -98,6 +98,12 @@ Owner approved moving the skins (incl. the Drasl texture signing key). Provider:
 5. Public checks: `/opt/relay/check.sh`, Drasl `https://skins.dedseckms.ru/authlib-injector`.
 6. Home server stacks stay up until the owner decides (stopping them needs the owner's "ok").
 
+### 2026-10-26 08:43 UTC — cutover done
+Owner switched DNS A (skins, relay, mineded, mineup) -> 31.59.192.133. `systemctl restart caddy`
+-> 4 Let's Encrypt certs obtained. `QAD=1` + `./start.sh`: QUIC listening on 0.0.0.0:7842.
+External checks (direct to the VPS IP, cert verified): 200, mineup 301. Step 2 (final Drasl delta
+sync from home) not done yet.
+
 ### Rollback
 - DNS back to the home server (nothing there was changed).
 - Here: `docker compose -p mineup-relay down`, `docker compose -p mineup-skin stop drasl`
