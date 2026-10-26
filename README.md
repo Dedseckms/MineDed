@@ -4,7 +4,7 @@
 
 # MineDed
 
-**Бесплатный лаунчер Minecraft для игры с друзьями — без аккаунта Microsoft, без аренды сервера, даже при блокировках.**
+**Бесплатный лаунчер Minecraft для игры с друзьями — без аренды сервера.**
 
 *Free open-source Minecraft launcher: mods, skins, server-free multiplayer, voice chat and a built-in VPN.*
 
