@@ -346,6 +346,8 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
 
     vpnTestLatency: async () => {
       await wait();
+      // Same as the backend: latency is measured through the running mihomo.
+      if (!vpn.running) return err("invalidInput", "VPN is not running");
       pingRound += 1;
       nodes = nodes.map((n) => ({ ...n, latencyMs: mockLatency(n.name, pingRound) }));
       const sel = nodes.find((n) => n.selected);

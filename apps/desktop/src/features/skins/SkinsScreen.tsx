@@ -20,6 +20,7 @@ import { ConfirmDialog, Modal } from "../../components/ui/Modal";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { useMotionPrefs } from "../../hooks/useAppearance";
+import { fileName } from "../../lib/path";
 import { SKIN_NAME_MAX, skinNameFromPath, validateSkinName, validateSkinSource } from "../../lib/validation";
 import { Skin3D, SkinFlat } from "./SkinPreview";
 import { localSkinSrc, skinSrc } from "./skinSrc";
@@ -166,7 +167,7 @@ function AddSkinDialog({ open, onClose, onAdded }: { open: boolean; onClose: () 
         <ErrorMessage error={fetchRemote.error ?? pickError} />
 
         {cand ? (
-          <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
+          <div className="grid min-w-0 gap-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
             <div className="flex h-60 items-center justify-center rounded-lg bg-surface-2" aria-label={t("skins.candidate")}>
               {!src ? (
                 <Icon name="shirt" className="size-16 text-muted" />
@@ -176,9 +177,13 @@ function AddSkinDialog({ open, onClose, onAdded }: { open: boolean; onClose: () 
                 <Skin3D url={src} model={cand.model} capeUrl={null} animate={!reduced} />
               )}
             </div>
-            <div className="flex flex-col gap-3">
-              <p className="truncate font-mono text-xs text-muted" title={cand.path}>
-                {cand.path.startsWith("data:") ? cand.name : cand.path}
+            <div className="flex min-w-0 flex-col gap-3">
+              <p
+                className="min-w-0 truncate whitespace-nowrap font-mono text-xs text-muted"
+                title={cand.path.startsWith("data:") ? undefined : cand.path}
+                data-testid="skin-file"
+              >
+                {fileName(cand.path) || cand.name}
               </p>
               <Field label={t("skins.name")} error={touched ? nameError : null}>
                 {(id, d, inv) => (

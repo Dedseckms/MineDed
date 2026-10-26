@@ -232,7 +232,7 @@ function NodeRow({ node, onSelect, busy }: { node: VpnNode; onSelect: () => void
   );
 }
 
-function NodesSection() {
+function NodesSection({ running }: { running: boolean }) {
   const { t } = useTranslation();
   const nodes = useVpnNodes();
   const select = useSelectVpnNode();
@@ -247,11 +247,24 @@ function NodesSection() {
     <Section
       title={t("vpn.nodes.title", { n: total })}
       actions={
-        <Button size="sm" icon={<Icon name="zap" />} loading={ping.isPending} disabled={total === 0} onClick={() => ping.mutate()}>
+        <Button
+          size="sm"
+          icon={<Icon name="zap" />}
+          loading={ping.isPending}
+          disabled={total === 0 || !running}
+          title={running ? undefined : t("vpn.nodes.pingNeedsVpn")}
+          aria-describedby={!running && total > 0 ? "vpn-ping-hint" : undefined}
+          onClick={() => ping.mutate()}
+        >
           {t("vpn.nodes.pingAll")}
         </Button>
       }
     >
+      {!running && total > 0 ? (
+        <p id="vpn-ping-hint" className="text-xs text-muted">
+          {t("vpn.nodes.pingNeedsVpn")}
+        </p>
+      ) : null}
       {nodes.isPending ? (
         <ListSkeleton rows={5} rowClassName="h-[46px]" />
       ) : nodes.error ? (
@@ -321,7 +334,7 @@ export function VpnScreen() {
       )}
       <AppsSection />
       <SubscriptionSection />
-      <NodesSection />
+      <NodesSection running={state.data?.running ?? false} />
     </div>
   );
 }
