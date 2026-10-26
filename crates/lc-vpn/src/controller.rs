@@ -91,6 +91,17 @@ impl Controller {
         Ok(())
     }
 
+    /// Re-reads the config file at `path` (must be inside mihomo's home dir)
+    /// without restarting the process, so an elevated TUN mihomo picks up new
+    /// rules and nodes without another UAC prompt.
+    pub async fn reload(&self, path: &std::path::Path) -> AppResult<()> {
+        let mut u = self.url(&["configs"])?;
+        u.query_pairs_mut().append_pair("force", "true");
+        let body = serde_json::json!({ "path": path.to_string_lossy() });
+        self.send(self.client.put(u).json(&body)).await?;
+        Ok(())
+    }
+
     /// Latency of every node in `group` (ms); failed nodes are absent.
     pub async fn group_delay(&self, group: &str) -> AppResult<HashMap<String, u32>> {
         let mut u = self.url(&["group", group, "delay"])?;
@@ -165,6 +176,16 @@ mod tests {
                 }),
             )
             .route(
+                "/configs",
+                put(
+                    |Query(q): Query<HashMap<String, String>>, Json(b): Json<Value>| async move {
+                        assert_eq!(q["force"], "true");
+                        assert!(b["path"].as_str().unwrap().ends_with("config.json"));
+                        StatusCode::NO_CONTENT
+                    },
+                ),
+            )
+            .route(
                 "/group/{group}/delay",
                 get(|Query(q): Query<HashMap<String, String>>| async move {
                     assert_eq!(q["url"], DELAY_URL);
@@ -180,6 +201,9 @@ mod tests {
         assert_eq!(c.version().await.unwrap(), "v1.19.33");
         c.select("LC-PROXY", "Нидерланды 🇳🇱 / x").await.unwrap();
         assert_eq!(*selected.lock().unwrap(), "Нидерланды 🇳🇱 / x");
+        c.reload(std::path::Path::new("/x/config.json"))
+            .await
+            .unwrap();
         let d = c.group_delay("LC-PROXY").await.unwrap();
         assert_eq!(d.len(), 2);
         assert_eq!(d["Нидерланды 🇳🇱"], 120);

@@ -1,8 +1,9 @@
 //! `MihomoVpn`: the real `VpnController` + `LaunchContributor`.
 //!
-//! mihomo runs as a child process without admin rights or TUN, listening only
-//! on loopback ports chosen at start. A supervisor task restarts it when it
-//! crashes; `shutdown` / `kill_now` stop it when the app exits.
+//! mihomo runs as a child process listening only on loopback ports chosen at
+//! start. Without admin rights or TUN, except `VpnMode::Apps` (see
+//! [`crate::tun`]). A supervisor task restarts it when it crashes;
+//! `shutdown` / `kill_now` stop it when the app exits.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,24 +13,34 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use lc_http::{Downloader, Route};
-use lc_runtime::{CancelToken, LaunchContributor, LaunchPlan, NullSink, Paths, ProgressSink};
+use lc_runtime::{
+    CancelToken, LaunchContributor, LaunchPlan, NullSink, Paths, ProgressSink, SettingsStore,
+};
 use lc_types::instance::{Instance, LaunchOpts};
-use lc_types::vpn::{VpnMode, VpnNode, VpnState};
+use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnState};
 use lc_types::{AppError, AppResult, ErrorCode};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use url::Url;
 
+use crate::apps;
 use crate::binary;
-use crate::config::{self, RunParams, GROUP};
+use crate::config::{self, RunParams, TunRules, GROUP};
 use crate::contract::VpnController;
 use crate::controller::Controller;
 use crate::launch::jvm_proxy_args;
+use crate::mineded;
 use crate::ports;
 use crate::store::{write_private, Files, Stored};
 use crate::subscription::{self, name_of, type_of, ProxyMap};
+use crate::tun;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// Elevated start includes the time the user needs to answer UAC.
+#[cfg(windows)]
+const ELEVATED_READY_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long the elevated helper gets to stop mihomo after the stop flag.
+const HELPER_STOP_GRACE: Duration = Duration::from_secs(5);
 const MAX_SUBSCRIPTION: usize = 8 * 1024 * 1024;
 /// Crash restarts allowed within [`RESTART_WINDOW`] before giving up.
 const MAX_RESTARTS: usize = 3;
@@ -46,6 +57,8 @@ struct Inner {
     files: Files,
     downloader: Arc<dyn Downloader>,
     binary_override: Option<PathBuf>,
+    /// Source of `hub_url`; `None` → the default hub.
+    settings: Option<Arc<dyn SettingsStore>>,
     shared: Mutex<Shared>,
     /// Serialises start/stop/reconfigure.
     op: tokio::sync::Mutex<()>,
@@ -63,9 +76,16 @@ struct Shared {
 #[derive(Clone)]
 struct Running {
     mixed_port: u16,
+    controller_port: u16,
+    secret: String,
     controller: Controller,
+    /// Our direct child: mihomo, or the PowerShell wrapper of the elevated helper.
     pid: Option<u32>,
     exe: PathBuf,
+    /// Config has TUN (`VpnMode::Apps`).
+    tun: bool,
+    /// Set when mihomo runs under the elevated helper (Windows).
+    stop_flag: Option<PathBuf>,
 }
 
 impl Running {
@@ -92,6 +112,7 @@ impl MihomoVpn {
                 files,
                 downloader,
                 binary_override: None,
+                settings: None,
                 shared: Mutex::new(Shared {
                     store,
                     proxies,
@@ -114,15 +135,30 @@ impl MihomoVpn {
         self
     }
 
+    /// Reads `hub_url` (for MineDed VPN access and TUN loop protection) from
+    /// `settings`. Must be called before the instance is shared.
+    pub fn with_settings(mut self, settings: Arc<dyn SettingsStore>) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.settings = Some(settings);
+        }
+        self
+    }
+
     /// Re-applies the persisted mode at app start (starts mihomo if the VPN
-    /// was on). Failures are kept in `state().error` and returned.
+    /// was on). Failures are kept in `state().error` and returned; a failed
+    /// `apps` mode (e.g. UAC declined) falls back to off.
     pub async fn restore(&self) -> AppResult<()> {
         let mode = self.shared().store.mode;
         if mode == VpnMode::Off || self.shared().proxies.is_empty() {
             return Ok(());
         }
         let _op = self.inner.op.lock().await;
-        start_locked(&self.inner, &NullSink::default()).await
+        let res = start_locked(&self.inner, mode, &NullSink::default()).await;
+        if res.is_err() && mode == VpnMode::Apps {
+            self.shared().store.mode = VpnMode::Off;
+            self.save()?;
+        }
+        res
     }
 
     /// Stops mihomo and waits for it to exit. Call on app exit.
@@ -140,13 +176,13 @@ impl MihomoVpn {
         if let Some((stop, _)) = sup {
             stop.cancel();
         }
-        if let Some(Running {
-            pid: Some(pid),
-            exe,
-            ..
-        }) = run
-        {
-            kill_pid(pid, &exe);
+        if let Some(run) = run {
+            if let Some(flag) = &run.stop_flag {
+                tun::signal_stop(flag);
+            }
+            if let Some(pid) = run.pid {
+                kill_pid(pid, &run.exe);
+            }
         }
         let _ = std::fs::remove_file(self.inner.files.pid());
     }
@@ -205,14 +241,27 @@ impl MihomoVpn {
             s.proxies = proxies;
             s.latency.clear();
             s.store.updated = Some(now_rfc3339());
-            s.run.is_some()
+            s.run.as_ref().map(|r| r.tun)
         };
         self.save()?;
-        if running {
-            stop_locked(&self.inner).await;
-            start_locked(&self.inner, &NullSink::default()).await?;
+        match running {
+            // TUN may run elevated: reload in place instead of a new UAC prompt.
+            Some(true) => reload_locked(&self.inner).await?,
+            Some(false) => {
+                let mode = self.shared().store.mode;
+                stop_locked(&self.inner).await;
+                start_locked(&self.inner, mode, &NullSink::default()).await?;
+            }
+            None => {}
         }
         Ok(())
+    }
+
+    async fn hub_url(&self) -> String {
+        match &self.inner.settings {
+            Some(s) => s.get().await.map(|s| s.hub_url).unwrap_or_default(),
+            None => String::new(),
+        }
     }
 
     /// Downloads the first subscription mirror that yields nodes. Errors
@@ -349,8 +398,121 @@ fn kill_stale(inner: &Inner) {
     let _ = std::fs::remove_file(inner.files.pid());
 }
 
+fn host_of(url: &str) -> Option<String> {
+    Url::parse(url.trim())
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+}
+
+/// Per-app rules: the launcher, Java and the user's programs through the VPN;
+/// our hub/relay never through the tunnel.
+async fn tun_rules(inner: &Inner) -> TunRules {
+    let mut processes = apps::always_routed();
+    processes.extend(inner.shared().store.apps.iter().map(|a| a.process.clone()));
+    let mut bypass_hosts: Vec<String> = host_of(lc_types::settings::DEFAULT_HUB_URL)
+        .into_iter()
+        .collect();
+    if let Some(s) = &inner.settings {
+        if let Some(h) = s.get().await.ok().and_then(|s| host_of(&s.hub_url)) {
+            bypass_hosts.push(h);
+        }
+    }
+    TunRules {
+        processes,
+        bypass_hosts,
+    }
+}
+
+/// What to start and how to recognise it later.
+struct Spawned {
+    child: Child,
+    /// Executable of `child` (pid-reuse guard).
+    exe: PathBuf,
+    stop_flag: Option<PathBuf>,
+}
+
+fn spawn_plain(inner: &Inner, exe: &Path) -> AppResult<Spawned> {
+    let log = std::fs::File::create(inner.files.log()).map_err(AppError::from)?;
+    let log2 = log.try_clone().map_err(AppError::from)?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("-d")
+        .arg(&inner.files.dir)
+        .arg("-f")
+        .arg(inner.files.config())
+        .current_dir(&inner.files.dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log2))
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let child = cmd.spawn().map_err(|e| {
+        AppError::new(ErrorCode::Io, format!("cannot start mihomo: {e}"))
+            .detail("path", exe.display().to_string())
+    })?;
+    Ok(Spawned {
+        child,
+        exe: exe.to_path_buf(),
+        stop_flag: None,
+    })
+}
+
+/// Starts our own executable elevated as the TUN helper (UAC prompt).
+#[cfg(windows)]
+fn spawn_elevated(inner: &Inner, exe: &Path) -> AppResult<Spawned> {
+    let launcher = std::env::current_exe().map_err(AppError::from)?;
+    let stop = inner.files.stop_flag();
+    let _ = std::fs::remove_file(&stop);
+    let h = tun::HelperArgs {
+        mihomo: exe.to_path_buf(),
+        dir: inner.files.dir.clone(),
+        config: inner.files.config(),
+        log: inner.files.log(),
+        stop: stop.clone(),
+        parent: std::process::id(),
+    };
+    let (ps, mut cmd) = tun::wrapper_command(&launcher, &h);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let child = cmd.spawn().map_err(|e| {
+        AppError::new(
+            ErrorCode::PermissionDenied,
+            format!("cannot request administrator rights: {e}"),
+        )
+    })?;
+    Ok(Spawned {
+        child,
+        exe: ps,
+        stop_flag: Some(stop),
+    })
+}
+
+/// Error for a failed elevated start, from the wrapper's exit code.
+#[cfg(windows)]
+fn elevated_error(code: Option<i32>, fallback: AppError) -> AppError {
+    match code {
+        Some(tun::EXIT_DECLINED) => AppError::new(
+            ErrorCode::PermissionDenied,
+            "administrator rights were declined; the apps VPN mode needs them",
+        )
+        .detail("reason", "uacDeclined"),
+        Some(tun::EXIT_SPAWN_FAILED) => AppError::new(
+            ErrorCode::PermissionDenied,
+            "cannot start the elevated VPN helper",
+        )
+        .detail("reason", "helperFailed"),
+        _ => fallback,
+    }
+}
+
 /// Spawns mihomo on fresh ports and waits until its controller answers.
-async fn spawn_mihomo(inner: &Inner, sink: &dyn ProgressSink) -> AppResult<(Child, Running)> {
+async fn spawn_mihomo(
+    inner: &Inner,
+    mode: VpnMode,
+    sink: &dyn ProgressSink,
+) -> AppResult<(Child, Running)> {
     let (proxies, selected) = {
         let s = inner.shared();
         (s.proxies.clone(), MihomoVpn::effective_selected(&s))
@@ -361,6 +523,13 @@ async fn spawn_mihomo(inner: &Inner, sink: &dyn ProgressSink) -> AppResult<(Chil
             "VPN subscription has no nodes; refresh or import it first",
         ));
     }
+    let tun = mode == VpnMode::Apps;
+    if tun && !cfg!(any(windows, target_os = "linux")) {
+        return Err(AppError::new(
+            ErrorCode::NotImplemented,
+            "apps VPN mode is not supported on this OS",
+        ));
+    }
     let exe = binary::ensure(
         &inner.paths,
         inner.downloader.as_ref(),
@@ -368,10 +537,24 @@ async fn spawn_mihomo(inner: &Inner, sink: &dyn ProgressSink) -> AppResult<(Chil
         inner.binary_override.as_deref(),
     )
     .await?;
+    #[cfg(target_os = "linux")]
+    let exe = if tun {
+        tun::linux_prepare(&exe, &inner.files.dir).await?
+    } else {
+        exe
+    };
+    let rules = if tun {
+        Some(tun_rules(inner).await)
+    } else {
+        None
+    };
+    let elevated = tun && cfg!(windows);
     let secret = random_secret()?;
-    // Ports may be grabbed between probing and mihomo's bind: retry.
+    // Ports may be grabbed between probing and mihomo's bind: retry (but
+    // never ask for admin rights twice).
+    let attempts = if elevated { 1 } else { 3 };
     let mut last_err = None;
-    for _ in 0..3 {
+    for _ in 0..attempts {
         let picked = ports::pick_free(2)?;
         let (mixed_port, controller_port) = (picked[0], picked[1]);
         let cfg = config::render(
@@ -382,29 +565,25 @@ async fn spawn_mihomo(inner: &Inner, sink: &dyn ProgressSink) -> AppResult<(Chil
             },
             &proxies,
             selected.as_deref(),
+            rules.as_ref(),
         );
         write_private(&inner.files.config(), cfg.as_bytes())?;
-        let log = std::fs::File::create(inner.files.log()).map_err(AppError::from)?;
-        let log2 = log.try_clone().map_err(AppError::from)?;
-        let mut cmd = Command::new(&exe);
-        cmd.arg("-d")
-            .arg(&inner.files.dir)
-            .arg("-f")
-            .arg(inner.files.config())
-            .current_dir(&inner.files.dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log2))
-            .kill_on_drop(true);
         #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        let mut child = cmd.spawn().map_err(|e| {
-            AppError::new(ErrorCode::Io, format!("cannot start mihomo: {e}"))
-                .detail("path", exe.display().to_string())
-        })?;
+        let spawned = if elevated {
+            spawn_elevated(inner, &exe)?
+        } else {
+            spawn_plain(inner, &exe)?
+        };
+        #[cfg(not(windows))]
+        let spawned = spawn_plain(inner, &exe)?;
+        let Spawned {
+            mut child,
+            exe: child_exe,
+            stop_flag,
+        } = spawned;
         let pid = child.id();
         if let Some(pid) = pid {
-            let line = format!("{pid}\n{}", exe.display());
+            let line = format!("{pid}\n{}", child_exe.display());
             let _ = write_private(&inner.files.pid(), line.as_bytes());
         }
         let controller = Controller::new(
@@ -412,30 +591,55 @@ async fn spawn_mihomo(inner: &Inner, sink: &dyn ProgressSink) -> AppResult<(Chil
             controller_port,
             secret.clone(),
         )?;
-        match wait_ready(&mut child, &controller).await {
+        #[cfg(windows)]
+        let timeout = if elevated {
+            ELEVATED_READY_TIMEOUT
+        } else {
+            READY_TIMEOUT
+        };
+        #[cfg(not(windows))]
+        let timeout = READY_TIMEOUT;
+        match wait_ready(&mut child, &controller, timeout).await {
             Ok(()) => {
-                tracing::info!(mixed_port, controller_port, "mihomo started");
+                tracing::info!(mixed_port, controller_port, tun, "mihomo started");
                 return Ok((
                     child,
                     Running {
                         mixed_port,
+                        controller_port,
+                        secret: secret.clone(),
                         controller,
                         pid,
-                        exe: exe.clone(),
+                        exe: child_exe,
+                        tun,
+                        stop_flag,
                     },
                 ));
             }
             Err(e) => {
+                if let Some(flag) = &stop_flag {
+                    tun::signal_stop(flag);
+                }
+                let code = child.try_wait().ok().flatten().and_then(|s| s.code());
                 let _ = child.kill().await;
-                last_err = Some(e.detail("log", inner.files.log().display().to_string()));
+                let e = e.detail("log", inner.files.log().display().to_string());
+                #[cfg(windows)]
+                let e = if elevated { elevated_error(code, e) } else { e };
+                #[cfg(not(windows))]
+                let _ = code;
+                last_err = Some(e);
             }
         }
     }
     Err(last_err.unwrap_or_else(|| AppError::internal("mihomo did not start")))
 }
 
-async fn wait_ready(child: &mut Child, controller: &Controller) -> AppResult<()> {
-    let deadline = Instant::now() + READY_TIMEOUT;
+async fn wait_ready(
+    child: &mut Child,
+    controller: &Controller,
+    timeout: Duration,
+) -> AppResult<()> {
+    let deadline = Instant::now() + timeout;
     loop {
         if let Ok(Some(status)) = child.try_wait() {
             return Err(AppError::internal("mihomo exited during startup")
@@ -451,13 +655,13 @@ async fn wait_ready(child: &mut Child, controller: &Controller) -> AppResult<()>
     }
 }
 
-/// Starts mihomo and its supervisor. Caller holds `op`.
-async fn start_locked(inner: &Arc<Inner>, sink: &dyn ProgressSink) -> AppResult<()> {
+/// Starts mihomo for `mode` and its supervisor. Caller holds `op`.
+async fn start_locked(inner: &Arc<Inner>, mode: VpnMode, sink: &dyn ProgressSink) -> AppResult<()> {
     if inner.shared().run.is_some() {
         return Ok(());
     }
     kill_stale(inner);
-    let (child, running) = match spawn_mihomo(inner, sink).await {
+    let (child, running) = match spawn_mihomo(inner, mode, sink).await {
         Ok(v) => v,
         Err(e) => {
             inner.shared().error = Some(e.clone());
@@ -465,6 +669,7 @@ async fn start_locked(inner: &Arc<Inner>, sink: &dyn ProgressSink) -> AppResult<
         }
     };
     let proxy = running.proxy_url();
+    let stop_flag = running.stop_flag.clone();
     let stop = CancelToken::new();
     {
         let mut s = inner.shared();
@@ -472,9 +677,38 @@ async fn start_locked(inner: &Arc<Inner>, sink: &dyn ProgressSink) -> AppResult<
         s.error = None;
     }
     inner.downloader.set_vpn_proxy(proxy);
-    let handle = tokio::spawn(supervise(inner.clone(), child, stop.clone()));
+    let handle = tokio::spawn(supervise(inner.clone(), child, stop_flag, stop.clone()));
     inner.shared().supervisor = Some((stop, handle));
     Ok(())
+}
+
+/// Re-renders the config for the running TUN mihomo (same ports and secret)
+/// and makes it reload. Caller holds `op`.
+async fn reload_locked(inner: &Inner) -> AppResult<()> {
+    let Some(run) = inner.shared().run.clone() else {
+        return Ok(());
+    };
+    let rules = if run.tun {
+        Some(tun_rules(inner).await)
+    } else {
+        None
+    };
+    let (proxies, selected) = {
+        let s = inner.shared();
+        (s.proxies.clone(), MihomoVpn::effective_selected(&s))
+    };
+    let cfg = config::render(
+        &RunParams {
+            mixed_port: run.mixed_port,
+            controller_port: run.controller_port,
+            secret: &run.secret,
+        },
+        &proxies,
+        selected.as_deref(),
+        rules.as_ref(),
+    );
+    write_private(&inner.files.config(), cfg.as_bytes())?;
+    run.controller.reload(&inner.files.config()).await
 }
 
 /// Stops the supervisor (which kills mihomo). Caller holds `op`.
@@ -492,13 +726,34 @@ async fn stop_locked(inner: &Inner) {
     let _ = std::fs::remove_file(inner.files.pid());
 }
 
+/// Stops our child; an elevated helper is asked via the stop flag first
+/// (we cannot kill an elevated process).
+async fn stop_child(child: &mut Child, stop_flag: Option<&Path>) {
+    if let Some(flag) = stop_flag {
+        tun::signal_stop(flag);
+        if tokio::time::timeout(HELPER_STOP_GRACE, child.wait())
+            .await
+            .is_ok()
+        {
+            return;
+        }
+    }
+    let _ = child.kill().await;
+}
+
 /// Watches the child; restarts it after a crash (bounded), kills it on stop.
-async fn supervise(inner: Arc<Inner>, mut child: Child, stop: CancelToken) {
+/// An elevated helper is not restarted (that would prompt UAC again).
+async fn supervise(
+    inner: Arc<Inner>,
+    mut child: Child,
+    mut stop_flag: Option<PathBuf>,
+    stop: CancelToken,
+) {
     let mut crashes: Vec<Instant> = Vec::new();
     loop {
         tokio::select! {
             () = stop.cancelled() => {
-                let _ = child.kill().await;
+                stop_child(&mut child, stop_flag.as_deref()).await;
                 return;
             }
             status = child.wait() => {
@@ -507,6 +762,14 @@ async fn supervise(inner: Arc<Inner>, mut child: Child, stop: CancelToken) {
         }
         inner.shared().run = None;
         inner.downloader.set_vpn_proxy(None);
+        if stop_flag.is_some() {
+            let mut s = inner.shared();
+            s.error = Some(AppError::internal(
+                "elevated VPN helper stopped; VPN is off",
+            ));
+            s.supervisor = None;
+            return;
+        }
         crashes.retain(|t| t.elapsed() < RESTART_WINDOW);
         crashes.push(Instant::now());
         if crashes.len() > MAX_RESTARTS {
@@ -524,9 +787,11 @@ async fn supervise(inner: Arc<Inner>, mut child: Child, stop: CancelToken) {
             () = stop.cancelled() => return,
             g = inner.op.lock() => g,
         };
-        match spawn_mihomo(&inner, &NullSink::default()).await {
+        let mode = inner.shared().store.mode;
+        match spawn_mihomo(&inner, mode, &NullSink::default()).await {
             Ok((c, running)) => {
                 let proxy = running.proxy_url();
+                stop_flag = running.stop_flag.clone();
                 {
                     let mut s = inner.shared();
                     s.run = Some(running);
@@ -641,7 +906,21 @@ impl VpnController for MihomoVpn {
             stop_locked(&self.inner).await;
             self.shared().error = None;
         } else {
-            start_locked(&self.inner, &NullSink::default()).await?;
+            // TUN <-> mixed-port only needs a different mihomo process.
+            let running_tun = self.shared().run.as_ref().map(|r| r.tun);
+            let restart = running_tun.is_some_and(|t| t != (mode == VpnMode::Apps));
+            if restart {
+                stop_locked(&self.inner).await;
+            }
+            if let Err(e) = start_locked(&self.inner, mode, &NullSink::default()).await {
+                // A failed apps mode (UAC/pkexec declined...) or a stopped
+                // previous run leaves the VPN off.
+                if restart || mode == VpnMode::Apps {
+                    self.shared().store.mode = VpnMode::Off;
+                    self.save()?;
+                }
+                return Err(e);
+            }
         }
         self.shared().store.mode = mode;
         self.save()?;
@@ -682,6 +961,56 @@ impl VpnController for MihomoVpn {
 
     fn proxy_url(&self) -> Option<Url> {
         self.shared().run.as_ref().and_then(Running::proxy_url)
+    }
+
+    async fn mineded_access(&self, bearer: &str, provision: bool) -> AppResult<Option<VpnAccess>> {
+        let url = mineded::endpoint(&self.hub_url().await)?;
+        let client = self.inner.downloader.client(Route::Direct);
+        let Some(access) = mineded::fetch(&client, &url, bearer, provision).await? else {
+            return Ok(None);
+        };
+        let changed = {
+            let mut s = self.shared();
+            let changed = s.store.urls.len() != 1
+                || s.store.urls[0] != access.subscription_url
+                || s.store.file.is_some()
+                || s.proxies.is_empty();
+            s.store.urls = vec![access.subscription_url];
+            s.store.file = None;
+            changed
+        };
+        self.save()?;
+        // Only a new subscription needs a download (and a mihomo reload);
+        // usage polling must not disturb a running VPN.
+        if changed {
+            self.refresh(&NullSink::default()).await?;
+        }
+        Ok(Some(access.info))
+    }
+
+    async fn apps(&self) -> AppResult<Vec<VpnApp>> {
+        Ok(self.shared().store.apps.clone())
+    }
+
+    async fn set_apps(&self, list: Vec<VpnApp>) -> AppResult<()> {
+        let list = apps::normalize(list)?;
+        let _op = self.inner.op.lock().await;
+        let tun_running = {
+            let mut s = self.shared();
+            s.store.apps = list;
+            s.run.as_ref().is_some_and(|r| r.tun)
+        };
+        self.save()?;
+        if tun_running {
+            reload_locked(&self.inner).await?;
+        }
+        Ok(())
+    }
+
+    async fn running_apps(&self) -> AppResult<Vec<VpnApp>> {
+        tokio::task::spawn_blocking(apps::running)
+            .await
+            .map_err(|e| AppError::internal(format!("process scan failed: {e}")))
     }
 }
 
@@ -794,6 +1123,88 @@ mod tests {
         assert!(st.error.is_some());
         assert_eq!(v.set_mode(VpnMode::Off).await.unwrap().mode, VpnMode::Off);
         v.restore().await.unwrap();
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[tokio::test]
+    async fn apps_persist_and_failed_apps_mode_falls_back_off() {
+        let paths = tmp("apps");
+        let v = vpn(&paths);
+        assert!(v.apps().await.unwrap().is_empty());
+        let app = VpnApp {
+            name: "Telegram".into(),
+            process: "Telegram.exe".into(),
+            path: None,
+        };
+        v.set_apps(vec![app.clone(), app.clone()]).await.unwrap();
+        let bad = VpnApp {
+            process: "x,DIRECT".into(),
+            ..app.clone()
+        };
+        assert_eq!(
+            v.set_apps(vec![bad]).await.unwrap_err().code,
+            ErrorCode::InvalidInput
+        );
+        assert_eq!(vpn(&paths).apps().await.unwrap(), vec![app]);
+
+        // No nodes: apps mode fails before any elevation and stays off.
+        v.shared().store.mode = VpnMode::LauncherOnly;
+        assert!(v.set_mode(VpnMode::Apps).await.is_err());
+        assert_eq!(v.state().await.unwrap().mode, VpnMode::Off);
+        assert_eq!(vpn(&paths).state().await.unwrap().mode, VpnMode::Off);
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[tokio::test]
+    async fn mineded_access_sets_hidden_subscription_once() {
+        use lc_http::{DownloaderConfig, HttpDownloader, SystemProxyMode};
+        use lc_runtime::MemorySettingsStore;
+
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let h = hits.clone();
+        let app = axum::Router::new().route(
+            "/sub/tok",
+            axum::routing::get(move || {
+                h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { "trojan://pw@n.example:443#MineDed\n" }
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        let sub = format!("http://127.0.0.1:{port}/sub/tok");
+        let (hub, _calls) = crate::mineded::tests::spawn_hub(sub.clone()).await;
+
+        let settings = Arc::new(MemorySettingsStore::default());
+        let mut s = settings.get().await.unwrap();
+        s.hub_url = hub;
+        settings.set(s).await.unwrap();
+        let d = HttpDownloader::new(DownloaderConfig {
+            system_proxy: SystemProxyMode::Off,
+            attempts_per_url: 1,
+            ..DownloaderConfig::default()
+        })
+        .unwrap();
+        let paths = tmp("mineded");
+        let v = MihomoVpn::new(paths.clone(), Arc::new(d))
+            .with_binary(std::env::current_exe().unwrap())
+            .with_settings(settings);
+
+        assert!(v.mineded_access("new", false).await.unwrap().is_none());
+        let a = v.mineded_access("good", false).await.unwrap().unwrap();
+        assert_eq!(a.quota_bytes, 274877906944);
+        let nodes = v.nodes().await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "MineDed");
+        // Polling usage again does not re-download the subscription.
+        v.mineded_access("good", true).await.unwrap().unwrap();
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The URL never reaches the UI-facing state.
+        let st = v.state().await.unwrap();
+        assert!(!format!("{st:?}").contains("sub/tok"));
+        let err = v.mineded_access("secret-xyz", false).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::AuthExpired);
+        assert!(!format!("{err:?}").contains("secret-xyz"));
         let _ = std::fs::remove_dir_all(paths.root());
     }
 
