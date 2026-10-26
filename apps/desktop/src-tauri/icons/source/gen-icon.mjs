@@ -1,4 +1,4 @@
-// MineUP app icon generator: a chunky pixel-art "D" built from grass/dirt blocks.
+// MineDed app icon generator: a chunky pixel-art "D" built from grass/dirt blocks.
 // Original artwork (procedural, no third-party textures). Pure Node, no dependencies.
 //
 // Usage (from apps/desktop):

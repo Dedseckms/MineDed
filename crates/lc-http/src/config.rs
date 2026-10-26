@@ -7,7 +7,7 @@ use url::Url;
 /// Default `User-Agent` for every launcher request.
 pub fn default_user_agent() -> String {
     format!(
-        "MineUP/{} (+https://dedseckms.ru)",
+        "MineDed/{} (+https://dedseckms.ru)",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn user_agent_format() {
         let ua = default_user_agent();
-        assert!(ua.starts_with("MineUP/"));
+        assert!(ua.starts_with("MineDed/"));
         assert!(ua.ends_with("(+https://dedseckms.ru)"));
     }
 

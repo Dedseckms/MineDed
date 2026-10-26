@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://mineup.dedseckms.ru/sitemap.xml
+Sitemap: https://mineded.dedseckms.ru/sitemap.xml

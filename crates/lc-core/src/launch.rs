@@ -12,7 +12,7 @@ use crate::meta::{rules_allow, Argument, Env, LibUse, VersionJson};
 use crate::prepare::Prepared;
 use crate::util::io_err;
 
-pub(crate) const LAUNCHER_NAME: &str = "MineUP";
+pub(crate) const LAUNCHER_NAME: &str = "MineDed";
 pub(crate) const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) fn classpath_separator() -> &'static str {
@@ -486,7 +486,7 @@ mod tests {
         assert!(!plan.jvm_args.iter().any(|a| a == "-cp" || a.contains("${")));
         assert!(plan
             .jvm_args
-            .contains(&"-Dminecraft.launcher.brand=MineUP".to_string()));
+            .contains(&"-Dminecraft.launcher.brand=MineDed".to_string()));
         assert_eq!(plan.jvm_args.last().unwrap(), "-XX:+UseG1GC");
 
         let g = &plan.game_args;

@@ -167,7 +167,7 @@ export function seedAccounts(): Account[] {
 }
 
 export const YGGDRASIL_SERVERS: YggdrasilServer[] = [
-  { name: "MineUP", apiRoot: "https://auth.mineup.invalid/api/yggdrasil", official: true },
+  { name: "MineDed", apiRoot: "https://auth.mineup.invalid/api/yggdrasil", official: true },
 ];
 
 export const SYSTEM_INFO: SystemInfo = {

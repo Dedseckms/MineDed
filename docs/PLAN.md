@@ -157,7 +157,7 @@ src-tauri → всё (единственное место, где стабы з�
 ## 7. Решения владельца и открытые вопросы
 
 Решено (2026-10-20):
-- Название **MineUP**, identifier `ru.dedseckms.mineup`, домен сервера `dedseckms.ru`.
+- Название **MineDed**, identifier `ru.dedseckms.mineup`, домен сервера `dedseckms.ru`.
 - **Microsoft-аккаунты не нужны** — убраны из контрактов. Заявки Azure/Mojang и CurseForge не подаются; контент — только Modrinth, CurseForge отложен.
 - Правила эксплуатации сервера — в `server/*/DEPLOY.md`.
 

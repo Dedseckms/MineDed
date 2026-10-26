@@ -207,7 +207,7 @@ mod tests {
     fn config_has_signed_mirrored_updater() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
-        assert_eq!(conf["productName"], "MineUP");
+        assert_eq!(conf["productName"], "MineDed");
         assert_eq!(conf["identifier"], "ru.dedseckms.mineup");
         assert_eq!(conf["bundle"]["createUpdaterArtifacts"], true);
         let up = &conf["plugins"]["updater"];
@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(
             endpoints,
             [
-                "https://github.com/Dedseckms/MineUP/releases/latest/download/latest.json",
+                "https://github.com/Dedseckms/MineDed/releases/latest/download/latest.json",
                 "https://relay.dedseckms.ru/updates/latest.json",
             ]
         );

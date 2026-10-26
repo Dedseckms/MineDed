@@ -191,7 +191,7 @@ export function seedSkins(): Skin[] {
 
 export function seedCapes(): Cape[] {
   return [
-    { id: "cape-founder", name: "MineUP Founder", url: capeDataUrl([30, 120, 90], [240, 220, 120]), active: false },
+    { id: "cape-founder", name: "MineDed Founder", url: capeDataUrl([30, 120, 90], [240, 220, 120]), active: false },
     { id: "cape-builder", name: "Builder", url: capeDataUrl([150, 40, 40], [240, 240, 240]), active: false },
   ];
 }

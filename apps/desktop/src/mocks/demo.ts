@@ -63,7 +63,7 @@ export async function runDemo(api: Commands, bus: MockBus, p: DemoParams): Promi
   await api.skinApply("acc-steve", "skin-explorer");
   await api.capeSet("acc-steve", "cape-founder");
 
-  await api.vpnSetSubscription(["https://sub.mineup.dedseckms.ru/s/7f3c9a"]);
+  await api.vpnSetSubscription(["https://sub.mineded.dedseckms.ru/s/7f3c9a"]);
   await api.vpnImportSubscriptionFile("C:\\Users\\Player\\Downloads\\mineup.yaml");
   await api.vpnSelect("🇫🇮 Helsinki");
   await api.vpnTestLatency();
