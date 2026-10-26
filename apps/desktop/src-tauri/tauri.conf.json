@@ -62,12 +62,17 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/installer/nsis-header.bmp",
+        "sidebarImage": "icons/installer/nsis-sidebar.bmp",
         "languages": ["Russian", "English"],
         "displayLanguageSelector": true,
         "installerHooks": "nsis/hooks.nsh"
       },
       "wix": {
         "language": ["ru-RU", "en-US"],
+        "bannerPath": "icons/installer/wix-banner.bmp",
+        "dialogImagePath": "icons/installer/wix-dialog.bmp",
         "upgradeCode": "b65e742b-ee38-5c9c-8d5c-b0e6dfca319a"
       }
     },
@@ -78,6 +83,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["mineded", "mineup"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxNDZGMjVFMUQzNzJCRjYKUldUMkt6Y2RYdkpHOFpQZHVOY2lvTDM5VTVjRkhEK3phOTBYcm5hR1UvSVF4T2JOZFVvUzFEVFcK",
       "endpoints": [
