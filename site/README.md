@@ -37,3 +37,4 @@ mineup.dedseckms.ru {
 	file_server
 }
 ```
+- `og.png` — 1200×630 social preview rendered from `og.html` (command in its header comment); `robots.txt`, `sitemap.xml` — SEO (update `lastmod` on content changes).

@@ -5,11 +5,13 @@
 
   var DICT = {
     en: {
-      title: "MineUP — Minecraft launcher",
+      title: "MineUP — free Minecraft launcher with mods, skins and multiplayer with friends",
+      h1: "MineUP — Minecraft launcher",
       skip: "Skip to content",
       navLabel: "Main",
       navFeatures: "Features",
       navScreens: "Screens",
+      navFaq: "FAQ",
       navDownload: "Download",
       sceneBtn: "Change background",
       langBtn: "Русский",
@@ -60,6 +62,17 @@
       lbPrev: "Previous screenshot",
       lbNext: "Next screenshot",
       lbClose: "Close",
+      faqTitle: "FAQ",
+      q1: "How do I play Minecraft with a friend without a server?",
+      a1: "Create a room in the Multiplayer section and send your friend its code. MineUP connects you directly (P2P), falling back to a relay when needed. No server rental, no Hamachi or Radmin VPN, no port forwarding. Text and voice chat are built in.",
+      q2: "Do I need a Minecraft licence or a Microsoft account?",
+      a2: "No. Play with an offline account or sign in to the MineUP server so other players see your skin and cape. A Microsoft account is not required.",
+      q3: "Will MineUP run on a low-end PC?",
+      a3: "Yes. The launcher itself is light, and the low-end PC mode turns off heavy effects. Memory and JVM flags are tuned automatically, and Java installs itself.",
+      q4: "Does the launcher work on Linux?",
+      a4: "Yes. MineUP runs on Windows 10/11 and Linux: there are .exe and .msi installers, an AppImage and a .deb package for Debian and Ubuntu.",
+      q5: "What if Minecraft downloads or services are blocked?",
+      a5: "MineUP has a built-in VPN, download mirrors and smart routing, so versions, mods and services download even where they are blocked.",
       dlTitle: "Download",
       dlLatest: "Latest release",
       dlVersion: "Latest release: {v}",
@@ -70,11 +83,13 @@
       disclaimer: "Not an official Minecraft product. Not affiliated with Mojang or Microsoft."
     },
     ru: {
-      title: "MineUP — лаунчер Minecraft",
+      title: "MineUP — бесплатный лаунчер Minecraft с модами, скинами и игрой с друзьями",
+      h1: "MineUP — лаунчер Minecraft",
       skip: "К содержимому",
       navLabel: "Основное",
       navFeatures: "Возможности",
       navScreens: "Интерфейс",
+      navFaq: "Вопросы",
       navDownload: "Скачать",
       sceneBtn: "Сменить фон",
       langBtn: "English",
@@ -125,6 +140,17 @@
       lbPrev: "Предыдущий скриншот",
       lbNext: "Следующий скриншот",
       lbClose: "Закрыть",
+      faqTitle: "Частые вопросы",
+      q1: "Как играть в Minecraft с другом без сервера?",
+      a1: "Создайте комнату в разделе «Мультиплеер» и отправьте другу её код. MineUP соединит вас напрямую (P2P), а при необходимости — через ретранслятор. Не нужны ни аренда сервера, ни Хамачи или Radmin VPN, ни проброс портов. Чат и голосовой чат встроены.",
+      q2: "Нужна ли лицензия Minecraft или аккаунт Microsoft?",
+      a2: "Нет. Можно играть с оффлайн-аккаунтом или войти через сервер MineUP — тогда ваш скин и плащ увидят и другие игроки. Аккаунт Microsoft не требуется.",
+      q3: "Пойдёт ли MineUP на слабом ПК?",
+      a3: "Да. Сам лаунчер лёгкий, а режим для слабых ПК отключает тяжёлые эффекты. Память и параметры JVM подбираются автоматически, Java ставится сама.",
+      q4: "Работает ли лаунчер на Linux?",
+      a4: "Да. MineUP работает на Windows 10/11 и Linux: доступны установщик .exe и .msi, а также AppImage и пакет .deb для Debian и Ubuntu.",
+      q5: "Что делать, если загрузки или сервисы Minecraft заблокированы?",
+      a5: "В MineUP встроены VPN, зеркала загрузок и умная маршрутизация: версии, моды и сервисы скачиваются даже там, где их блокируют.",
       dlTitle: "Скачать",
       dlLatest: "Последний релиз",
       dlVersion: "Последний релиз: {v}",
@@ -147,8 +173,11 @@
   }
 
   var saved = store("mineup.lang");
+  // Static HTML is Russian. Switch to English only for non-RU-family visitors;
+  // crawlers keep the Russian page whatever their navigator.language says.
+  var bot = /bot|crawl|spider|slurp|yandex|google|bing|lighthouse/i.test(navigator.userAgent || "");
   var lang = saved === "ru" || saved === "en" ? saved
-    : /^ru\b|^be\b|^uk\b|^kk\b/i.test(navigator.language || "") ? "ru" : "en";
+    : bot || /^ru\b|^be\b|^uk\b|^kk\b/i.test(navigator.language || "") ? "ru" : "en";
   var release = null;
   var releaseFailed = false;
 

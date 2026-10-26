@@ -1,21 +1,97 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MineUP — Minecraft launcher</title>
-<meta name="description" content="MineUP: a fast, free Minecraft launcher for Windows and Linux with mods, skins, P2P multiplayer, voice and built-in VPN.">
+<title>MineUP — бесплатный лаунчер Minecraft с модами, скинами и игрой с друзьями</title>
+<meta name="description" content="MineUP — бесплатный лаунчер Майнкрафт для Windows и Linux: моды Modrinth, Fabric и Forge, игра с другом без сервера и Хамачи, голосовой чат и встроенный VPN.">
+<link rel="canonical" href="https://mineup.dedseckms.ru/">
+<link rel="alternate" hreflang="ru" href="https://mineup.dedseckms.ru/">
+<link rel="alternate" hreflang="en" href="https://mineup.dedseckms.ru/">
+<link rel="alternate" hreflang="x-default" href="https://mineup.dedseckms.ru/">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f4f5f8" media="(prefers-color-scheme: light)">
-<meta property="og:title" content="MineUP">
-<meta property="og:description" content="Minecraft launcher for Windows and Linux">
-<meta property="og:image" content="https://mineup.dedseckms.ru/logo.svg">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="MineUP">
+<meta property="og:url" content="https://mineup.dedseckms.ru/">
+<meta property="og:title" content="MineUP — бесплатный лаунчер Minecraft с модами, скинами и игрой с друзьями">
+<meta property="og:description" content="Моды Modrinth, Fabric и Forge, игра с другом по коду комнаты без сервера и Хамачи, голосовой чат и встроенный VPN. Windows и Linux.">
+<meta property="og:image" content="https://mineup.dedseckms.ru/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="MineUP — лаунчер Minecraft">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:locale:alternate" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MineUP — бесплатный лаунчер Minecraft с модами, скинами и игрой с друзьями">
+<meta name="twitter:description" content="Моды Modrinth, Fabric и Forge, игра с другом по коду комнаты без сервера и Хамачи, голосовой чат и встроенный VPN. Windows и Linux.">
+<meta name="twitter:image" content="https://mineup.dedseckms.ru/og.png">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "MineUP",
+  "alternateName": "MineUP — лаунчер Minecraft",
+  "description": "Бесплатный лаунчер Minecraft для Windows и Linux: моды Modrinth, Fabric, Quilt, Forge и NeoForge, скины в 3D, игра с другом по коду комнаты без сервера, голосовой чат и встроенный VPN.",
+  "url": "https://mineup.dedseckms.ru/",
+  "image": "https://mineup.dedseckms.ru/og.png",
+  "operatingSystem": "Windows, Linux",
+  "applicationCategory": "GameApplication",
+  "inLanguage": ["ru", "en"],
+  "isAccessibleForFree": true,
+  "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+  "downloadUrl": "https://github.com/Dedseckms/MineUP/releases/latest",
+  "screenshot": [
+    "https://mineup.dedseckms.ru/screenshots/play-ru.webp",
+    "https://mineup.dedseckms.ru/screenshots/instances-ru.webp",
+    "https://mineup.dedseckms.ru/screenshots/catalog-ru.webp",
+    "https://mineup.dedseckms.ru/screenshots/skins-ru.webp",
+    "https://mineup.dedseckms.ru/screenshots/multiplayer-ru.webp",
+    "https://mineup.dedseckms.ru/screenshots/vpn-ru.webp"
+  ],
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "RUB" },
+  "sameAs": ["https://github.com/Dedseckms/MineUP"]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Как играть в Minecraft с другом без сервера?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Создайте комнату в разделе «Мультиплеер» и отправьте другу её код. MineUP соединит вас напрямую (P2P), а при необходимости — через ретранслятор. Не нужны ни аренда сервера, ни Хамачи или Radmin VPN, ни проброс портов. Чат и голосовой чат встроены." }
+    },
+    {
+      "@type": "Question",
+      "name": "Нужна ли лицензия Minecraft или аккаунт Microsoft?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Нет. Можно играть с оффлайн-аккаунтом или войти через сервер MineUP — тогда ваш скин и плащ увидят и другие игроки. Аккаунт Microsoft не требуется." }
+    },
+    {
+      "@type": "Question",
+      "name": "Пойдёт ли MineUP на слабом ПК?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Да. Сам лаунчер лёгкий, а режим для слабых ПК отключает тяжёлые эффекты. Память и параметры JVM подбираются автоматически, Java ставится сама." }
+    },
+    {
+      "@type": "Question",
+      "name": "Работает ли лаунчер на Linux?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Да. MineUP работает на Windows 10/11 и Linux: доступны установщик .exe и .msi, а также AppImage и пакет .deb для Debian и Ubuntu." }
+    },
+    {
+      "@type": "Question",
+      "name": "Что делать, если загрузки или сервисы Minecraft заблокированы?",
+      "acceptedAnswer": { "@type": "Answer", "text": "В MineUP встроены VPN, зеркала загрузок и умная маршрутизация: версии, моды и сервисы скачиваются даже там, где их блокируют." }
+    }
+  ]
+}
+</script>
 </head>
 <body>
-<a class="skip" href="#main" data-i18n="skip">Skip to content</a>
+<a class="skip" href="#main" data-i18n="skip">К содержимому</a>
 <div id="bg" class="bg" aria-hidden="true"></div>
 
 <header class="top panel">
@@ -23,79 +99,91 @@
     <img src="logo.svg" alt="" width="32" height="32">
     <span>MineUP</span>
   </a>
-  <nav aria-label="Main" data-i18n-aria="navLabel">
-    <a href="#features" data-i18n="navFeatures">Features</a>
-    <a href="#screens" data-i18n="navScreens">Screens</a>
-    <a href="#download" data-i18n="navDownload">Download</a>
+  <nav aria-label="Основное" data-i18n-aria="navLabel">
+    <a href="#features" data-i18n="navFeatures">Возможности</a>
+    <a href="#screens" data-i18n="navScreens">Интерфейс</a>
+    <a href="#faq" data-i18n="navFaq">Вопросы</a>
+    <a href="#download" data-i18n="navDownload">Скачать</a>
   </nav>
   <div class="tools">
-    <button type="button" id="scene-btn" class="btn ghost icon" data-i18n-aria="sceneBtn" aria-label="Change background">
+    <button type="button" id="scene-btn" class="btn ghost icon" data-i18n-aria="sceneBtn" aria-label="Сменить фон">
       <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M1 13h14v2H1zM3 9h2v4H3zm4-3h2v7H7zm4 2h2v5h-2zM12 2h2v2h-2z"/></svg>
     </button>
-    <button type="button" id="lang-btn" class="btn ghost" aria-label="Русский">RU</button>
+    <button type="button" id="lang-btn" class="btn ghost" aria-label="English" lang="en">EN</button>
   </div>
 </header>
 
 <main id="main" tabindex="-1">
   <section id="top" class="hero panel">
-    <img class="hero-logo" src="logo.svg" alt="MineUP logo" data-i18n-alt="logoAlt" width="96" height="96">
-    <h1>MineUP</h1>
-    <p class="pitch" data-i18n="pitch">A fast, free Minecraft launcher with mods, skins, multiplayer by room code and a built-in VPN.</p>
+    <img class="hero-logo" src="logo.svg" alt="Логотип MineUP" data-i18n-alt="logoAlt" width="96" height="96">
+    <h1 data-i18n="h1">MineUP — лаунчер Minecraft</h1>
+    <p class="pitch" data-i18n="pitch">Быстрый бесплатный лаунчер Minecraft: моды, скины, игра с друзьями по коду комнаты и встроенный VPN.</p>
     <div class="cta">
-      <a class="btn primary" href="#download" data-i18n="ctaDownload">Download</a>
-      <a class="btn" href="https://github.com/Dedseckms/MineUP" rel="noopener" data-i18n="ctaGithub">Source on GitHub</a>
+      <a class="btn primary" href="#download" data-i18n="ctaDownload">Скачать</a>
+      <a class="btn" href="https://github.com/Dedseckms/MineUP" rel="noopener" data-i18n="ctaGithub">Исходники на GitHub</a>
     </div>
-    <p class="small muted" data-i18n="platforms">Windows 10/11 and Linux · free and open source (GPL-3.0)</p>
+    <p class="small muted" data-i18n="platforms">Windows 10/11 и Linux · бесплатно и с открытым кодом (GPL-3.0)</p>
   </section>
 
   <section id="features" aria-labelledby="features-h">
-    <h2 id="features-h" class="title panel" data-i18n="featuresTitle">Everything in one launcher</h2>
+    <h2 id="features-h" class="title panel" data-i18n="featuresTitle">Всё в одном лаунчере</h2>
     <ul class="grid">
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12v3H2zm0 4.5h12v3H2zM2 11h12v3H2z"/></svg><h3 data-i18n="f1t">Versions &amp; loaders</h3><p data-i18n="f1d">Any Minecraft version, plus Fabric, Quilt, Forge and NeoForge in one click. Java is installed automatically.</p></li>
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1l6 3.5v7L8 15l-6-3.5v-7zm0 2.3L4 5.6 8 8l4-2.4z"/></svg><h3 data-i18n="f2t">Mods &amp; modpacks</h3><p data-i18n="f2d">Browse Modrinth right in the app: mods, modpacks, resource packs and shaders with dependencies resolved.</p></li>
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6v6H5zM3 8h10v5h-2v2H5v-2H3z"/></svg><h3 data-i18n="f3t">Own skin server</h3><p data-i18n="f3d">Upload skins and capes, see them in 3D, and everyone on the server sees them too. No Microsoft account required.</p></li>
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 3h5v4H1zm9 6h5v4h-5zM6 4.5h4v1.5h1V9H9.5V7H6z"/></svg><h3 data-i18n="f4t">P2P multiplayer</h3><p data-i18n="f4d">Create a room, share the code, play together. Direct connection with relay fallback, no port forwarding.</p></li>
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1h4v8H6zM3 7h2v2a3 3 0 006 0V7h2v2a5 5 0 01-4 4.9V15H7v-1.1A5 5 0 013 9z"/></svg><h3 data-i18n="f5t">Voice &amp; chat</h3><p data-i18n="f5d">Built-in room chat and voice with push-to-talk and an in-game overlay.</p></li>
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1l6 2v5c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V3zm-1 9.5l4.5-4.5-1-1L7 8.5 5.5 7l-1 1z"/></svg><h3 data-i18n="f6t">VPN &amp; anti-blocking</h3><p data-i18n="f6d">Downloads and services keep working where they are blocked: built-in VPN, mirrors and smart routing.</p></li>
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1L3 9h4l-1 6 6-8H8z"/></svg><h3 data-i18n="f7t">Low-end PC mode</h3><p data-i18n="f7d">A light mode without heavy effects, plus tuned memory and JVM flags for weak hardware.</p></li>
-      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 016.9 6H13a5 5 0 00-9.6-1.5L5.5 7H1V2.5l1.2 1.2A7 7 0 018 1zM1.1 9H3a5 5 0 009.6 1.5L10.5 9H15v4.5l-1.2-1.2A7 7 0 011.1 9z"/></svg><h3 data-i18n="f8t">Auto-updates</h3><p data-i18n="f8d">The launcher updates itself in the background with signed releases.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12v3H2zm0 4.5h12v3H2zM2 11h12v3H2z"/></svg><h3 data-i18n="f1t">Версии и загрузчики</h3><p data-i18n="f1d">Любая версия Minecraft, Fabric, Quilt, Forge и NeoForge в один клик. Java ставится автоматически.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1l6 3.5v7L8 15l-6-3.5v-7zm0 2.3L4 5.6 8 8l4-2.4z"/></svg><h3 data-i18n="f2t">Моды и модпаки</h3><p data-i18n="f2d">Каталог Modrinth прямо в приложении: моды, модпаки, ресурспаки и шейдеры с разрешением зависимостей.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6v6H5zM3 8h10v5h-2v2H5v-2H3z"/></svg><h3 data-i18n="f3t">Свой сервер скинов</h3><p data-i18n="f3d">Загружайте скины и плащи, смотрите их в 3D — и их видят все на сервере. Аккаунт Microsoft не нужен.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 3h5v4H1zm9 6h5v4h-5zM6 4.5h4v1.5h1V9H9.5V7H6z"/></svg><h3 data-i18n="f4t">P2P-мультиплеер</h3><p data-i18n="f4d">Создайте комнату, поделитесь кодом и играйте вместе. Прямое соединение с ретранслятором про запас, без проброса портов.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1h4v8H6zM3 7h2v2a3 3 0 006 0V7h2v2a5 5 0 01-4 4.9V15H7v-1.1A5 5 0 013 9z"/></svg><h3 data-i18n="f5t">Голос и чат</h3><p data-i18n="f5d">Встроенный чат и голос в комнате, push-to-talk и оверлей поверх игры.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1l6 2v5c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V3zm-1 9.5l4.5-4.5-1-1L7 8.5 5.5 7l-1 1z"/></svg><h3 data-i18n="f6t">VPN и обход блокировок</h3><p data-i18n="f6d">Загрузки и сервисы работают даже там, где их блокируют: встроенный VPN, зеркала и умная маршрутизация.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1L3 9h4l-1 6 6-8H8z"/></svg><h3 data-i18n="f7t">Режим для слабых ПК</h3><p data-i18n="f7d">Лёгкий режим без тяжёлых эффектов и подобранные настройки памяти и JVM для слабого железа.</p></li>
+      <li class="card panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 016.9 6H13a5 5 0 00-9.6-1.5L5.5 7H1V2.5l1.2 1.2A7 7 0 018 1zM1.1 9H3a5 5 0 009.6 1.5L10.5 9H15v4.5l-1.2-1.2A7 7 0 011.1 9z"/></svg><h3 data-i18n="f8t">Автообновления</h3><p data-i18n="f8d">Лаунчер сам обновляется в фоне, релизы подписаны.</p></li>
     </ul>
   </section>
 
   <section id="screens" aria-labelledby="screens-h">
-    <h2 id="screens-h" class="title panel" data-i18n="screensTitle">How it looks</h2>
-    <p class="note panel small" data-i18n="screensNote">Real screenshots of the launcher. Click to enlarge.</p>
+    <h2 id="screens-h" class="title panel" data-i18n="screensTitle">Как это выглядит</h2>
+    <p class="note panel small" data-i18n="screensNote">Настоящие скриншоты лаунчера. Нажмите, чтобы увеличить.</p>
     <ul class="shots">
-      <li><figure class="shot"><button type="button" data-shot="play"><img src="screenshots/play-en.webp" alt="Play screen: instance and account picker, running game with a live log" data-i18n-alt="shPlayAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shPlay">Play</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="instances"><img src="screenshots/instances-en.webp" alt="Instance library with vanilla, Fabric and Forge instances" data-i18n-alt="shInstancesAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shInstances">Instance library</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="modpacks"><img src="screenshots/modpacks-en.webp" alt="Modpack catalog from Modrinth with filters" data-i18n-alt="shModpacksAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shModpacks">Modpack catalog</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="mods"><img src="screenshots/mods-en.webp" alt="Installed mods of a Fabric instance with updates and toggles" data-i18n-alt="shModsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shMods">Instance mods</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="catalog"><img src="screenshots/catalog-en.webp" alt="Modrinth mod catalog filtered by the instance version and loader" data-i18n-alt="shCatalogAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shCatalog">Mod catalog</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="skins"><img src="screenshots/skins-en.webp" alt="Skin library with a 3D preview and a cape" data-i18n-alt="shSkinsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shSkins">Skins in 3D</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="accounts"><img src="screenshots/accounts-en.webp" alt="Offline accounts and sign-in to the MineUP server" data-i18n-alt="shAccountsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shAccounts">Accounts</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="multiplayer"><img src="screenshots/multiplayer-en.webp" alt="Multiplayer room with a code, participants, voice panel and chat" data-i18n-alt="shMultiplayerAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shMultiplayer">Room, voice and chat</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="vpn"><img src="screenshots/vpn-en.webp" alt="VPN screen: mode, subscription and nodes sorted by ping" data-i18n-alt="shVpnAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shVpn">Built-in VPN</figcaption></figure></li>
-      <li><figure class="shot"><button type="button" data-shot="settings"><img src="screenshots/settings-en.webp" alt="Appearance settings: theme, accent colour, language and pixel backgrounds" data-i18n-alt="shSettingsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shSettings">Appearance</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="play"><img src="screenshots/play-ru.webp" alt="Экран «Играть»: выбор сборки и аккаунта, запущенная игра и её лог" data-i18n-alt="shPlayAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shPlay">Запуск игры</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="instances"><img src="screenshots/instances-ru.webp" alt="Библиотека сборок: ванилла, Fabric и Forge" data-i18n-alt="shInstancesAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shInstances">Библиотека сборок</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="modpacks"><img src="screenshots/modpacks-ru.webp" alt="Каталог модпаков Modrinth с фильтрами" data-i18n-alt="shModpacksAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shModpacks">Каталог модпаков</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="mods"><img src="screenshots/mods-ru.webp" alt="Установленные моды сборки Fabric с обновлениями и переключателями" data-i18n-alt="shModsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shMods">Моды сборки</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="catalog"><img src="screenshots/catalog-ru.webp" alt="Каталог модов Modrinth с фильтром по версии и загрузчику сборки" data-i18n-alt="shCatalogAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shCatalog">Каталог модов</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="skins"><img src="screenshots/skins-ru.webp" alt="Библиотека скинов с 3D-просмотром и плащом" data-i18n-alt="shSkinsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shSkins">Скины в 3D</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="accounts"><img src="screenshots/accounts-ru.webp" alt="Оффлайн-аккаунты и вход через сервер MineUP" data-i18n-alt="shAccountsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shAccounts">Аккаунты</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="multiplayer"><img src="screenshots/multiplayer-ru.webp" alt="Комната мультиплеера: код, участники, голосовая панель и чат" data-i18n-alt="shMultiplayerAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shMultiplayer">Комната, голос и чат</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="vpn"><img src="screenshots/vpn-ru.webp" alt="Экран VPN: режим, подписка и узлы по пингу" data-i18n-alt="shVpnAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shVpn">Встроенный VPN</figcaption></figure></li>
+      <li><figure class="shot"><button type="button" data-shot="settings"><img src="screenshots/settings-ru.webp" alt="Настройки внешнего вида: тема, акцент, язык и пиксельные фоны" data-i18n-alt="shSettingsAlt" width="1600" height="1000" loading="lazy" decoding="async"></button><figcaption class="panel" data-i18n="shSettings">Внешний вид</figcaption></figure></li>
     </ul>
     <dialog id="lightbox" class="lightbox" aria-labelledby="lb-caption">
       <div class="lb-bar">
         <p id="lb-caption"></p>
-        <button type="button" class="btn ghost" data-lb="prev" data-i18n-aria="lbPrev" aria-label="Previous">&#8592;</button>
-        <button type="button" class="btn ghost" data-lb="next" data-i18n-aria="lbNext" aria-label="Next">&#8594;</button>
-        <button type="button" class="btn ghost" data-lb="close" data-i18n-aria="lbClose" aria-label="Close">&#10005;</button>
+        <button type="button" class="btn ghost" data-lb="prev" data-i18n-aria="lbPrev" aria-label="Предыдущий скриншот">&#8592;</button>
+        <button type="button" class="btn ghost" data-lb="next" data-i18n-aria="lbNext" aria-label="Следующий скриншот">&#8594;</button>
+        <button type="button" class="btn ghost" data-lb="close" data-i18n-aria="lbClose" aria-label="Закрыть">&#10005;</button>
       </div>
       <img id="lb-img" src="data:," alt="" width="1600" height="1000">
     </dialog>
   </section>
 
+  <section id="faq" aria-labelledby="faq-h">
+    <h2 id="faq-h" class="title panel" data-i18n="faqTitle">Частые вопросы</h2>
+    <div class="faq">
+      <div class="card panel"><h3 data-i18n="q1">Как играть в Minecraft с другом без сервера?</h3><p data-i18n="a1">Создайте комнату в разделе «Мультиплеер» и отправьте другу её код. MineUP соединит вас напрямую (P2P), а при необходимости — через ретранслятор. Не нужны ни аренда сервера, ни Хамачи или Radmin VPN, ни проброс портов. Чат и голосовой чат встроены.</p></div>
+      <div class="card panel"><h3 data-i18n="q2">Нужна ли лицензия Minecraft или аккаунт Microsoft?</h3><p data-i18n="a2">Нет. Можно играть с оффлайн-аккаунтом или войти через сервер MineUP — тогда ваш скин и плащ увидят и другие игроки. Аккаунт Microsoft не требуется.</p></div>
+      <div class="card panel"><h3 data-i18n="q3">Пойдёт ли MineUP на слабом ПК?</h3><p data-i18n="a3">Да. Сам лаунчер лёгкий, а режим для слабых ПК отключает тяжёлые эффекты. Память и параметры JVM подбираются автоматически, Java ставится сама.</p></div>
+      <div class="card panel"><h3 data-i18n="q4">Работает ли лаунчер на Linux?</h3><p data-i18n="a4">Да. MineUP работает на Windows 10/11 и Linux: доступны установщик .exe и .msi, а также AppImage и пакет .deb для Debian и Ubuntu.</p></div>
+      <div class="card panel"><h3 data-i18n="q5">Что делать, если загрузки или сервисы Minecraft заблокированы?</h3><p data-i18n="a5">В MineUP встроены VPN, зеркала загрузок и умная маршрутизация: версии, моды и сервисы скачиваются даже там, где их блокируют.</p></div>
+    </div>
+  </section>
+
   <section id="download" class="panel dl" aria-labelledby="download-h">
-    <h2 id="download-h" data-i18n="dlTitle">Download</h2>
-    <p class="muted" id="dl-version" aria-live="polite" data-i18n="dlLatest">Latest release</p>
+    <h2 id="download-h" data-i18n="dlTitle">Скачать</h2>
+    <p class="muted" id="dl-version" aria-live="polite" data-i18n="dlLatest">Последний релиз</p>
     <div class="dl-cols">
       <div>
         <h3>Windows</h3>
         <div class="dl-btns">
-          <a class="btn primary" data-asset="exe" href="https://github.com/Dedseckms/MineUP/releases/latest" rel="noopener"><span data-i18n="dlExe">Installer</span> <small>.exe</small></a>
+          <a class="btn primary" data-asset="exe" href="https://github.com/Dedseckms/MineUP/releases/latest" rel="noopener"><span data-i18n="dlExe">Установщик</span> <small>.exe</small></a>
           <a class="btn" data-asset="msi" href="https://github.com/Dedseckms/MineUP/releases/latest" rel="noopener">MSI <small>.msi</small></a>
         </div>
       </div>
@@ -107,17 +195,17 @@
         </div>
       </div>
     </div>
-    <p class="small"><a href="https://github.com/Dedseckms/MineUP/releases" rel="noopener" data-i18n="dlAll">All releases and changelog</a></p>
+    <p class="small"><a href="https://github.com/Dedseckms/MineUP/releases" rel="noopener" data-i18n="dlAll">Все релизы и список изменений</a></p>
   </section>
 </main>
 
 <footer class="foot panel">
   <span>© 2026 MineUP · <a href="https://www.gnu.org/licenses/gpl-3.0.html" rel="noopener license">GPL-3.0-or-later</a></span>
-  <span><a href="https://github.com/Dedseckms/MineUP" rel="noopener">GitHub</a> · <a href="https://github.com/Dedseckms/MineUP/issues" rel="noopener" data-i18n="issues">Report a bug</a></span>
-  <span class="muted small" data-i18n="disclaimer">Not an official Minecraft product. Not affiliated with Mojang or Microsoft.</span>
+  <span><a href="https://github.com/Dedseckms/MineUP" rel="noopener">GitHub</a> · <a href="https://github.com/Dedseckms/MineUP/issues" rel="noopener" data-i18n="issues">Сообщить об ошибке</a></span>
+  <span class="muted small" data-i18n="disclaimer">Не является официальным продуктом Minecraft. Не связан с Mojang или Microsoft.</span>
 </footer>
 
-<script src="scenes.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="scenes.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
