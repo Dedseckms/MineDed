@@ -519,9 +519,11 @@ async fn tick_loop(
                 if mic_test {
                     lock(&shared.mixer).push_loopback(&frame.pcm);
                 }
-                if let (Some(t), Some(d)) = (&transport, frame.datagram.as_deref()) {
-                    if d.len() <= t.max_datagram_size() {
-                        let _ = t.send(None, d).await;
+                if let Some(t) = &transport {
+                    for d in &frame.datagrams {
+                        if d.len() <= t.max_datagram_size() {
+                            let _ = t.send(None, d).await;
+                        }
                     }
                 }
                 speaking |= frame.speaking;

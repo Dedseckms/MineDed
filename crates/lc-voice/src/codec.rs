@@ -9,9 +9,12 @@ use crate::dsp::{FRAME, SAMPLE_RATE};
 
 /// Max encoded frame we accept/produce.
 pub const MAX_PACKET: usize = 400;
-const BITRATE: u32 = 24_000;
-/// Low complexity keeps CPU usage small on weak PCs.
-const COMPLEXITY: u8 = 5;
+/// Wideband voice with headroom for in-band FEC.
+const BITRATE: u32 = 36_000;
+/// Mono 20 ms frames are cheap even at the highest complexity.
+const COMPLEXITY: u8 = 10;
+/// Expected loss hint: makes the encoder spend bits on in-band FEC.
+const LOSS_HINT_PERC: u8 = 10;
 
 pub struct OpusEncoder {
     inner: Encoder,
@@ -27,7 +30,9 @@ impl OpusEncoder {
             .vbr(true)
             .frame_duration(FrameDuration::Ms20)
             .inband_fec(InbandFec::Enabled)
-            .packet_loss_perc(10)
+            .packet_loss_perc(LOSS_HINT_PERC)
+            // Silence is handled by our own gate; DTX would starve FEC/PLC.
+            .dtx(false)
             .build()
             .map_err(|e| AppError::internal(format!("opus encoder: {e}")))?;
         Ok(Self {

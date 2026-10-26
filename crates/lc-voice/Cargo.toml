@@ -20,6 +20,7 @@ nnnoiseless = { version = "0.5.2", default-features = false }
 cpal = "0.18.2"
 # Polls key state (GetAsyncKeyState / XQueryKeymap): never swallows the key from the game.
 device_query = "4.0.1"
+rubato = { version = "0.16", default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
