@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::content::{
-    ContentFilter, ContentSourceKind, ContentVersion, ContentVersionRef, InstalledContent,
-    ResolvePlan, SearchPage, SearchQuery,
+    ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
+    InstalledContent, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{Instance, PackFormat, PerfPreset};
 use lc_types::{AppError, AppResult, InstanceId};
@@ -60,6 +60,15 @@ impl ContentService for StubContent {
 
     async fn remove(&self, _instance: InstanceId, _file_name: &str) -> AppResult<()> {
         Err(AppError::not_implemented("ContentService::remove"))
+    }
+
+    async fn add_local(
+        &self,
+        _instance: InstanceId,
+        _kind: ContentKind,
+        _paths: Vec<String>,
+    ) -> AppResult<Vec<InstalledContent>> {
+        Err(AppError::not_implemented("ContentService::add_local"))
     }
 
     async fn update_all(&self, _instance: InstanceId, _sink: &dyn ProgressSink) -> AppResult<()> {

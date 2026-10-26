@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::content::{
-    ContentFilter, ContentSourceKind, ContentVersion, ContentVersionRef, InstalledContent,
-    ResolvePlan, SearchPage, SearchQuery,
+    ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
+    InstalledContent, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{Instance, PackFormat, PerfPreset};
 use lc_types::{AppResult, InstanceId};
@@ -53,6 +53,15 @@ pub trait ContentService: Send + Sync {
         enabled: bool,
     ) -> AppResult<()>;
     async fn remove(&self, instance: InstanceId, file_name: &str) -> AppResult<()>;
+    /// Copies local files into the instance folder for `kind` (mods: `.jar`;
+    /// resource packs / shaders: `.zip` or a folder). Existing files with the
+    /// same name are replaced. Returns the added entries (source `local`).
+    async fn add_local(
+        &self,
+        instance: InstanceId,
+        kind: ContentKind,
+        paths: Vec<String>,
+    ) -> AppResult<Vec<InstalledContent>>;
     async fn update_all(&self, instance: InstanceId, sink: &dyn ProgressSink) -> AppResult<()>;
 }
 
