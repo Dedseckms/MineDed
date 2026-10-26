@@ -33,6 +33,7 @@ import type {
   VersionKind,
   VoiceSettings,
   VoiceStatus,
+  VpnApp,
   VpnMode,
   VpnNode,
 } from "../bindings";
@@ -40,7 +41,7 @@ import { nextOffset } from "../lib/content";
 import { toAppError } from "../lib/errors";
 import { findNewInstance } from "../lib/modpacks";
 import { withPeerVolume } from "../lib/voice";
-import { selectNode } from "../lib/vpn";
+import { MINEDED_POLL_MS, minededMode, minededUsage, selectNode } from "../lib/vpn";
 import { useNavStore } from "../stores/navStore";
 import { useRoomStore } from "../stores/roomStore";
 import { useToastStore } from "../stores/toastStore";
@@ -70,6 +71,9 @@ export const qk = {
   capes: (account: AccountId) => ["capes", account] as const,
   vpnState: ["vpnState"] as const,
   vpnNodes: ["vpnNodes"] as const,
+  vpnApps: ["vpnApps"] as const,
+  vpnRunningApps: ["vpnRunningApps"] as const,
+  minededAccess: (account: AccountId) => ["minededAccess", account] as const,
   room: ["room"] as const,
   voiceDevices: ["voiceDevices"] as const,
   voiceSettings: ["voiceSettings"] as const,
@@ -305,6 +309,13 @@ export function useAddSkin() {
   });
 }
 
+/** Downloads a skin by link or nickname for preview (not added to the library yet). */
+export function useFetchRemoteSkin() {
+  return useMutation({
+    mutationFn: async (source: string) => unwrap(await api.skinFetchRemote(source)),
+  });
+}
+
 export function useRemoveSkin() {
   const qc = useQueryClient();
   return useMutation({
@@ -402,6 +413,60 @@ export function useTestVpnLatency() {
   return useMutation({
     mutationFn: async () => unwrap(await api.vpnTestLatency()),
     onSuccess: (nodes) => qc.setQueryData(qk.vpnNodes, nodes),
+  });
+}
+
+/** MineDed VPN usage (GET, no provisioning), re-read every few minutes while mounted. */
+export const useMinededAccess = (account: AccountId | null) =>
+  useQuery({
+    queryKey: qk.minededAccess(account ?? ""),
+    queryFn: async () => unwrap(await api.vpnMinededAccess(account ?? "", false)),
+    enabled: account !== null,
+    refetchInterval: MINEDED_POLL_MS,
+    retry: false,
+  });
+
+/**
+ * Provisions the personal MineDed key (the backend swaps the subscription
+ * and fetches nodes), then turns the VPN on: `apps` mode when programs are
+ * chosen, otherwise launcher + game. A used-up quota leaves the VPN as is.
+ */
+export function useMinededConnect() {
+  const qc = useQueryClient();
+  const invalidate = useInvalidateVpn();
+  return useMutation({
+    mutationFn: async (account: AccountId) => {
+      const access = unwrap(await api.vpnMinededAccess(account, true));
+      qc.setQueryData(qk.minededAccess(account), access);
+      if (!access || minededUsage(access).exhausted) return access;
+      const apps = unwrap(await api.vpnApps());
+      qc.setQueryData(qk.vpnState, unwrap(await api.vpnSetMode(minededMode(apps))));
+      return access;
+    },
+    onSettled: invalidate,
+  });
+}
+
+export const useVpnApps = () =>
+  useQuery({ queryKey: qk.vpnApps, queryFn: async () => unwrap(await api.vpnApps()) });
+
+export const useVpnRunningApps = (enabled: boolean) =>
+  useQuery({
+    queryKey: qk.vpnRunningApps,
+    queryFn: async () => unwrap(await api.vpnRunningApps()),
+    enabled,
+    staleTime: 0,
+  });
+
+export function useSetVpnApps() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (apps: VpnApp[]) => {
+      unwrap(await api.vpnSetApps(apps));
+      return apps;
+    },
+    onSuccess: (apps) => qc.setQueryData(qk.vpnApps, apps),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.vpnApps }),
   });
 }
 

@@ -12,9 +12,19 @@ export function skinSrc(
   toAsset: (path: string) => string = convertFileSrc,
 ): string | null {
   if (skin.url.trim() !== "") return skin.url;
-  if (!skin.localPath) return null;
+  return skin.localPath ? localSkinSrc(skin.localPath, toAsset) : null;
+}
+
+/**
+ * Image source of a local PNG (picked file, `RemoteSkin.localPath`). URLs
+ * (`data:`, `http(s):`, used by the mocks) pass through unchanged.
+ */
+export function localSkinSrc(path: string, toAsset: (path: string) => string = convertFileSrc): string | null {
+  const p = path.trim();
+  if (p === "") return null;
+  if (/^(?:data:|https?:|blob:)/i.test(p)) return p;
   try {
-    return toAsset(skin.localPath);
+    return toAsset(p);
   } catch {
     // Outside Tauri (browser mocks) there is no asset protocol.
     return null;

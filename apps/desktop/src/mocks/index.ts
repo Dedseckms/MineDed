@@ -19,7 +19,14 @@ import type {
   TaskSummary,
   commands,
 } from "../bindings";
-import { IMPORT_EXTS, SKIN_EXTS, validateFilePath, validateNick, validateSkinName } from "../lib/validation";
+import {
+  IMPORT_EXTS,
+  SKIN_EXTS,
+  validateFilePath,
+  validateNick,
+  validateSkinName,
+  validateSkinSource,
+} from "../lib/validation";
 import { type MockBus, mockBus } from "./bus";
 import { pickLoaderVersion } from "../lib/content";
 import {
@@ -699,9 +706,11 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       return ok(skins.map((s) => ({ ...s })));
     },
 
+    // Mock "cache files" from `skinFetchRemote` are data URLs (previewable without Tauri).
     skinAdd: async (pngPath, name, model) => {
       await wait();
-      if (validateFilePath(pngPath, SKIN_EXTS) !== null || validateSkinName(name) !== null)
+      const cached = pngPath.startsWith("data:image/png");
+      if ((!cached && validateFilePath(pngPath, SKIN_EXTS) !== null) || validateSkinName(name) !== null)
         return fail(appError("invalidInput", "mock: bad skin"));
       if (/missing/i.test(pngPath)) return fail({ ...appError("notFound", "mock: file not found"), details: { path: pngPath } });
       seq += 1;
@@ -710,12 +719,28 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
         name: name.trim(),
         model,
         hash: `${seq}`.padStart(64, "0"),
-        url: skinDataUrl(paletteFromSeed(`${pngPath}:${name}`), model),
-        localPath: pngPath.trim(),
+        url: cached ? pngPath : skinDataUrl(paletteFromSeed(`${pngPath}:${name}`), model),
+        localPath: cached ? null : pngPath.trim(),
         localOnly: true,
       };
       skins = [...skins, skin];
       return ok({ ...skin });
+    },
+
+    // Nicknames/links containing "missing" are not found; the model is slim for names ending in "a".
+    skinFetchRemote: async (source) => {
+      await wait();
+      const s = source.trim();
+      if (validateSkinSource(s) !== null) return fail(appError("invalidInput", "mock: bad skin source"));
+      if (/missing/i.test(s)) return fail({ ...appError("notFound", "mock: skin not found"), details: { source: s } });
+      const isUrl = /^https?:/i.test(s);
+      const base = isUrl ? (s.split(/[/?#]/).filter(Boolean).pop() ?? "skin").replace(/\.png$/i, "") : s;
+      const model = /a$/i.test(base) ? "slim" : "classic";
+      return ok({
+        localPath: skinDataUrl(paletteFromSeed(`remote:${s}`), model),
+        model,
+        suggestedName: base.slice(0, 32) || "skin",
+      });
     },
 
     skinRemove: async (id) => {
@@ -786,6 +811,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       tickMs,
       wait,
       findInstance,
+      findAccount: (id) => accounts.find((a) => a.id === id),
       runTask,
       selfName: () => (accounts.find((a) => a.isDefault) ?? accounts[0])?.name ?? "Player",
     }),

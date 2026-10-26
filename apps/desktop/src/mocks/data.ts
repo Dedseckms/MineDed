@@ -163,6 +163,16 @@ export function seedAccounts(): Account[] {
       isDefault: false,
       valid: true,
     },
+    {
+      id: "acc-mineded",
+      kind: "yggdrasil",
+      name: "MineDedPlayer",
+      uuid: "3f0c2a7e-5b1d-4e9a-9c41-7d2e8a6b1c05",
+      server: "https://auth.mineup.invalid/api/yggdrasil",
+      skinUrl: null,
+      isDefault: false,
+      valid: true,
+    },
   ];
 }
 

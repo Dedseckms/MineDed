@@ -1,6 +1,8 @@
 // Mock VPN (mihomo) and P2P rooms/chat. Stateful; emits the same events as
 // the real backend through the mock bus. Owned by ui.
 import type {
+  Account,
+  AccountId,
   AppError,
   AudioDevice,
   ChatMessage,
@@ -12,6 +14,8 @@ import type {
   TaskKind,
   VoiceSettings,
   VoiceStatus,
+  VpnAccess,
+  VpnApp,
   VpnNode,
   VpnState,
   commands,
@@ -29,6 +33,7 @@ export interface NetMockContext {
   tickMs: number;
   wait: () => Promise<void>;
   findInstance: (id: InstanceId) => Instance | undefined;
+  findAccount: (id: AccountId) => Account | undefined;
   /** Name of the default account (sender of own chat messages). */
   selfName: () => string;
   runTask: (
@@ -66,6 +71,26 @@ export function mockLatency(name: string, round: number): number | null {
   if (h % 7 === 0) return null;
   return 30 + (h % 470);
 }
+
+/** Node of the personal MineDed subscription. */
+export const MINEDED_NODE: Pick<VpnNode, "name" | "protocol"> = { name: "MineDed NL", protocol: "vless" };
+
+export const MINEDED_QUOTA = 256 * 1024 ** 3;
+/** Traffic "used" between two usage polls. */
+const MINEDED_STEP = 1.5 * 1024 ** 3;
+
+/** Programs a mock `vpn_running_apps` reports. */
+export const MOCK_RUNNING_APPS: readonly VpnApp[] = [
+  { name: "Telegram", process: "Telegram.exe", path: "C:\\Users\\me\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe" },
+  { name: "Discord", process: "Discord.exe", path: "C:\\Users\\me\\AppData\\Local\\Discord\\app-1.0.9200\\Discord.exe" },
+  { name: "Google Chrome", process: "chrome.exe", path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
+  { name: "Spotify", process: "Spotify.exe", path: "C:\\Users\\me\\AppData\\Roaming\\Spotify\\Spotify.exe" },
+  { name: "Steam", process: "steam.exe", path: "C:\\Program Files (x86)\\Steam\\steam.exe" },
+  { name: "Visual Studio Code", process: "Code.exe", path: "C:\\Users\\me\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe" },
+  { name: "OBS Studio", process: "obs64.exe", path: "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe" },
+  { name: "Notepad++", process: "notepad++.exe", path: "C:\\Program Files\\Notepad++\\notepad++.exe" },
+  { name: "Yandex Browser", process: "browser.exe", path: "C:\\Users\\me\\AppData\\Local\\Yandex\\YandexBrowser\\Application\\browser.exe" },
+];
 
 export const MOCK_PEER_NAMES = ["AlexBuilder", "Creeper_Hunter", "nyan_cat"] as const;
 
@@ -112,6 +137,12 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
     vpn = { ...vpn, subscriptionUpdated: new Date().toISOString(), node: vpn.running ? (sel?.name ?? null) : vpn.node, error: null };
   };
   const emitVpn = () => bus.emit("vpnState", { ...vpn });
+  let apps: VpnApp[] = [];
+  const minededKeys = new Map<AccountId, VpnAccess>();
+  const nextReset = () => {
+    const d = new Date();
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString();
+  };
 
   // ---- rooms ----
   let room: RoomState | null = null;
@@ -232,9 +263,61 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       return ok(id);
     },
 
+    // Account names containing "expired" act like a dead session, "full" like a used-up quota.
+    vpnMinededAccess: async (accountId, provision) => {
+      await wait();
+      const acc = ctx.findAccount(accountId);
+      if (!acc) return err("notFound", `mock: account ${accountId} not found`);
+      if (acc.kind !== "yggdrasil")
+        return err("authRequired", "mock: MineDed VPN needs an own-server account", { reason: "yggdrasilAccountRequired" });
+      if (/expired/i.test(acc.name)) return err("authExpired", "mock: own-server session expired", { source: "hub" });
+      let access = minededKeys.get(accountId) ?? null;
+      if (!access && !provision) return ok(null);
+      if (!access) {
+        const full = /full/i.test(acc.name);
+        access = { quotaBytes: MINEDED_QUOTA, usedBytes: full ? MINEDED_QUOTA : 0, resetAt: nextReset(), enabled: !full };
+        urls = ["https://hub.mineup.invalid/sub/personal"];
+        nodes = [{ ...MINEDED_NODE, latencyMs: null, selected: true }];
+        vpn = { ...vpn, subscriptionUpdated: new Date().toISOString(), error: null };
+        emitVpn();
+      } else if (vpn.running && access.enabled) {
+        const used = Math.min(access.quotaBytes, access.usedBytes + MINEDED_STEP);
+        access = { ...access, usedBytes: used, enabled: used < access.quotaBytes };
+      }
+      minededKeys.set(accountId, access);
+      return ok({ ...access });
+    },
+
+    vpnApps: async () => {
+      await wait();
+      return ok(apps.map((a) => ({ ...a })));
+    },
+
+    vpnSetApps: async (list) => {
+      await wait();
+      if (list.length > 200) return err("invalidInput", "mock: too many apps");
+      const seen = new Set<string>();
+      for (const a of list) {
+        const key = a.process.trim().toLowerCase();
+        if (key === "" || /[\\/,]/.test(a.process)) return err("invalidInput", "mock: bad process name", { process: a.process });
+        if (seen.has(key)) return err("invalidInput", "mock: duplicate process", { process: a.process });
+        seen.add(key);
+      }
+      apps = list.map((a) => ({ ...a, process: a.process.trim() }));
+      return ok(null);
+    },
+
+    vpnRunningApps: async () => {
+      await wait();
+      return ok(MOCK_RUNNING_APPS.map((a) => ({ ...a })));
+    },
+
+    // A process named "*decline*" in the list simulates a declined UAC prompt.
     vpnSetMode: async (mode) => {
       await wait();
       if (mode !== "off" && nodes.length === 0) return err("invalidInput", "mock: no nodes, import a subscription first");
+      if (mode === "apps" && apps.some((a) => /decline/i.test(a.process)))
+        return err("permissionDenied", "mock: administrator rights were declined", { reason: "uacDeclined" });
       const sel = nodes.find((n) => n.selected) ?? null;
       vpn =
         mode === "off"

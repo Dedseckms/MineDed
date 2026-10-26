@@ -98,6 +98,15 @@ export function validateSkinName(name: string): ValidationKey | null {
   return null;
 }
 
+/** "From the web" source: an http(s) link or a player nickname. */
+export function validateSkinSource(source: string): ValidationKey | null {
+  const s = source.trim();
+  if (s.length === 0) return "validation.required";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return validateOptionalUrl(s);
+  if (!/^[A-Za-z0-9_]{1,16}$/.test(s)) return "validation.skinSource";
+  return null;
+}
+
 /** Default library name from a PNG path: file name without extension. */
 export function skinNameFromPath(path: string): string {
   const base = path.trim().split(/[\\/]/).pop() ?? "";

@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { Skin, SkinModel } from "../../bindings";
+import { pickFile } from "../../api/dialog";
 import {
   useAccounts,
   useAddSkin,
   useApplySkin,
   useCapes,
+  useFetchRemoteSkin,
   useRemoveSkin,
   useSetCape,
   useSkins,
@@ -14,93 +16,201 @@ import {
 import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Card";
 import { Icon } from "../../components/ui/Icon";
-import { ConfirmDialog } from "../../components/ui/Modal";
+import { ConfirmDialog, Modal } from "../../components/ui/Modal";
 import { Field, Segmented, Select, TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { useMotionPrefs } from "../../hooks/useAppearance";
-import { SKIN_EXTS, skinNameFromPath, validateFilePath, validateSkinName } from "../../lib/validation";
+import { SKIN_NAME_MAX, skinNameFromPath, validateSkinName, validateSkinSource } from "../../lib/validation";
 import { Skin3D, SkinFlat } from "./SkinPreview";
-import { skinSrc } from "./skinSrc";
+import { localSkinSrc, skinSrc } from "./skinSrc";
 
-function AddSkinForm({ onAdded }: { onAdded: (s: Skin) => void }) {
+type AddSource = "computer" | "web";
+
+/** A PNG ready to be added: picked from disk or downloaded by `skin_fetch_remote`. */
+interface Candidate {
+  path: string;
+  name: string;
+  model: SkinModel;
+}
+
+function AddSkinDialog({ open, onClose, onAdded }: { open: boolean; onClose: () => void; onAdded: (s: Skin) => void }) {
   const { t } = useTranslation();
+  const { light, reduced } = useMotionPrefs();
   const add = useAddSkin();
-  const [path, setPath] = useState("");
-  const [name, setName] = useState("");
-  const [model, setModel] = useState<SkinModel>("classic");
+  const fetchRemote = useFetchRemoteSkin();
+  const [source, setSource] = useState<AddSource>("computer");
+  const [web, setWeb] = useState("");
+  const [webTouched, setWebTouched] = useState(false);
+  const [cand, setCand] = useState<Candidate | null>(null);
   const [touched, setTouched] = useState(false);
-  const pathError = validateFilePath(path, SKIN_EXTS);
-  const effectiveName = name.trim() === "" ? skinNameFromPath(path) : name;
-  const nameError = validateSkinName(effectiveName);
+  const [pickError, setPickError] = useState<unknown>(null);
+
+  const webError = validateSkinSource(web);
+  const nameError = cand ? validateSkinName(cand.name) : null;
+  const src = cand ? localSkinSrc(cand.path) : null;
+
+  const reset = () => {
+    setCand(null);
+    setTouched(false);
+    setPickError(null);
+    add.reset();
+    fetchRemote.reset();
+  };
+  const close = () => {
+    reset();
+    setWeb("");
+    setWebTouched(false);
+    onClose();
+  };
+
+  const pick = async () => {
+    reset();
+    try {
+      const path = await pickFile([{ name: t("dialog.png"), extensions: ["png"] }]);
+      if (path) setCand({ path, name: skinNameFromPath(path), model: "classic" });
+    } catch (e) {
+      setPickError(e);
+    }
+  };
+
+  const find = () => {
+    setWebTouched(true);
+    if (webError) return;
+    reset();
+    fetchRemote.mutate(web.trim(), {
+      onSuccess: (r) => setCand({ path: r.localPath, name: r.suggestedName.slice(0, SKIN_NAME_MAX), model: r.model }),
+    });
+  };
+
+  const submit = () => {
+    setTouched(true);
+    if (!cand || nameError) return;
+    add.mutate(
+      { path: cand.path, name: cand.name.trim(), model: cand.model },
+      {
+        onSuccess: (skin) => {
+          onAdded(skin);
+          close();
+        },
+      },
+    );
+  };
 
   return (
-    <form
-      className="flex flex-col gap-3"
-      onSubmit={(e) => {
-        e.preventDefault();
-        setTouched(true);
-        if (pathError || nameError) return;
-        add.mutate(
-          { path: path.trim(), name: effectiveName.trim(), model },
-          {
-            onSuccess: (skin) => {
-              setPath("");
-              setName("");
-              setTouched(false);
-              onAdded(skin);
-            },
-          },
-        );
-      }}
+    <Modal
+      open={open}
+      onClose={close}
+      wide
+      title={t("skins.addTitle")}
+      footer={
+        <>
+          <Button variant="ghost" onClick={close}>
+            {t("common.cancel")}
+          </Button>
+          <Button variant="primary" icon={<Icon name="plus" />} disabled={!cand} loading={add.isPending} onClick={submit}>
+            {t("skins.add")}
+          </Button>
+        </>
+      }
     >
-      <Field label={t("skins.path")} error={touched ? pathError : null} hint={t("skins.pathHint")}>
-        {(id, d, inv) => (
-          <TextInput
-            id={id}
-            aria-describedby={d}
-            invalid={inv}
-            value={path}
-            placeholder={t("skins.pathPlaceholder")}
-            onChange={(e) => {
-              setPath(e.target.value);
-              add.reset();
+      <div className="flex flex-col gap-4">
+        <Segmented<AddSource>
+          ariaLabel={t("skins.source")}
+          value={source}
+          onChange={(s) => {
+            setSource(s);
+            reset();
+          }}
+          options={[
+            { value: "computer", label: t("skins.fromComputer") },
+            { value: "web", label: t("skins.fromWeb") },
+          ]}
+        />
+        {source === "computer" ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Button icon={<Icon name="folder" />} onClick={() => void pick()}>
+              {t("skins.pickFile")}
+            </Button>
+            <p className="min-w-0 flex-1 text-xs text-muted">{t("skins.fileHint")}</p>
+          </div>
+        ) : (
+          <form
+            className="flex items-start gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              find();
             }}
-          />
+          >
+            <Field className="flex-1" label={t("skins.webSource")} error={webTouched ? webError : null} hint={t("skins.webHint")}>
+              {(id, d, inv) => (
+                <TextInput
+                  id={id}
+                  aria-describedby={d}
+                  invalid={inv}
+                  value={web}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder={t("skins.webPlaceholder")}
+                  onChange={(e) => {
+                    setWeb(e.target.value);
+                    fetchRemote.reset();
+                  }}
+                />
+              )}
+            </Field>
+            <Button type="submit" className="mt-7" icon={<Icon name="search" />} loading={fetchRemote.isPending}>
+              {t("skins.find")}
+            </Button>
+          </form>
         )}
-      </Field>
-      <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-        <Field label={t("skins.name")} error={touched && path !== "" ? nameError : null}>
-          {(id, d, inv) => (
-            <TextInput
-              id={id}
-              aria-describedby={d}
-              invalid={inv}
-              value={name}
-              placeholder={skinNameFromPath(path) || t("skins.namePlaceholder")}
-              onChange={(e) => setName(e.target.value)}
-            />
-          )}
-        </Field>
-        <div className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">{t("skins.model")}</span>
-          <Segmented<SkinModel>
-            ariaLabel={t("skins.model")}
-            value={model}
-            onChange={setModel}
-            options={[
-              { value: "classic", label: t("skins.models.classic") },
-              { value: "slim", label: t("skins.models.slim") },
-            ]}
-          />
-        </div>
+        <ErrorMessage error={fetchRemote.error ?? pickError} />
+
+        {cand ? (
+          <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
+            <div className="flex h-60 items-center justify-center rounded-lg bg-surface-2" aria-label={t("skins.candidate")}>
+              {!src ? (
+                <Icon name="shirt" className="size-16 text-muted" />
+              ) : light ? (
+                <SkinFlat url={src} model={cand.model} className="h-52" />
+              ) : (
+                <Skin3D url={src} model={cand.model} capeUrl={null} animate={!reduced} />
+              )}
+            </div>
+            <div className="flex flex-col gap-3">
+              <p className="truncate font-mono text-xs text-muted" title={cand.path}>
+                {cand.path.startsWith("data:") ? cand.name : cand.path}
+              </p>
+              <Field label={t("skins.name")} error={touched ? nameError : null}>
+                {(id, d, inv) => (
+                  <TextInput
+                    id={id}
+                    aria-describedby={d}
+                    invalid={inv}
+                    value={cand.name}
+                    maxLength={SKIN_NAME_MAX}
+                    placeholder={t("skins.namePlaceholder")}
+                    onChange={(e) => setCand({ ...cand, name: e.target.value })}
+                  />
+                )}
+              </Field>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-sm font-medium">{t("skins.model")}</span>
+                <Segmented<SkinModel>
+                  ariaLabel={t("skins.model")}
+                  value={cand.model}
+                  onChange={(model) => setCand({ ...cand, model })}
+                  options={[
+                    { value: "classic", label: t("skins.models.classic") },
+                    { value: "slim", label: t("skins.models.slim") },
+                  ]}
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+        <ErrorMessage error={add.error} />
       </div>
-      <div className="flex justify-end">
-        <Button type="submit" variant="primary" icon={<Icon name="plus" />} loading={add.isPending}>
-          {t("skins.add")}
-        </Button>
-      </div>
-      <ErrorMessage error={add.error} />
-    </form>
+    </Modal>
   );
 }
 
@@ -174,6 +284,7 @@ export function SkinsScreen() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [capeUrl, setCapeUrl] = useState<string | null>(null);
   const [removing, setRemoving] = useState<Skin | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const list = skins.data ?? [];
   const selected = list.find((s) => s.id === selectedId) ?? list[0] ?? null;
@@ -184,7 +295,14 @@ export function SkinsScreen() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid gap-6 lg:grid-cols-[1fr_18rem]">
-        <Section title={t("skins.library")}>
+        <Section
+          title={t("skins.library")}
+          actions={
+            <Button size="sm" variant="primary" icon={<Icon name="plus" />} onClick={() => setAdding(true)}>
+              {t("skins.addButton")}
+            </Button>
+          }
+        >
           {skins.isPending ? (
             <ListSkeleton rows={6} rowClassName="h-44" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4" />
           ) : skins.error ? (
@@ -206,7 +324,8 @@ export function SkinsScreen() {
               <div className="flex h-72 items-center justify-center rounded-lg bg-surface-2">
                 {!selectedSrc ? (
                   <Icon name="shirt" className="size-16 text-muted" />
-                ) : light ? (
+                ) : light || adding ? (
+                  // One WebGL context at a time: the add dialog has its own 3D preview.
                   <SkinFlat url={selectedSrc} model={selected.model} className="h-64" />
                 ) : (
                   <Skin3D url={selectedSrc} model={selected.model} capeUrl={capeUrl} animate={!reduced} />
@@ -259,9 +378,7 @@ export function SkinsScreen() {
         </Section>
       </div>
 
-      <Section title={t("skins.addTitle")}>
-        <AddSkinForm onAdded={(s) => setSelectedId(s.id)} />
-      </Section>
+      <AddSkinDialog open={adding} onClose={() => setAdding(false)} onAdded={(s) => setSelectedId(s.id)} />
 
       <ConfirmDialog
         open={removing !== null}

@@ -1,8 +1,104 @@
 // Pure helpers for the VPN screen (no React, no backend calls).
-import type { VpnMode, VpnNode } from "../bindings";
+import type { Account, VpnAccess, VpnApp, VpnMode, VpnNode } from "../bindings";
 import type { ValidationKey } from "./validation";
 
-export const VPN_MODES = ["off", "launcherOnly", "launcherAndGame"] as const satisfies readonly VpnMode[];
+export const VPN_MODES = ["off", "launcherOnly", "launcherAndGame", "apps"] as const satisfies readonly VpnMode[];
+
+// ---- MineDed VPN -------------------------------------------------------------
+
+/** How often the usage is re-read while the VPN screen is open. */
+export const MINEDED_POLL_MS = 3 * 60_000;
+
+const GIB = 1024 ** 3;
+
+/** Bytes → GiB with at most one decimal (`12.5`), for "X GB left". */
+export function toGb(bytes: number): number {
+  return Math.max(0, Math.round((bytes / GIB) * 10) / 10);
+}
+
+export interface MinededUsage {
+  /** 0..1 share of the quota already used. */
+  used: number;
+  leftBytes: number;
+  /** Quota used up or the key is disabled. */
+  exhausted: boolean;
+}
+
+export function minededUsage(a: VpnAccess): MinededUsage {
+  const leftBytes = Math.max(0, a.quotaBytes - a.usedBytes);
+  const used = a.quotaBytes > 0 ? Math.min(1, a.usedBytes / a.quotaBytes) : 1;
+  return { used, leftBytes, exhausted: !a.enabled || leftBytes === 0 };
+}
+
+/** Own-server (Yggdrasil) accounts that can get MineDed VPN; the default one first. */
+export function minededAccounts(accounts: readonly Account[]): Account[] {
+  return accounts
+    .filter((a) => a.kind === "yggdrasil")
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+}
+
+/** Mode to enable after connecting: per-app routing when apps are chosen. */
+export function minededMode(apps: readonly VpnApp[]): VpnMode {
+  return apps.length > 0 ? "apps" : "launcherAndGame";
+}
+
+// ---- Apps mode ---------------------------------------------------------------
+
+export interface AppPreset {
+  name: string;
+  windows: string;
+  linux: string;
+}
+
+/** Popular programs with their process names per OS. */
+export const APP_PRESETS: readonly AppPreset[] = [
+  { name: "Telegram", windows: "Telegram.exe", linux: "telegram-desktop" },
+  { name: "Discord", windows: "Discord.exe", linux: "Discord" },
+  { name: "Chrome", windows: "chrome.exe", linux: "chrome" },
+  { name: "Firefox", windows: "firefox.exe", linux: "firefox" },
+  { name: "Edge", windows: "msedge.exe", linux: "msedge" },
+  { name: "Yandex Browser", windows: "browser.exe", linux: "yandex_browser" },
+  { name: "Opera", windows: "opera.exe", linux: "opera" },
+  { name: "Steam", windows: "steam.exe", linux: "steam" },
+];
+
+/** Preset as a `VpnApp` for the given `SystemInfo.os`. */
+export function presetApp(p: AppPreset, os: string): VpnApp {
+  return { name: p.name, process: os === "linux" ? p.linux : p.windows, path: null };
+}
+
+const appKey = (a: Pick<VpnApp, "process">) => a.process.trim().toLowerCase();
+
+export function hasApp(list: readonly VpnApp[], app: Pick<VpnApp, "process">): boolean {
+  return list.some((a) => appKey(a) === appKey(app));
+}
+
+/** Appends unless the same process is already there (case-insensitive). */
+export function addApp(list: readonly VpnApp[], app: VpnApp): VpnApp[] {
+  return hasApp(list, app) || app.process.trim() === "" ? [...list] : [...list, app];
+}
+
+export function removeApp(list: readonly VpnApp[], process: string): VpnApp[] {
+  return list.filter((a) => appKey(a) !== appKey({ process }));
+}
+
+/** App from a picked executable: process = file name, name = without `.exe`. */
+export function appFromPath(path: string): VpnApp | null {
+  const base = path.trim().split(/[\\/]/).pop() ?? "";
+  if (base === "") return null;
+  return { name: base.replace(/\.exe$/i, ""), process: base, path: path.trim() };
+}
+
+/** Case-insensitive filter by name or process. */
+export function filterApps(list: readonly VpnApp[], query: string): VpnApp[] {
+  const q = query.trim().toLowerCase();
+  if (q === "") return [...list];
+  return list.filter((a) => a.name.toLowerCase().includes(q) || a.process.toLowerCase().includes(q));
+}
+
+export function sameApps(a: readonly VpnApp[], b: readonly VpnApp[]): boolean {
+  return a.length === b.length && a.every((x, i) => appKey(x) === appKey(b[i] ?? { process: "" }));
+}
 
 /** Max subscription URLs accepted in one go (the backend keeps the list). */
 export const SUBSCRIPTION_MAX = 16;

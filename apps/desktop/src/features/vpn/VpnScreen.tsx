@@ -27,10 +27,12 @@ import {
   latencyTone,
   parseSubscriptionUrls,
   sortNodes,
-  validateSubscriptionPath,
 } from "../../lib/vpn";
+import { pickFile } from "../../api/dialog";
 import { useTaskView } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
+import { AppsSection } from "./AppsSection";
+import { MinededCard } from "./MinededCard";
 
 const NODE_ROW = 52;
 const NODE_VIEWPORT = 416;
@@ -71,6 +73,7 @@ function StatusSection({ state, hasNodes }: { state: VpnState; hasNodes: boolean
           }))}
         />
         <p className="text-xs text-muted">{t(`vpn.modeHint.${mode}`)}</p>
+        {mode === "apps" || setMode.variables === "apps" ? <p className="text-xs text-warning">{t("vpn.mode.adminNote")}</p> : null}
         {!hasNodes ? <p className="text-xs text-warning">{t("vpn.mode.needNodes")}</p> : null}
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
@@ -98,7 +101,7 @@ function SubscriptionSection() {
   const { t } = useTranslation();
   const [source, setSource] = useState<SubSource>("url");
   const [text, setText] = useState("");
-  const [path, setPath] = useState("");
+  const [pickError, setPickError] = useState<unknown>(null);
   const [touched, setTouched] = useState(false);
   const setSub = useSetVpnSubscription();
   const importFile = useImportVpnFile();
@@ -111,7 +114,6 @@ function SubscriptionSection() {
 
   const parsed = parseSubscriptionUrls(text);
   const urlError = parsed.ok ? null : parsed.error;
-  const pathError = validateSubscriptionPath(path);
 
   return (
     <Section
@@ -177,42 +179,28 @@ function SubscriptionSection() {
           <ErrorMessage error={setSub.error} />
         </form>
       ) : (
-        <form
-          className="flex flex-col gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setTouched(true);
-            if (pathError) return;
-            importFile.mutate(path.trim(), {
-              onSuccess: () => {
-                setPath("");
-                setTouched(false);
-              },
-            });
-          }}
-        >
-          <div className="flex items-start gap-2">
-            <Field className="flex-1" label={t("vpn.sub.path")} error={touched ? pathError : null} hint={t("vpn.sub.pathHint")}>
-              {(id, d, inv) => (
-                <TextInput
-                  id={id}
-                  aria-describedby={d}
-                  invalid={inv}
-                  value={path}
-                  placeholder={t("vpn.sub.pathPlaceholder")}
-                  onChange={(e) => {
-                    setPath(e.target.value);
-                    importFile.reset();
-                  }}
-                />
-              )}
-            </Field>
-            <Button type="submit" variant="primary" className="mt-7" loading={importFile.isPending} icon={<Icon name="upload" />}>
-              {t("vpn.sub.import")}
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="primary"
+              loading={importFile.isPending}
+              icon={<Icon name="upload" />}
+              onClick={() => {
+                importFile.reset();
+                setPickError(null);
+                pickFile()
+                  .then((path) => {
+                    if (path) importFile.mutate(path);
+                  })
+                  .catch(setPickError);
+              }}
+            >
+              {t("vpn.sub.pickFile")}
             </Button>
+            <p className="min-w-0 flex-1 text-xs text-muted">{t("vpn.sub.fileHint")}</p>
           </div>
-          <ErrorMessage error={importFile.error} />
-        </form>
+          <ErrorMessage error={importFile.error ?? pickError} />
+        </div>
       )}
       {task ? <TaskProgress task={task} compact /> : null}
       <ErrorMessage error={refresh.error} />
@@ -323,6 +311,7 @@ export function VpnScreen() {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted">{t("vpn.intro")}</p>
+      <MinededCard state={state.data} />
       {state.isPending ? (
         <ListSkeleton rows={1} rowClassName="h-40" />
       ) : state.error ? (
@@ -330,6 +319,7 @@ export function VpnScreen() {
       ) : (
         <StatusSection state={state.data} hasNodes={(nodes.data?.length ?? 0) > 0} />
       )}
+      <AppsSection />
       <SubscriptionSection />
       <NodesSection />
     </div>
