@@ -145,6 +145,11 @@ impl PartialOrd for Ver {
     }
 }
 
+/// Compares two semantic-ish versions; `None` if either cannot be parsed.
+pub(crate) fn compare_versions(a: &str, b: &str) -> Option<Ordering> {
+    Some(parse_ver(a)?.cmp(&parse_ver(b)?))
+}
+
 /// Parsed predicate version: numeric prefix + optional wildcard position.
 struct PVer {
     ver: Ver,

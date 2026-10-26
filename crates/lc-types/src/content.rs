@@ -163,3 +163,36 @@ pub struct InstalledContent {
     pub version_number: Option<String>,
     pub update_available: bool,
 }
+
+/// What is wrong with a dependency declared inside a local mod jar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum LocalDepIssueKind {
+    /// Required mod is not installed (or disabled).
+    Missing,
+    /// Installed, but its version doesn't match the requirement.
+    WrongVersion,
+    /// Declared as incompatible with this one and installed.
+    Conflict,
+    /// The jar is built for another loader or Minecraft version.
+    WrongLoader,
+}
+
+/// A problem found by `ContentService::check_local` in a local mod's metadata
+/// (`fabric.mod.json`, `quilt.mod.json`, `META-INF/(neoforge.)mods.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalDepIssue {
+    /// Local file that declares the dependency.
+    pub file_name: String,
+    pub kind: LocalDepIssueKind,
+    /// Mod id from the metadata (`fabric-api`, `geckolib`); for `WrongLoader`
+    /// the loader/version the jar expects.
+    pub mod_id: String,
+    /// Requirement as written in the metadata.
+    pub version_req: Option<String>,
+    /// A Modrinth version that fixes `Missing`/`WrongVersion`, if found; pass it
+    /// to `ContentService::resolve`.
+    pub suggestion: Option<ContentVersionRef>,
+    pub suggestion_title: Option<String>,
+}

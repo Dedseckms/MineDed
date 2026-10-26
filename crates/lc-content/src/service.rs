@@ -11,7 +11,7 @@ use lc_http::{DownloadReq, Downloader, ResourceKind};
 use lc_runtime::{Paths, ProgressSink};
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::Instance;
 use lc_types::version::LoaderKind;
@@ -670,6 +670,14 @@ impl ContentService for ContentServices {
         paths: Vec<String>,
     ) -> AppResult<Vec<InstalledContent>> {
         self.inner.add_local(instance, kind, paths).await
+    }
+
+    async fn check_local(
+        &self,
+        instance: InstanceId,
+        file_names: Vec<String>,
+    ) -> AppResult<Vec<LocalDepIssue>> {
+        self.inner.check_local(instance, file_names).await
     }
 
     async fn update_all(&self, instance: InstanceId, sink: &dyn ProgressSink) -> AppResult<()> {

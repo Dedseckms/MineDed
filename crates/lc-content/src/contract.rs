@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{Instance, PackFormat, PerfPreset};
 use lc_types::{AppResult, InstanceId};
@@ -62,6 +62,15 @@ pub trait ContentService: Send + Sync {
         kind: ContentKind,
         paths: Vec<String>,
     ) -> AppResult<Vec<InstalledContent>>;
+    /// Reads the metadata of local mod jars (`file_names`; empty = every local
+    /// mod of the instance) and reports unmet or conflicting dependencies and
+    /// jars built for another loader / Minecraft version. Optional dependencies
+    /// are ignored. Looks up Modrinth suggestions; offline → issues without them.
+    async fn check_local(
+        &self,
+        instance: InstanceId,
+        file_names: Vec<String>,
+    ) -> AppResult<Vec<LocalDepIssue>>;
     async fn update_all(&self, instance: InstanceId, sink: &dyn ProgressSink) -> AppResult<()>;
 }
 

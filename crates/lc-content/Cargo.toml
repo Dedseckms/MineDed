@@ -20,6 +20,7 @@ sha1 = "0.10.7"
 sha2 = "0.10.9"
 hex = "0.4.3"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+toml = "1.1"
 
 [dev-dependencies]
 tokio.workspace = true
