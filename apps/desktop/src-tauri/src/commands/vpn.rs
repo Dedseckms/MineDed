@@ -2,7 +2,7 @@
 
 use lc_types::account::AccountKind;
 use lc_types::task::{TaskEvent, TaskKind};
-use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnState};
+use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnSource, VpnState};
 use lc_types::{AccountId, AppError, AppResult, ErrorCode, TaskId};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
@@ -53,6 +53,14 @@ pub async fn vpn_refresh(
 #[specta::specta]
 pub async fn vpn_set_mode(state: State<'_, AppState>, mode: VpnMode) -> AppResult<VpnState> {
     state.vpn.set_mode(mode).await
+}
+
+/// Switches between the MineDed and the user's own subscription (both kept);
+/// reconnects a running VPN.
+#[tauri::command]
+#[specta::specta]
+pub async fn vpn_set_source(state: State<'_, AppState>, source: VpnSource) -> AppResult<VpnState> {
+    state.vpn.set_source(source).await
 }
 
 #[tauri::command]

@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
-use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnState};
+use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnSource, VpnState};
 use lc_types::AppResult;
 use url::Url;
 
@@ -28,9 +28,14 @@ pub trait VpnController: Send + Sync {
     /// MineDed VPN through hub `/me/vpn`. `bearer` is the Yggdrasil access
     /// token of an own-server account (never logged). `provision` creates the
     /// key when missing; `Ok(None)` when there is none and `provision` is false.
-    /// When access is returned, its personal subscription replaces the current
-    /// one (the URL itself is never exposed to the UI).
+    /// When access is returned, its personal subscription is stored as the
+    /// `VpnSource::Mineded` source (never replacing the user's own one) and
+    /// becomes active; the URL itself is never exposed to the UI.
     async fn mineded_access(&self, bearer: &str, provision: bool) -> AppResult<Option<VpnAccess>>;
+    /// Switches between the MineDed and the user's own subscription (both kept).
+    /// If the VPN is running it reconnects with the new source's nodes.
+    /// `NotFound` when that source isn't configured.
+    async fn set_source(&self, source: VpnSource) -> AppResult<VpnState>;
     /// Programs routed in `VpnMode::Apps` (persisted).
     async fn apps(&self) -> AppResult<Vec<VpnApp>>;
     async fn set_apps(&self, apps: Vec<VpnApp>) -> AppResult<()>;

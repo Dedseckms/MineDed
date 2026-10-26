@@ -17,7 +17,7 @@ use lc_runtime::{
     CancelToken, LaunchContributor, LaunchPlan, NullSink, Paths, ProgressSink, SettingsStore,
 };
 use lc_types::instance::{Instance, LaunchOpts};
-use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnState};
+use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnSource, VpnState};
 use lc_types::{AppError, AppResult, ErrorCode};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
@@ -31,7 +31,7 @@ use crate::controller::Controller;
 use crate::launch::jvm_proxy_args;
 use crate::mineded;
 use crate::ports;
-use crate::store::{write_private, Files, Stored};
+use crate::store::{write_private, Files, SourceStore, Stored};
 use crate::subscription::{self, name_of, type_of, ProxyMap};
 use crate::tun;
 
@@ -42,6 +42,10 @@ const ELEVATED_READY_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long the elevated helper gets to stop mihomo after the stop flag.
 const HELPER_STOP_GRACE: Duration = Duration::from_secs(5);
 const MAX_SUBSCRIPTION: usize = 8 * 1024 * 1024;
+/// Subscription download without proxy; short so a blocked host falls back
+/// to the proxy quickly.
+const DIRECT_FETCH_TIMEOUT: Duration = Duration::from_secs(8);
+const PROXIED_FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// Crash restarts allowed within [`RESTART_WINDOW`] before giving up.
 const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW: Duration = Duration::from_secs(120);
@@ -86,6 +90,8 @@ struct Running {
     tun: bool,
     /// Set when mihomo runs under the elevated helper (Windows).
     stop_flag: Option<PathBuf>,
+    /// Source whose nodes the running config holds.
+    source: Option<VpnSource>,
 }
 
 impl Running {
@@ -105,7 +111,7 @@ impl MihomoVpn {
     pub fn new(paths: Paths, downloader: Arc<dyn Downloader>) -> Self {
         let files = Files::new(&paths);
         let store = files.load_state();
-        let proxies = files.load_nodes();
+        let proxies = files.load_nodes(store.source);
         Self {
             inner: Arc::new(Inner {
                 paths,
@@ -203,8 +209,8 @@ impl MihomoVpn {
 
     fn effective_selected(s: &Shared) -> Option<String> {
         s.store
-            .selected
-            .clone()
+            .active()
+            .and_then(|a| a.selected.clone())
             .filter(|sel| s.proxies.iter().any(|p| name_of(p) == sel))
             .or_else(|| s.proxies.first().map(|p| name_of(p).to_owned()))
     }
@@ -216,8 +222,11 @@ impl MihomoVpn {
             running: s.run.is_some(),
             latency_ms: node.as_ref().and_then(|n| s.latency.get(n).copied()),
             node,
-            subscription_updated: s.store.updated.clone(),
+            subscription_updated: s.store.active().and_then(|a| a.updated.clone()),
             error: s.error.clone(),
+            source: s.store.source,
+            has_mineded: Some(s.store.mineded.configured()),
+            has_own: Some(s.store.own.configured()),
         }
     }
 
@@ -237,29 +246,119 @@ impl MihomoVpn {
             .collect()
     }
 
-    /// Stores a freshly parsed subscription and restarts mihomo if running.
-    async fn install_proxies(&self, proxies: Vec<ProxyMap>) -> AppResult<()> {
+    /// Stores freshly parsed nodes of `source`. When it is the active source
+    /// and the nodes changed, a running mihomo reloads them in place.
+    async fn install_proxies(&self, source: VpnSource, proxies: Vec<ProxyMap>) -> AppResult<()> {
         let _op = self.inner.op.lock().await;
-        self.inner.files.save_nodes(&proxies)?;
-        let running = {
+        self.inner.files.save_nodes(source, &proxies)?;
+        let changed = {
             let mut s = self.shared();
-            s.proxies = proxies;
-            s.latency.clear();
-            s.store.updated = Some(now_rfc3339());
-            s.run.as_ref().map(|r| r.tun)
+            s.store.get_mut(source).updated = Some(now_rfc3339());
+            let changed = s.store.source == Some(source) && s.proxies != proxies;
+            if changed {
+                s.proxies = proxies;
+                s.latency.clear();
+            }
+            changed
         };
         self.save()?;
-        match running {
-            // TUN may run elevated: reload in place instead of a new UAC prompt.
-            Some(true) => reload_locked(&self.inner).await?,
-            Some(false) => {
-                let mode = self.shared().store.mode;
-                stop_locked(&self.inner).await;
-                start_locked(&self.inner, mode, &NullSink::default()).await?;
+        self.apply_locked(changed).await
+    }
+
+    /// Makes `source` active (its cached nodes become current) and applies
+    /// them to a running mihomo. Caller holds `op`.
+    async fn switch_locked(&self, source: VpnSource) -> AppResult<()> {
+        {
+            let mut s = self.shared();
+            if s.store.source != Some(source) {
+                s.store.source = Some(source);
+                s.proxies = self.inner.files.load_nodes(Some(source));
+                s.latency.clear();
             }
-            None => {}
         }
-        Ok(())
+        self.save()?;
+        self.apply_locked(false).await
+    }
+
+    /// Brings a running mihomo in line with the active nodes: nothing when
+    /// it already runs them (`changed` false, same source), otherwise a
+    /// config reload in place (no UAC prompt for TUN); a full restart only
+    /// when a plain mixed-port mihomo rejects the reload. Without nodes the
+    /// running config is kept until a refresh brings some. Caller holds `op`.
+    async fn apply_locked(&self, changed: bool) -> AppResult<()> {
+        let (tun, mode) = {
+            let s = self.shared();
+            let Some(run) = &s.run else { return Ok(()) };
+            if s.proxies.is_empty() || (!changed && run.source == s.store.source) {
+                return Ok(());
+            }
+            (run.tun, s.store.mode)
+        };
+        match reload_locked(&self.inner).await {
+            Ok(()) => Ok(()),
+            Err(e) if tun => Err(e),
+            Err(e) => {
+                tracing::warn!(error = %e, "mihomo reload failed; restarting");
+                stop_locked(&self.inner).await;
+                start_locked(&self.inner, mode, &NullSink::default()).await
+            }
+        }
+    }
+
+    /// Forgets the user's own subscription. If it was active, MineDed takes
+    /// over when configured; otherwise the VPN stops. Caller holds `op`.
+    async fn remove_own_locked(&self) -> AppResult<()> {
+        let _ = std::fs::remove_file(self.inner.files.nodes(VpnSource::Own));
+        let (was_active, has_mineded) = {
+            let mut s = self.shared();
+            s.store.own = SourceStore::default();
+            (
+                s.store.source == Some(VpnSource::Own),
+                s.store.mineded.configured(),
+            )
+        };
+        if !was_active {
+            return self.save();
+        }
+        if has_mineded {
+            return self.switch_locked(VpnSource::Mineded).await;
+        }
+        stop_locked(&self.inner).await;
+        {
+            let mut s = self.shared();
+            s.store.source = None;
+            s.store.mode = VpnMode::Off;
+            s.proxies.clear();
+            s.latency.clear();
+        }
+        self.save()
+    }
+
+    /// Downloads (or re-reads) the nodes of `source`. An imported file that
+    /// is gone keeps the cached nodes.
+    async fn fetch_source(
+        &self,
+        source: VpnSource,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<Vec<ProxyMap>> {
+        let SourceStore { urls, file, .. } = self.shared().store.get(source).clone();
+        if !urls.is_empty() {
+            return self.fetch_subscription(&urls, sink).await;
+        }
+        if let Some(f) = file.filter(|f| std::path::Path::new(f).is_file()) {
+            let bytes = tokio::fs::read(&f)
+                .await
+                .map_err(|e| AppError::new(ErrorCode::Io, e.to_string()).detail("path", f))?;
+            return subscription::parse(&bytes);
+        }
+        let cached = self.inner.files.load_nodes(Some(source));
+        if cached.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "no VPN subscription configured",
+            ));
+        }
+        Ok(cached)
     }
 
     async fn hub_url(&self) -> String {
@@ -281,9 +380,14 @@ impl MihomoVpn {
             sink.check_cancelled()?;
             let Ok(url) = Url::parse(raw) else { continue };
             let mut got = None;
-            // Direct first, then whatever proxy lc-http has (VPN/manual/OS).
-            for route in [Route::Direct, Route::Proxied] {
-                match self.get_text(&url, route).await {
+            // Direct first with a short timeout (a blocked host must not
+            // stall the UI), then whatever proxy lc-http has (VPN/manual/OS;
+            // fails at once when there is none).
+            for (route, timeout) in [
+                (Route::Direct, DIRECT_FETCH_TIMEOUT),
+                (Route::Proxied, PROXIED_FETCH_TIMEOUT),
+            ] {
+                match self.get_text(&url, route, timeout).await {
                     Ok(b) => {
                         got = Some(b);
                         break;
@@ -300,7 +404,7 @@ impl MihomoVpn {
         Err(last.unwrap_or_else(|| AppError::new(ErrorCode::InvalidInput, "no subscription URL")))
     }
 
-    async fn get_text(&self, url: &Url, route: Route) -> AppResult<Vec<u8>> {
+    async fn get_text(&self, url: &Url, route: Route, timeout: Duration) -> AppResult<Vec<u8>> {
         let net = |reason: String| {
             AppError::new(ErrorCode::Network, "subscription download failed")
                 .detail("reason", reason)
@@ -310,7 +414,7 @@ impl MihomoVpn {
             .downloader
             .client(route)
             .get(url.clone())
-            .timeout(Duration::from_secs(30))
+            .timeout(timeout)
             .send()
             .await
             // `without_url` keeps the token out of the message.
@@ -524,9 +628,13 @@ async fn spawn_mihomo(
     mode: VpnMode,
     sink: &dyn ProgressSink,
 ) -> AppResult<(Child, Running)> {
-    let (proxies, selected) = {
+    let (proxies, selected, source) = {
         let s = inner.shared();
-        (s.proxies.clone(), MihomoVpn::effective_selected(&s))
+        (
+            s.proxies.clone(),
+            MihomoVpn::effective_selected(&s),
+            s.store.source,
+        )
     };
     if proxies.is_empty() {
         return Err(AppError::new(
@@ -631,6 +739,7 @@ async fn spawn_mihomo(
                         exe: child_exe,
                         tun,
                         stop_flag,
+                        source,
                     },
                 ));
             }
@@ -711,9 +820,13 @@ async fn reload_locked(inner: &Inner) -> AppResult<()> {
     } else {
         None
     };
-    let (proxies, selected) = {
+    let (proxies, selected, source) = {
         let s = inner.shared();
-        (s.proxies.clone(), MihomoVpn::effective_selected(&s))
+        (
+            s.proxies.clone(),
+            MihomoVpn::effective_selected(&s),
+            s.store.source,
+        )
     };
     let cfg = config::render(
         &RunParams {
@@ -726,7 +839,15 @@ async fn reload_locked(inner: &Inner) -> AppResult<()> {
         rules.as_ref(),
     );
     write_private(&inner.files.config(), cfg.as_bytes())?;
-    run.controller.reload(&inner.files.config()).await
+    run.controller.reload(&inner.files.config()).await?;
+    if let Some(node) = &selected {
+        // Selection cached by mihomo may outlive a reload.
+        let _ = run.controller.select(GROUP, node).await;
+    }
+    if let Some(r) = inner.shared().run.as_mut() {
+        r.source = source;
+    }
+    Ok(())
 }
 
 /// Stops the supervisor (which kills mihomo). Caller holds `op`.
@@ -853,12 +974,29 @@ impl VpnController for MihomoVpn {
                 }
             }
         }
-        {
-            let mut s = self.shared();
-            s.store.urls = clean;
-            s.store.file = None;
+        let _op = self.inner.op.lock().await;
+        if clean.is_empty() {
+            return self.remove_own_locked().await;
         }
-        self.save()
+        let same = {
+            let s = self.shared();
+            s.store.own.urls == clean && s.store.own.file.is_none()
+        };
+        if !same {
+            // Other subscription: cached nodes are stale until `refresh`.
+            let _ = std::fs::remove_file(self.inner.files.nodes(VpnSource::Own));
+            let mut s = self.shared();
+            s.store.own = SourceStore {
+                urls: clean,
+                selected: s.store.own.selected.take(),
+                ..SourceStore::default()
+            };
+            if s.store.source == Some(VpnSource::Own) {
+                s.proxies.clear();
+                s.latency.clear();
+            }
+        }
+        self.switch_locked(VpnSource::Own).await
     }
 
     async fn import_subscription_file(&self, path: &str) -> AppResult<()> {
@@ -877,36 +1015,22 @@ impl VpnController for MihomoVpn {
         let proxies = subscription::parse(&bytes)?;
         {
             let mut s = self.shared();
-            s.store.urls.clear();
-            s.store.file = Some(path.to_owned());
+            s.store.own.urls.clear();
+            s.store.own.file = Some(path.to_owned());
         }
-        self.install_proxies(proxies).await
+        self.install_proxies(VpnSource::Own, proxies).await?;
+        let _op = self.inner.op.lock().await;
+        self.switch_locked(VpnSource::Own).await
     }
 
     async fn refresh(&self, sink: &dyn ProgressSink) -> AppResult<()> {
         sink.progress(0, None, "vpn.subscription");
-        let (urls, file) = {
-            let s = self.shared();
-            (s.store.urls.clone(), s.store.file.clone())
-        };
-        let proxies = if !urls.is_empty() {
-            self.fetch_subscription(&urls, sink).await?
-        } else if let Some(f) = file.filter(|f| std::path::Path::new(f).is_file()) {
-            let bytes = tokio::fs::read(&f)
-                .await
-                .map_err(|e| AppError::new(ErrorCode::Io, e.to_string()).detail("path", f))?;
-            subscription::parse(&bytes)?
-        } else if !self.shared().proxies.is_empty() {
-            // Imported file is gone: keep the cached nodes.
-            self.shared().proxies.clone()
-        } else {
-            return Err(AppError::new(
-                ErrorCode::InvalidInput,
-                "no VPN subscription configured",
-            ));
-        };
+        let source = self.shared().store.source.ok_or_else(|| {
+            AppError::new(ErrorCode::InvalidInput, "no VPN subscription configured")
+        })?;
+        let proxies = self.fetch_source(source, sink).await?;
         sink.check_cancelled()?;
-        self.install_proxies(proxies).await?;
+        self.install_proxies(source, proxies).await?;
         // Pre-fetch the sidecar so enabling the VPN later is instant.
         binary::ensure(
             &self.inner.paths,
@@ -964,7 +1088,12 @@ impl VpnController for MihomoVpn {
         if let Some(c) = controller {
             c.select(GROUP, node).await?;
         }
-        self.shared().store.selected = Some(node.to_owned());
+        {
+            let mut s = self.shared();
+            if let Some(src) = s.store.source {
+                s.store.get_mut(src).selected = Some(node.to_owned());
+            }
+        }
         self.save()
     }
 
@@ -991,23 +1120,77 @@ impl VpnController for MihomoVpn {
         let Some(access) = mineded::fetch(&client, &url, bearer, provision).await? else {
             return Ok(None);
         };
-        let changed = {
+        let url = vec![access.subscription_url];
+        let (changed, activate) = {
             let mut s = self.shared();
-            let changed = s.store.urls.len() != 1
-                || s.store.urls[0] != access.subscription_url
-                || s.store.file.is_some()
-                || s.proxies.is_empty();
-            s.store.urls = vec![access.subscription_url];
-            s.store.file = None;
-            changed
+            let was = s.store.mineded.configured();
+            if !was && s.store.own.urls == url && s.store.own.file.is_none() {
+                // Pre-`VpnSource` state: MineDed access had overwritten the
+                // single subscription, which migrated to `own`. Move it back.
+                let own = std::mem::take(&mut s.store.own);
+                s.store.mineded = own;
+                let files = &self.inner.files;
+                let _ =
+                    std::fs::rename(files.nodes(VpnSource::Own), files.nodes(VpnSource::Mineded));
+                if s.store.source == Some(VpnSource::Own) {
+                    s.store.source = Some(VpnSource::Mineded);
+                    if let Some(r) = s.run.as_mut() {
+                        r.source = Some(VpnSource::Mineded);
+                    }
+                }
+            }
+            let changed = s.store.mineded.urls != url;
+            if changed {
+                s.store.mineded = SourceStore {
+                    urls: url,
+                    ..SourceStore::default()
+                };
+                if s.store.source == Some(VpnSource::Mineded) {
+                    s.proxies.clear();
+                    s.latency.clear();
+                }
+            }
+            // Usage polling (`provision` false) must not take over a VPN the
+            // user switched to their own subscription.
+            let activate = provision || s.store.source.is_none();
+            (changed, activate)
         };
         self.save()?;
-        // Only a new subscription needs a download (and a mihomo reload);
-        // usage polling must not disturb a running VPN.
-        if changed {
-            self.refresh(&NullSink::default()).await?;
+        // Only a new subscription needs a download; polling must not disturb
+        // a running VPN.
+        if changed
+            || self
+                .inner
+                .files
+                .load_nodes(Some(VpnSource::Mineded))
+                .is_empty()
+        {
+            let proxies = self
+                .fetch_source(VpnSource::Mineded, &NullSink::default())
+                .await?;
+            self.install_proxies(VpnSource::Mineded, proxies).await?;
+        }
+        if activate {
+            let _op = self.inner.op.lock().await;
+            self.switch_locked(VpnSource::Mineded).await?;
         }
         Ok(Some(access.info))
+    }
+
+    async fn set_source(&self, source: VpnSource) -> AppResult<VpnState> {
+        if !self.shared().store.get(source).configured() {
+            return Err(
+                AppError::new(ErrorCode::NotFound, "VPN subscription is not configured")
+                    .detail("source", format!("{source:?}")),
+            );
+        }
+        if self.inner.files.load_nodes(Some(source)).is_empty() {
+            let proxies = self.fetch_source(source, &NullSink::default()).await?;
+            self.install_proxies(source, proxies).await?;
+        }
+        let _op = self.inner.op.lock().await;
+        self.switch_locked(source).await?;
+        Ok(Self::build_state(&self.shared()))
     }
 
     async fn apps(&self) -> AppResult<Vec<VpnApp>> {
@@ -1242,6 +1425,133 @@ mod tests {
         let err = v.mineded_access("secret-xyz", false).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::AuthExpired);
         assert!(!format!("{err:?}").contains("secret-xyz"));
+        let _ = std::fs::remove_dir_all(paths.root());
+    }
+
+    #[tokio::test]
+    async fn mineded_and_own_subscriptions_are_separate() {
+        use lc_http::{DownloaderConfig, HttpDownloader, SystemProxyMode};
+        use lc_runtime::MemorySettingsStore;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        let app = axum::Router::new()
+            .route(
+                "/sub/tok",
+                axum::routing::get(move || {
+                    h.fetch_add(1, Ordering::SeqCst);
+                    async { "trojan://pw@n.example:443#MineDed\n" }
+                }),
+            )
+            .route(
+                "/own",
+                axum::routing::get(|| async {
+                    "trojan://pw@a.example:443#A\ntrojan://pw@b.example:443#B\n"
+                }),
+            );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        let sub = format!("http://127.0.0.1:{port}/sub/tok");
+        let own = format!("http://127.0.0.1:{port}/own");
+        let (hub, _calls) = crate::mineded::tests::spawn_hub(sub.clone()).await;
+        let settings = Arc::new(MemorySettingsStore::default());
+        let mut s = settings.get().await.unwrap();
+        s.hub_url = hub;
+        settings.set(s).await.unwrap();
+        let d: Arc<dyn Downloader> = Arc::new(
+            HttpDownloader::new(DownloaderConfig {
+                system_proxy: SystemProxyMode::Off,
+                attempts_per_url: 1,
+                ..DownloaderConfig::default()
+            })
+            .unwrap(),
+        );
+        let paths = tmp("sources");
+        // Pre-VpnSource state where MineDed had overwritten the subscription.
+        std::fs::create_dir_all(paths.mihomo()).unwrap();
+        std::fs::write(
+            paths.mihomo().join("state.json"),
+            serde_json::to_vec(&serde_json::json!({"urls": [sub], "mode": "off"})).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            paths.mihomo().join("nodes.json"),
+            serde_json::to_vec(&vec![subscription::parse_link(
+                "trojan://pw@n.example:443#MineDed",
+            )
+            .unwrap()])
+            .unwrap(),
+        )
+        .unwrap();
+        let mk = || {
+            MihomoVpn::new(paths.clone(), d.clone())
+                .with_binary(std::env::current_exe().unwrap())
+                .with_settings(settings.clone())
+        };
+        let v = mk();
+        let st = v.state().await.unwrap();
+        assert_eq!(
+            (st.source, st.has_own, st.has_mineded),
+            (Some(VpnSource::Own), Some(true), Some(false))
+        );
+        assert_eq!(
+            v.set_source(VpnSource::Mineded).await.unwrap_err().code,
+            ErrorCode::NotFound
+        );
+
+        // Access with the same URL moves it back to MineDed, no download.
+        v.mineded_access("good", false).await.unwrap().unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        let st = v.state().await.unwrap();
+        assert_eq!(
+            (st.source, st.has_own, st.has_mineded),
+            (Some(VpnSource::Mineded), Some(false), Some(true))
+        );
+        assert_eq!(v.nodes().await.unwrap()[0].name, "MineDed");
+
+        // Adding an own subscription keeps MineDed and makes own active.
+        v.set_subscription(vec![own.clone()]).await.unwrap();
+        v.refresh(&NullSink::default()).await.unwrap();
+        let st = v.state().await.unwrap();
+        assert_eq!(
+            (st.source, st.has_own, st.has_mineded),
+            (Some(VpnSource::Own), Some(true), Some(true))
+        );
+        assert_eq!(v.nodes().await.unwrap().len(), 2);
+        v.select("B").await.unwrap();
+        // Setting the same URL again changes nothing.
+        v.set_subscription(vec![own.clone()]).await.unwrap();
+        assert_eq!(v.nodes().await.unwrap().len(), 2);
+
+        // Usage polling does not take over the own subscription.
+        v.mineded_access("good", false).await.unwrap().unwrap();
+        assert_eq!(v.state().await.unwrap().source, Some(VpnSource::Own));
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // Switching keeps per-source selection; persisted across restarts.
+        let st = v.set_source(VpnSource::Mineded).await.unwrap();
+        assert_eq!(st.node.as_deref(), Some("MineDed"));
+        let st = v.set_source(VpnSource::Own).await.unwrap();
+        assert_eq!(st.node.as_deref(), Some("B"));
+        let again = mk();
+        assert_eq!(again.state().await.unwrap().node.as_deref(), Some("B"));
+        // Explicit enabling (provision) activates MineDed.
+        again.mineded_access("good", true).await.unwrap().unwrap();
+        assert_eq!(
+            again.state().await.unwrap().source,
+            Some(VpnSource::Mineded)
+        );
+        assert_eq!(again.nodes().await.unwrap().len(), 1);
+
+        // Removing the own subscription leaves MineDed alone.
+        again.set_subscription(vec![]).await.unwrap();
+        let st = again.state().await.unwrap();
+        assert_eq!(
+            (st.source, st.has_own, st.has_mineded),
+            (Some(VpnSource::Mineded), Some(false), Some(true))
+        );
         let _ = std::fs::remove_dir_all(paths.root());
     }
 
