@@ -35,6 +35,8 @@ export const commands = {
 	contentRemove: (instance: InstanceId, fileName: string) => typedError<null, AppError>(__TAURI_INVOKE("content_remove", { instance, fileName })),
 	/**  Copies local files/folders into the instance (`kind` picks the folder; wrong type → `invalidInput`). */
 	contentAddLocal: (instance: InstanceId, kind: ContentKind, paths: string[]) => typedError<InstalledContent[], AppError>(__TAURI_INVOKE("content_add_local", { instance, kind, paths })),
+	/**  Dependency problems of local mod jars (`fileNames` empty = every local mod). */
+	contentCheckLocal: (instance: InstanceId, fileNames: string[]) => typedError<LocalDepIssue[], AppError>(__TAURI_INVOKE("content_check_local", { instance, fileNames })),
 	contentUpdateAll: (instance: InstanceId, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("content_update_all", { instance, onEvent })),
 	presetApply: (instance: InstanceId, preset: PerfPreset, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("preset_apply", { instance, preset, onEvent })),
 	instanceImport: (path: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_import", { path, onEvent })),
@@ -100,6 +102,12 @@ export const commands = {
 	passwordProtected: boolean,
 	/**  Guest only: local `127.0.0.1:<port>` to add as a server in the game. */
 	localAddr: string | null,
+	/**
+	 *  Host of a game room: the room exists before the world is opened to LAN;
+	 *  `false` until the LAN port is detected (guests can't play yet).
+	 *  `None` for guests and voice rooms.
+	 */
+	worldOpen?: boolean | null,
 } | null, AppError>(__TAURI_INVOKE("room_state")),
 	roomKick: (peerId: string) => typedError<null, AppError>(__TAURI_INVOKE("room_kick", { peerId })),
 	chatSend: (text: string) => typedError<ChatMessage, AppError>(__TAURI_INVOKE("chat_send", { text })),
@@ -396,6 +404,40 @@ export type LoaderVersion = {
 	recommended: boolean,
 };
 
+/**
+ *  A problem found by `ContentService::check_local` in a local mod's metadata
+ *  (`fabric.mod.json`, `quilt.mod.json`, `META-INF/(neoforge.)mods.toml`).
+ */
+export type LocalDepIssue = {
+	/**  Local file that declares the dependency. */
+	fileName: string,
+	kind: LocalDepIssueKind,
+	/**
+	 *  Mod id from the metadata (`fabric-api`, `geckolib`); for `WrongLoader`
+	 *  the loader/version the jar expects.
+	 */
+	modId: string,
+	/**  Requirement as written in the metadata. */
+	versionReq: string | null,
+	/**
+	 *  A Modrinth version that fixes `Missing`/`WrongVersion`, if found; pass it
+	 *  to `ContentService::resolve`.
+	 */
+	suggestion: ContentVersionRef | null,
+	suggestionTitle: string | null,
+};
+
+/**  What is wrong with a dependency declared inside a local mod jar. */
+export type LocalDepIssueKind = 
+/**  Required mod is not installed (or disabled). */
+"missing" | 
+/**  Installed, but its version doesn't match the requirement. */
+"wrongVersion" | 
+/**  Declared as incompatible with this one and installed. */
+"conflict" | 
+/**  The jar is built for another loader or Minecraft version. */
+"wrongLoader";
+
 export type ManualDownload = {
 	projectId: string,
 	fileName: string,
@@ -539,6 +581,12 @@ export type RoomState = {
 	passwordProtected: boolean,
 	/**  Guest only: local `127.0.0.1:<port>` to add as a server in the game. */
 	localAddr: string | null,
+	/**
+	 *  Host of a game room: the room exists before the world is opened to LAN;
+	 *  `false` until the LAN port is detected (guests can't play yet).
+	 *  `None` for guests and voice rooms.
+	 */
+	worldOpen?: boolean | null,
 };
 
 export type RoomStateEvent = RoomState | null;
