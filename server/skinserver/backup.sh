@@ -13,7 +13,8 @@ umask 077
 SUDO=${SUDO:-sudo}
 STAMP=$(date -u +%Y%m%d-%H%M%S)
 OUT="backups/skinserver-$STAMP.tar.gz"
-IMG=mineup/drasl:4.0.1-hc
+# Image with /busybox: whatever the drasl container currently runs (tag bumps with the theme).
+IMG=$($SUDO docker inspect mineup-skin-drasl --format '{{.Config.Image}}' 2>/dev/null || echo mineup/drasl:4.0.1-hc-theme1)
 VOL=mineup-skin_drasl_state
 mkdir -p backups
 

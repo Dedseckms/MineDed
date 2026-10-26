@@ -10,6 +10,10 @@ skins.dedseckms.ru {
 		max_size 2MB
 	}
 
+	# No Accept-Language -> Drasl falls back to a non-Russian locale; default to ru.
+	@nolang not header Accept-Language *
+	request_header @nolang Accept-Language ru
+
 	reverse_proxy 127.0.0.1:25585 {
 		# Drasl rate-limits unauthenticated calls by client IP taken from these
 		# headers: overwrite them so clients cannot spoof their IP.

@@ -117,3 +117,10 @@ sudo docker compose -p mineup-skin start drasl
    backup.sh (в образе нет gzip-апплета; исправлено, gzip на хосте). Удалить с разрешения владельца.
 7. После: чужие контейнеры те же (StartedAt и RestartCount не изменились), mihomo/caddy
    active, ответы сайтов через 8080 совпадают по md5. Caddy и mihomo не трогались.
+
+## 2026-10-26: theme1 + Accept-Language default
+- Image mineup/drasl:4.0.1-hc-theme1 (theme baked in); ApplicationName = "MineDed Skins". Previous image kept as mineup/drasl:4.0.1-hc-rollback.
+- Backups on server: backups/skinserver-20261026-125105.tar.gz, backups/*.pre-theme1, backups/skin.caddy.<ts>.bak.
+- Rollback: restore *.pre-theme1, then docker compose -p mineup-skin up -d --no-build --force-recreate --no-deps drasl.
+- Caddy: requests without Accept-Language get Accept-Language: ru.
+- Signing key unchanged (signaturePublickey identical before/after).
