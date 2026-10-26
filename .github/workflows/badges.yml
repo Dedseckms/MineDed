@@ -1,0 +1,66 @@
+name: badges
+
+# Counts installer downloads only (latest.json / .sig are fetched by the updater and would
+# inflate the number) and publishes a shields.io endpoint JSON to the orphan `badges` branch.
+# That branch contains no workflow files, so pushes to it trigger no CI.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: badges
+  cancel-in-progress: false
+
+jobs:
+  downloads:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Count installer downloads
+        id: count
+        run: |
+          set -euo pipefail
+          total=$(gh api --paginate "repos/${REPO}/releases" \
+            --jq '.[].assets[] | select(.name | test("\\.(exe|msi|AppImage|deb)$")) | .download_count' \
+            | awk '{ s += $1 } END { print s + 0 }')
+          echo "total=${total}" >> "$GITHUB_OUTPUT"
+          echo "Installer downloads: ${total}"
+
+      - name: Publish downloads.json to badges branch
+        env:
+          TOTAL: ${{ steps.count.outputs.total }}
+        run: |
+          set -euo pipefail
+          git init -q badges
+          cd badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::${auth}"
+          git config http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth}"
+          git remote add origin "https://github.com/${REPO}.git"
+          if git ls-remote --exit-code --heads origin badges >/dev/null; then
+            git fetch -q --depth 1 origin badges
+            git checkout -q -b badges FETCH_HEAD
+          else
+            git checkout -q --orphan badges
+          fi
+          printf '{"schemaVersion":1,"label":"загрузки","message":"%s","color":"2f81f7"}\n' \
+            "$TOTAL" > downloads.json
+          git add downloads.json
+          if git diff --cached --quiet; then
+            echo "downloads.json unchanged"
+            exit 0
+          fi
+          git commit -q -m "badges: downloads ${TOTAL} [skip ci]"
+          git push -q origin badges

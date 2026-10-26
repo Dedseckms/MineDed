@@ -9,7 +9,7 @@
 *Free open-source Minecraft launcher: mods, skins, server-free multiplayer, voice chat and a built-in VPN.*
 
 [![Release](https://img.shields.io/github/v/release/Dedseckms/MineUP?style=for-the-badge&color=3fb950&label=версия)](https://github.com/Dedseckms/MineUP/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/Dedseckms/MineUP/total?style=for-the-badge&color=2f81f7&label=загрузки)](https://github.com/Dedseckms/MineUP/releases)
+[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDedseckms%2FMineUP%2Fbadges%2Fdownloads.json&style=for-the-badge)](https://github.com/Dedseckms/MineUP/releases)
 [![Platforms](https://img.shields.io/badge/Windows%20%7C%20Linux-555?style=for-the-badge&logo=linux&logoColor=white)](#установка)
 [![License](https://img.shields.io/github/license/Dedseckms/MineUP?style=for-the-badge&color=8957e5)](LICENSE)
 
