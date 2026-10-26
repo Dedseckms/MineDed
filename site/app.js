@@ -79,6 +79,8 @@
       dlFallback: "Could not reach GitHub — the buttons open the releases page.",
       dlExe: "Installer",
       dlAll: "All releases and changelog",
+      dlSkins: "Skin server account: sign in, skin and cape",
+      signIn: "Sign in",
       issues: "Report a bug",
       disclaimer: "Not an official Minecraft product. Not affiliated with Mojang or Microsoft."
     },
@@ -157,6 +159,8 @@
       dlFallback: "GitHub недоступен — кнопки откроют страницу релизов.",
       dlExe: "Установщик",
       dlAll: "Все релизы и список изменений",
+      dlSkins: "Аккаунт на сервере скинов: вход, скин и плащ",
+      signIn: "Войти",
       issues: "Сообщить об ошибке",
       disclaimer: "Не является официальным продуктом Minecraft. Не связан с Mojang или Microsoft."
     }

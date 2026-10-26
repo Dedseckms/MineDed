@@ -1,0 +1,52 @@
+{{/* MineDed theme override of Drasl 4.0.1 view/header.tmpl. Opens div.card, closed in footer.tmpl. */}}
+{{ define "header" }}
+  {{ $ru := eq .L.GetLanguage "ru" }}
+  <header class="top panel">
+    <a class="brand" href="{{ .App.FrontEndURL }}">
+      <img src="{{ .App.PublicURL }}/logo.svg?v=1" alt="" width="32" height="32" />
+      <span>MineDed</span>
+      <span class="brand-sub">{{ if $ru }}скины{{ else }}skins{{ end }}</span>
+    </a>
+    <nav class="header-nav">
+      {{ if .User }}
+        {{ if .User.IsAdmin }}
+          <a href="{{ .App.FrontEndURL }}/web/admin">{{ call .T "Admin" }}</a>
+        {{ end }}
+        <a href="{{ .App.FrontEndURL }}/web/user"
+          >{{ call .T "%s's Account" .User.Username }}</a
+        >
+        <form
+          style="display: inline"
+          action="{{ .App.FrontEndURL }}/web/logout"
+          method="post"
+        >
+          <input type="submit" value="{{ call .T "Log out" }}" />
+        </form>
+      {{ else }}
+        <a href="{{ .App.FrontEndURL }}">{{ call .T "Log in" }}</a>
+        <a href="{{ .App.FrontEndURL }}/web/registration">{{ call .T "Registration" }}</a>
+      {{ end }}
+      <button
+        type="button"
+        id="scene-btn"
+        class="icon-btn"
+        hidden
+        aria-label="{{ if $ru }}Сменить фон{{ else }}Change background{{ end }}"
+        title="{{ if $ru }}Сменить фон{{ else }}Change background{{ end }}"
+      >
+        <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M1 13h14v2H1zM3 9h2v4H3zm4-3h2v7H7zm4 2h2v5h-2zM12 2h2v2h-2z"/></svg>
+      </button>
+    </nav>
+  </header>
+
+  <div class="card panel">
+  {{ if .ErrorMessage }}
+    <p class="error-message" role="alert">{{ .ErrorMessage }}</p>
+  {{ end }}
+  {{ if .SuccessMessage }}
+    <p class="success-message" role="status">{{ .SuccessMessage }}</p>
+  {{ end }}
+  {{ if .WarningMessage }}
+    <p class="warning-message" role="status">{{ .WarningMessage }}</p>
+  {{ end }}
+{{ end }}

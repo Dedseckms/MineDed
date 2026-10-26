@@ -1,0 +1,46 @@
+{{/* MineDed theme override of Drasl 4.0.1 view/layout.tmpl. See ../README.md. */}}
+{{ define "base" }}
+  <!doctype html>
+  <html lang="{{ .L.GetLanguage }}">
+    <head>
+      <meta charset="utf-8" />
+      <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+      <meta name="viewport" content="minimum-scale=1, width=device-width, initial-scale=1.0" />
+      <meta
+        name="description"
+        content="{{ call .T "A self-hosted API server for Minecraft" }}"
+      />
+      <meta name="color-scheme" content="dark light" />
+      <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
+      <meta name="theme-color" content="#f4f5f8" media="(prefers-color-scheme: light)" />
+      <link rel="icon" href="{{ .App.PublicURL }}/logo.svg?v=1" type="image/svg+xml" />
+      <link rel="alternate icon" href="{{ .App.PublicURL }}/icon.png" />
+      <link
+        rel="manifest"
+        href="{{ .App.FrontEndURL }}/web/manifest.webmanifest"
+      />
+      <style>
+        html { background-color: #0f1115; }
+        @media (prefers-color-scheme: light) { html { background-color: #f4f5f8; } }
+      </style>
+      <link
+        rel="stylesheet"
+        href="{{ .App.PublicURL }}/style.css?v=2"
+      />
+      <title>{{ block "title" . }}{{ end }}</title>
+    </head>
+    <body>
+      <div id="background" class="bg" aria-hidden="true"></div>
+      <main id="content">
+        {{ block "content" . }}{{ end }}
+      </main>
+      <script type="module">
+        for (const el of document.querySelectorAll(".noscript-hidden")) {
+          el.classList.remove("noscript-hidden");
+        }
+      </script>
+      <script src="{{ .App.PublicURL }}/scenes.js?v=1"></script>
+      <script src="{{ .App.PublicURL }}/theme.js?v=1"></script>
+    </body>
+  </html>
+{{ end }}
