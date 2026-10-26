@@ -43,6 +43,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             content::content_set_enabled,
             content::content_remove,
             content::content_add_local,
+            content::content_check_local,
             content::content_update_all,
             content::preset_apply,
             content::instance_import,
