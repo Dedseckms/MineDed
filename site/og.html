@@ -1,0 +1,33 @@
+﻿<!doctype html>
+<!-- Source for og.png (1200x630). Not linked from the site. Regenerate:
+     chrome --headless --hide-scrollbars --force-color-profile=srgb --window-size=1200,630 --screenshot=og.png og.html -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<title>MineUP og</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  :root { color-scheme: dark; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body { display: grid; place-items: center; }
+  .og { width: 960px; max-width: none; padding: 48px 56px; text-align: center; }
+  .og .hero-logo { width: 128px; margin-bottom: 18px; }
+  .og h1 { font-size: 76px; }
+  .og .pitch { font-size: 27px; margin: 16px auto 22px; max-width: none; }
+  .og .tags { font-size: 22px; color: var(--muted); margin: 0; }
+  .og .tags b { color: var(--accent); font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="bg" class="bg" aria-hidden="true"></div>
+<div class="og hero panel">
+  <img class="hero-logo" src="logo.svg" alt="" width="128" height="128">
+  <h1>MineUP</h1>
+  <p class="pitch">Бесплатный лаунчер Minecraft: моды, скины и игра с друзьями</p>
+  <p class="tags"><b>Modrinth</b> · Fabric · Forge · голосовой чат · VPN · Windows и Linux</p>
+</div>
+<script src="scenes.js"></script>
+<script>document.getElementById("bg").innerHTML = window.MineupScenes.render("forest", false);</script>
+</body>
+</html>
