@@ -80,6 +80,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             vpn::vpn_running_apps,
             rooms::room_create,
             rooms::room_join,
+            rooms::room_download_host_pack,
+            rooms::room_attach_instance,
             rooms::room_create_voice,
             rooms::room_leave,
             rooms::room_state,

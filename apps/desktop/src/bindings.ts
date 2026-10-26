@@ -88,6 +88,13 @@ export const commands = {
 	vpnRunningApps: () => typedError<VpnApp[], AppError>(__TAURI_INVOKE("vpn_running_apps")),
 	roomCreate: (instance: InstanceId, authMode: RoomAuthMode, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create", { instance, authMode, password })),
 	roomJoin: (code: string, instance: string | null, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_join", { code, instance, password })),
+	/**
+	 *  Guest of a game room: downloads the host's modpack, imports it as a new
+	 *  instance and attaches the room to it (server-list entry, quick play).
+	 */
+	roomDownloadHostPack: (onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("room_download_host_pack", { onEvent })),
+	/**  Guest: binds the joined game room to `instance`. */
+	roomAttachInstance: (instance: InstanceId) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_attach_instance", { instance })),
 	roomCreateVoice: (password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create_voice", { password })),
 	roomLeave: () => typedError<null, AppError>(__TAURI_INVOKE("room_leave")),
 	roomState: () => typedError<{
