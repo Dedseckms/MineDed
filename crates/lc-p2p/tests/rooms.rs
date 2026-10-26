@@ -63,6 +63,7 @@ async fn create_room(
     let mut room = body.clone();
     room["roomId"] = json!(room_id);
     h.room = Some(room);
+    h.closed = false;
     (
         StatusCode::CREATED,
         Json(json!({
@@ -234,7 +235,6 @@ async fn side_env(hub_url: &str, cfg: P2pConfig, env: Arc<dyn RoomEnv>) -> Side 
 fn base_cfg(tweak: EndpointTweak, relays: Vec<String>) -> P2pConfig {
     P2pConfig {
         relay_override: Some(relays),
-        lan_wait: Duration::from_secs(5),
         hello_timeout: Duration::from_secs(10),
         connect_timeout: Duration::from_secs(20),
         lan_multicast: false,
@@ -635,6 +635,112 @@ async fn chat_cannot_redirect_tunnel() {
     host.rooms.leave().await.unwrap();
 }
 
+/// `FakeEnv` with a game dir (servers.dat entry).
+struct DirEnv(FakeEnv, std::path::PathBuf);
+
+#[async_trait]
+impl RoomEnv for DirEnv {
+    async fn instance_sig(&self, instance: InstanceId) -> AppResult<InstanceSig> {
+        self.0.instance_sig(instance).await
+    }
+    async fn identity(&self) -> AppResult<Identity> {
+        self.0.identity().await
+    }
+    fn game_dir(&self, _instance: InstanceId) -> Option<std::path::PathBuf> {
+        Some(self.1.clone())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn room_before_world_open_and_server_list() {
+    let (hub_url, _hub) = spawn_hub(vec![]).await;
+    let host_tweak: EndpointTweak = Arc::new(loopback_only);
+    let lookup = MemoryLookup::new();
+    let gl = lookup.clone();
+    let guest_tweak: EndpointTweak = Arc::new(move |b| loopback_only(b).address_lookup(gl.clone()));
+    let host = side(
+        &hub_url,
+        base_cfg(host_tweak, vec![]),
+        FakeEnv {
+            name: "Host",
+            mods: "m1",
+        },
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("lc-p2p-room-{}", uuid::Uuid::new_v4()));
+    let guest = side_env(
+        &hub_url,
+        base_cfg(guest_tweak, vec![]),
+        Arc::new(DirEnv(
+            FakeEnv {
+                name: "Guest",
+                mods: "m1",
+            },
+            dir.clone(),
+        )),
+    )
+    .await;
+    let inst = InstanceId::new();
+    let t = std::time::Instant::now();
+    let st = host
+        .rooms
+        .create(inst, RoomAuthMode::Open, None)
+        .await
+        .unwrap();
+    assert!(
+        t.elapsed() < Duration::from_secs(5),
+        "create must not wait for LAN"
+    );
+    assert_eq!(st.world_open, Some(false));
+    lookup.add_endpoint_info(host.rooms.endpoint_addr().unwrap());
+
+    let st = guest
+        .rooms
+        .join("ABCD-1234", Some(inst), None)
+        .await
+        .unwrap();
+    assert_eq!(st.world_open, None);
+    let local = st.local_addr.unwrap();
+    let dat = std::fs::read(dir.join("servers.dat")).unwrap();
+    let needle = format!("127.0.0.1:{}", local.rsplit(':').next().unwrap());
+    assert!(dat.windows(needle.len()).any(|w| w == needle.as_bytes()));
+    assert!(dat.windows(7).any(|w| w == b"MineDed"));
+
+    // World not open: the game connection is closed, nothing is echoed.
+    let mut tcp = TcpStream::connect(&local).await.unwrap();
+    let _ = tcp.write_all(b"x").await;
+    let mut buf = [0u8; 1];
+    let n = tokio::time::timeout(Duration::from_secs(10), tcp.read(&mut buf))
+        .await
+        .expect("closed")
+        .unwrap_or(0);
+    assert_eq!(n, 0);
+
+    // Opened to LAN later: detected from the game log.
+    let port = spawn_echo().await;
+    host.rooms.feed_game_log(
+        inst,
+        &format!("[12:00:00] [Render thread/INFO]: Started serving on {port}"),
+    );
+    eventually("world open", || {
+        host.rec
+            .states
+            .lock()
+            .unwrap()
+            .last()
+            .and_then(|s| s.as_ref())
+            .is_some_and(|s| s.world_open == Some(true))
+    })
+    .await;
+    assert_eq!(echo_through(&local, b"late").await, b"late");
+
+    guest.rooms.leave().await.unwrap();
+    let dat = std::fs::read(dir.join("servers.dat")).unwrap();
+    assert!(!dat.windows(7).any(|w| w == b"MineDed"));
+    host.rooms.leave().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn instance_mismatch_and_bad_codes() {
     let (hub_url, _hub) = spawn_hub(vec![]).await;
@@ -658,13 +764,14 @@ async fn instance_mismatch_and_bad_codes() {
     )
     .await;
 
-    // No LAN world yet.
-    let err = host
+    // No LAN world yet: the room exists, the world is marked closed.
+    let st = host
         .rooms
         .create(InstanceId::new(), RoomAuthMode::Open, None)
         .await
-        .unwrap_err();
-    assert_eq!(err.code, ErrorCode::NotFound);
+        .unwrap();
+    assert_eq!(st.world_open, Some(false));
+    host.rooms.leave().await.unwrap();
 
     // Port from the game log of the hosted instance.
     let port = spawn_echo().await;

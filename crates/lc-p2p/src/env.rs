@@ -1,7 +1,7 @@
 //! What rooms need from the rest of the launcher: the local player and the
 //! instance signature. `CoreRoomEnv` adapts the core/accounts services.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
@@ -27,6 +27,11 @@ pub trait RoomEnv: Send + Sync {
     async fn instance_sig(&self, instance: InstanceId) -> AppResult<InstanceSig>;
     /// Default account; falls back to an anonymous player when none is set up.
     async fn identity(&self) -> AppResult<Identity>;
+    /// Game directory of `instance` (guests add the room to its
+    /// `servers.dat`). `None`: leave the server list alone.
+    fn game_dir(&self, _instance: InstanceId) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// `RoomEnv` on top of `InstanceService` + `AuthProvider`. The instance
@@ -45,9 +50,46 @@ impl CoreRoomEnv {
         }
     }
 
-    /// Call once core is built. Later calls are ignored.
+    /// Call once core is built. Later calls are ignored. Also removes room
+    /// server entries a previous run left in the instances' `servers.dat`.
     pub fn attach_instances(&self, instances: Arc<dyn InstanceService>) {
-        let _ = self.instances.set(instances);
+        if self.instances.set(instances.clone()).is_ok() {
+            spawn_servers_cleanup(instances);
+        }
+    }
+}
+
+/// Startup cleanup in the background; works with or without a tokio runtime
+/// on the calling thread.
+fn spawn_servers_cleanup(instances: Arc<dyn InstanceService>) {
+    let job = async move {
+        let list = match instances.list().await {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::debug!("rooms: servers.dat cleanup skipped: {}", e.message);
+                return;
+            }
+        };
+        let dirs: Vec<_> = list.iter().map(|i| instances.game_dir(i.id)).collect();
+        let _ = tokio::task::spawn_blocking(move || crate::servers::cleanup(&dirs)).await;
+    };
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        rt.spawn(job);
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("rooms-cleanup".into())
+        .spawn(move || {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(job),
+                Err(e) => tracing::debug!("rooms: servers.dat cleanup skipped: {e}"),
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::debug!("rooms: servers.dat cleanup skipped: {e}");
     }
 }
 
@@ -66,6 +108,10 @@ impl RoomEnv for CoreRoomEnv {
             loader_version: inst.loader.version,
             mods_hash,
         })
+    }
+
+    fn game_dir(&self, instance: InstanceId) -> Option<PathBuf> {
+        self.instances.get().map(|s| s.game_dir(instance))
     }
 
     async fn identity(&self) -> AppResult<Identity> {
