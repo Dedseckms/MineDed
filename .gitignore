@@ -36,3 +36,7 @@ Thumbs.db
 /server/skinserver/.secrets
 /server/skinserver/backups/
 /server/skinserver/.env
+
+# Search engine verification files (kept only on the server)
+/site/google*.html
+/site/yandex_*.html
