@@ -1,0 +1,115 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Installer artwork (NSIS header/sidebar, WiX banner/dialog), rendered headlessly by
+     gen-installer-art.ps1. Uses the site's voxel scene generator and the app logo.
+     Layout is chosen by ?kind=sidebar|header|banner|dialog. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0f1115; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; color: #f2f4f8; }
+  #root { position: relative; overflow: hidden; }
+  .scene { position: absolute; overflow: hidden; background: #0f1115; }
+  .scene .layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .scene .far { position: absolute; inset: 0; }
+  .shade { position: absolute; inset: 0; }
+  .brand { position: absolute; display: flex; align-items: center; gap: 8px; }
+  .brand img { image-rendering: pixelated; display: block; }
+  .name { font-weight: 800; letter-spacing: 0.5px; text-shadow: 0 2px 0 #000a; white-space: nowrap; }
+  .sub { font-weight: 600; color: #b9c2d3; text-shadow: 0 1px 0 #000a; white-space: nowrap; }
+  .col { flex-direction: column; gap: 6px; text-align: center; }
+  .light { position: absolute; background: #ffffff; }
+</style>
+<script src="../../../../../site/scenes.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  "use strict";
+  var LOGO = "../../../public/logo.svg";
+  var kind = new URLSearchParams(location.search).get("kind") || "sidebar";
+  var SIZES = { sidebar: [164, 314], header: [150, 57], banner: [493, 58], dialog: [493, 312] };
+  var size = SIZES[kind];
+  var root = document.getElementById("root");
+  root.style.width = size[0] + "px";
+  root.style.height = size[1] + "px";
+
+  // Dim pixel clouds over the night scene (same shapes as the site's daytime scenes).
+  function clouds(color) {
+    var shapes = [[40, 26, 36], [120, 16, 48], [196, 34, 28], [252, 20, 40]];
+    var r = function (x, y, w, h) {
+      return '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '"/>';
+    };
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" class="layer"' +
+      ' preserveAspectRatio="xMidYMax slice" shape-rendering="crispEdges" opacity="0.55">' +
+      '<g fill="' + color + '">' + shapes.map(function (c) {
+        return r(c[0], c[1] + 14, c[2], 8) + r(c[0] + 8, c[1] + 10, c[2] - 16, 4);
+      }).join("") + "</g></svg>";
+  }
+
+  function scene(x, y, w, h, shade) {
+    var el = document.createElement("div");
+    el.className = "scene";
+    el.style.cssText = "left:" + x + "px;top:" + y + "px;width:" + w + "px;height:" + h + "px";
+    var html = window.MineupScenes.render("forest", false);
+    // Clouds go between the sky (first <svg>) and the hills.
+    var cut = html.indexOf("</svg>") + 6;
+    el.innerHTML = html.slice(0, cut) + clouds("#3a4a72") + html.slice(cut) +
+      '<div class="shade" style="background:' + shade + '"></div>';
+    root.appendChild(el);
+    return el;
+  }
+
+  function brand(x, y, logo, nameSize, sub, column) {
+    var el = document.createElement("div");
+    el.className = "brand" + (column ? " col" : "");
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    if (column) {
+      el.style.left = "0";
+      el.style.right = "0";
+      el.style.alignItems = "center";
+    }
+    var text = '<div><div class="name" style="font-size:' + nameSize + 'px">MineDed</div>' +
+      (sub ? '<div class="sub" style="font-size:' + Math.round(nameSize * 0.45) + 'px">' + sub + "</div>" : "") +
+      "</div>";
+    el.innerHTML = '<img src="' + LOGO + '" width="' + logo + '" height="' + logo + '">' + text;
+    root.appendChild(el);
+  }
+
+  var W = size[0];
+  var H = size[1];
+  if (kind === "sidebar") {
+    scene(0, 0, W, H, "linear-gradient(#0f1115e6 0%, #0f111599 38%, #0f111500 70%)");
+    brand(0, 34, 96, 26, "Minecraft launcher", true);
+  } else if (kind === "header") {
+    scene(0, 0, W, H, "linear-gradient(90deg, #0f1115cc, #0f111566)");
+    brand(9, 12, 32, 20, null, false);
+  } else if (kind === "banner") {
+    // WiX draws black title text on the left: keep that part light.
+    var lb = document.createElement("div");
+    lb.className = "light";
+    lb.style.cssText = "left:0;top:0;bottom:0;width:" + W + "px";
+    root.appendChild(lb);
+    var sb = scene(W - 170, 0, 170, H, "linear-gradient(90deg, #0f1115cc, #0f111533)");
+    sb.style.maskImage = "linear-gradient(90deg, transparent 0, #000 24px)";
+    brand(W - 150, 13, 32, 20, null, false);
+  } else {
+    // WiX welcome/exit dialogs draw black text from x≈180: left column art, right light.
+    var ld = document.createElement("div");
+    ld.className = "light";
+    ld.style.cssText = "left:0;top:0;bottom:0;width:" + W + "px";
+    root.appendChild(ld);
+    scene(0, 0, 164, H, "linear-gradient(#0f1115e6 0%, #0f111599 38%, #0f111500 70%)");
+    var b = document.createElement("div");
+    b.className = "brand col";
+    b.style.cssText = "left:0;width:164px;top:34px;align-items:center";
+    b.innerHTML = '<img src="' + LOGO + '" width="96" height="96"><div>' +
+      '<div class="name" style="font-size:26px">MineDed</div>' +
+      '<div class="sub" style="font-size:12px">Minecraft launcher</div></div>';
+    root.appendChild(b);
+  }
+</script>
+</body>
+</html>

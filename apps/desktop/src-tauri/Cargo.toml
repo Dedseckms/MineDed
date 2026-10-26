@@ -37,8 +37,10 @@ url.workspace = true
 tauri-plugin-updater = "2.10"
 # release: native file-open dialog (capability: dialog:allow-open only)
 tauri-plugin-dialog = "2.8"
-# lead: one running instance; file logs
-tauri-plugin-single-instance = "2"
+# release: URL schemes mineded:// and mineup:// (registered by the installers)
+tauri-plugin-deep-link = "2.6"
+# lead: one running instance (forwards deep links to it); file logs
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"

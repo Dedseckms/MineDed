@@ -112,6 +112,25 @@ fn linux_webkit_workarounds() {
     }
 }
 
+/// Installed bundles (NSIS/MSI, .deb) register the URL schemes themselves. Dev builds and
+/// AppImages are not installed, so they register at runtime (per tauri-plugin-deep-link docs).
+fn register_deep_links(app: &tauri::AppHandle) {
+    let needed = cfg!(debug_assertions)
+        || (cfg!(target_os = "linux") && std::env::var_os("APPIMAGE").is_some());
+    if !needed {
+        return;
+    }
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        use tauri_plugin_deep_link::DeepLinkExt;
+        if let Err(e) = app.deep_link().register_all() {
+            tracing::warn!("deep link registration failed: {e}");
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = app;
+}
+
 pub fn run() {
     // Before any thread or GTK starts: env must be set while single-threaded.
     #[cfg(target_os = "linux")]
@@ -128,12 +147,14 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             let log_guard = init_logging(app.handle());
             app.manage(LogGuard(log_guard));
+            register_deep_links(app.handle());
             builder.mount_events(app);
             let state = build_state(app.handle())?;
             if let Ok(s) = tauri::async_runtime::block_on(state.settings.get()) {
