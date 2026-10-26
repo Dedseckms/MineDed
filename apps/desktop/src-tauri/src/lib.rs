@@ -133,7 +133,7 @@ pub fn run() {
             if let Ok(s) = tauri::async_runtime::block_on(state.settings.get()) {
                 apply_window_effects(app.handle(), &s);
             }
-            tracing::info!(version = env!("CARGO_PKG_VERSION"), "MineUP started");
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), "MineDed started");
             if let Some(vpn) = state.mihomo.clone() {
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = vpn.restore().await {

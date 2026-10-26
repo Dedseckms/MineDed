@@ -1,4 +1,4 @@
-# MineUP relay stack: iroh-relay (P2P relay + QUIC address discovery) and hub (rooms API).
+# MineDed relay stack: iroh-relay (P2P relay + QUIC address discovery) and hub (rooms API).
 # Project name is fixed: always run as `docker compose -p mineup-relay ...` (see start.sh).
 # hub and iroh-relay are stateless (rooms live in hub memory); the only volume holds
 # mirrored update files (updates-mirror / updates-web).
@@ -144,7 +144,7 @@ services:
     pids_limit: 32
     logging: *logging
 
-  # Static website mineup.dedseckms.ru (files: ./site from repo site/, read-only).
+  # Static website mineded.dedseckms.ru (files: ./site from repo site/, read-only).
   site:
     image: busybox:1.37.0-musl
     container_name: mineup-relay-site

@@ -1186,7 +1186,7 @@ impl P2pRooms {
             tokio::spawn(guest_tunnel(listener, conn.clone(), session.cancel.clone()));
             if self.inner.cfg.lan_multicast {
                 tokio::spawn(lan::announce(
-                    format!("{host_name} (MineUP)"),
+                    format!("{host_name} (MineDed)"),
                     local_addr.port(),
                     session.cancel.clone(),
                 ));

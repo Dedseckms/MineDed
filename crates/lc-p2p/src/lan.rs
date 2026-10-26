@@ -252,8 +252,8 @@ mod tests {
 
     #[test]
     fn announcement_roundtrip_strips_brackets() {
-        let a = announcement("Steve [MineUP]", 40001);
-        assert_eq!(a, "[MOTD]Steve MineUP[/MOTD][AD]40001[/AD]");
+        let a = announcement("Steve [MineDed]", 40001);
+        assert_eq!(a, "[MOTD]Steve MineDed[/MOTD][AD]40001[/AD]");
         assert_eq!(port_from_announcement(&a), Some(40001));
     }
 

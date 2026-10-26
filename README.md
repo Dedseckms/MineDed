@@ -1,19 +1,19 @@
 <div align="center">
 
-<img src="apps/desktop/public/logo.svg" width="112" alt="MineUP">
+<img src="apps/desktop/public/logo.svg" width="112" alt="MineDed">
 
-# MineUP
+# MineDed
 
 **Бесплатный лаунчер Minecraft для игры с друзьями — без аккаунта Microsoft, без аренды сервера, даже при блокировках.**
 
 *Free open-source Minecraft launcher: mods, skins, server-free multiplayer, voice chat and a built-in VPN.*
 
-[![Release](https://img.shields.io/github/v/release/Dedseckms/MineUP?style=for-the-badge&color=3fb950&label=версия)](https://github.com/Dedseckms/MineUP/releases/latest)
-[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDedseckms%2FMineUP%2Fbadges%2Fdownloads.json&style=for-the-badge)](https://github.com/Dedseckms/MineUP/releases)
+[![Release](https://img.shields.io/github/v/release/Dedseckms/MineDed?style=for-the-badge&color=3fb950&label=версия)](https://github.com/Dedseckms/MineDed/releases/latest)
+[![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDedseckms%2FMineDed%2Fbadges%2Fdownloads.json&style=for-the-badge)](https://github.com/Dedseckms/MineDed/releases)
 [![Platforms](https://img.shields.io/badge/Windows%20%7C%20Linux-555?style=for-the-badge&logo=linux&logoColor=white)](#установка)
-[![License](https://img.shields.io/github/license/Dedseckms/MineUP?style=for-the-badge&color=8957e5)](LICENSE)
+[![License](https://img.shields.io/github/license/Dedseckms/MineDed?style=for-the-badge&color=8957e5)](LICENSE)
 
-### [⬇ Скачать](https://github.com/Dedseckms/MineUP/releases/latest) · [🌐 Сайт](https://mineup.dedseckms.ru/) · [🚀 Быстрый старт](#быстрый-старт)
+### [⬇ Скачать](https://github.com/Dedseckms/MineDed/releases/latest) · [🌐 Сайт](https://mineded.dedseckms.ru/) · [🚀 Быстрый старт](#быстрый-старт)
 
 <img src="site/screenshots/play-ru.webp" width="860" alt="Экран «Играть»">
 
@@ -41,12 +41,12 @@
 | ![Комната, голос и чат](site/screenshots/multiplayer-ru.webp) | ![VPN](site/screenshots/vpn-ru.webp) |
 ## Установка
 
-Скачайте установщик из [Releases](https://github.com/Dedseckms/MineUP/releases/latest):
+Скачайте установщик из [Releases](https://github.com/Dedseckms/MineDed/releases/latest):
 
 | ОС | Файл |
 |---|---|
-| Windows 10/11 | `MineUP_x.y.z_x64-setup.exe` (или `.msi`) |
-| Linux | `MineUP_x.y.z_amd64.AppImage` (сделайте исполняемым) или `.deb` |
+| Windows 10/11 | `MineDed_x.y.z_x64-setup.exe` (или `.msi`) |
+| Linux | `MineDed_x.y.z_amd64.AppImage` (сделайте исполняемым) или `.deb` |
 
 Лаунчер обновляется сам; обновления подписаны.
 

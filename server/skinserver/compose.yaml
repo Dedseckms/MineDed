@@ -1,4 +1,4 @@
-# MineUP skin server (Drasl, authlib-injector compatible).
+# MineDed skin server (Drasl, authlib-injector compatible).
 # Project name is fixed: always run as `docker compose -p mineup-skin ...` (see start.sh).
 name: mineup-skin
 

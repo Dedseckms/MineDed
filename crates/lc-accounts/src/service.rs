@@ -397,7 +397,7 @@ impl AccountService for AccountsService {
     async fn yggdrasil_servers(&self) -> AppResult<Vec<YggdrasilServer>> {
         Ok(vec![
             YggdrasilServer {
-                name: "MineUP".into(),
+                name: "MineDed".into(),
                 api_root: self.own_api_root().await?.to_string(),
                 official: true,
             },

@@ -1,7 +1,7 @@
-# Website https://mineup.dedseckms.ru (static files from repo site/, deployed to
+# Website https://mineded.dedseckms.ru (static files from repo site/, deployed to
 # /opt/relay/site and served read-only by mineup-relay-site on 127.0.0.1:SITE_PORT).
 # Imported by the host Caddy via `import /opt/relay/caddy/*.caddy`.
-mineup.dedseckms.ru {
+mineded.dedseckms.ru {
 	encode zstd gzip
 	header {
 		Content-Security-Policy "default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
@@ -20,4 +20,9 @@ mineup.dedseckms.ru {
 	@write not method GET HEAD
 	respond @write 405
 	reverse_proxy 127.0.0.1:18091
+}
+
+# Old name (MineUP): permanent redirect so existing links and search results keep working.
+mineup.dedseckms.ru {
+	redir https://mineded.dedseckms.ru{uri} permanent
 }

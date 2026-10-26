@@ -346,7 +346,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       await wait();
       const inst = findInstance(id);
       if (!inst) return notFound(`instance ${id}`);
-      const root = settings.gameDir ?? "C:\\Users\\Player\\AppData\\Roaming\\MineUP";
+      const root = settings.gameDir ?? "C:\\Users\\Player\\AppData\\Roaming\\MineDed";
       return ok(`${root}\\instances\\${slug(inst.name)}`);
     },
 
