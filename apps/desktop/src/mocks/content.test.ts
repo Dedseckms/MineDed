@@ -164,7 +164,7 @@ describe("mock skins", () => {
 
     unwrap(await api.skinApply("acc-steve", added.id));
     expect(unwrap(await api.accountList()).find((a) => a.id === "acc-steve")?.skinUrl).toBe(added.url);
-    expect(changes).toEqual([2]);
+    expect(changes).toEqual([3]);
 
     const capes = unwrap(await api.capeList("acc-steve"));
     expect(capes.some((c) => c.active)).toBe(false);

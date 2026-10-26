@@ -46,7 +46,7 @@ describe("mock commands", () => {
     expect((await api.accountOfflineAdd("bad name")).status).toBe("error");
     expect(unwrap(await api.accountOfflineAdd("New_Player")).name).toBe("New_Player");
     expect((await api.accountOfflineAdd("new_player")).status).toBe("error");
-    expect(seen).toEqual([3]);
+    expect(seen).toEqual([4]);
   });
 
   it("yggdrasil login is not implemented yet", async () => {

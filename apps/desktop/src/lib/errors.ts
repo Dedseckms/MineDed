@@ -67,6 +67,9 @@ export const KNOWN_REASONS = [
   "relayUnreachable",
   "rateLimited",
   "curseforgeDisabled",
+  "vpnUnavailable",
+  "uacDeclined",
+  "helperFailed",
 ] as const;
 export type KnownReason = (typeof KNOWN_REASONS)[number];
 

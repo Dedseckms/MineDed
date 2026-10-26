@@ -331,6 +331,7 @@
     "skinName": {
       "length": "32 characters at most"
     },
+    "skinSource": "Enter a link (https://…) or a nickname: up to 16 latin letters, digits or _",
     "invite": "Invalid invite code",
     "password": {
       "short": "At least 8 characters",
@@ -381,8 +382,15 @@
       "relayUnreachable": "The relay server is unreachable. Check your internet or turn on the VPN.",
       "rateLimited": "Too many attempts. Wait a little and try again.",
       "rateLimitedRetry": "Too many attempts. Try again in {{seconds}} s.",
-      "curseforgeDisabled": "CurseForge is turned off: the launcher works with Modrinth only. Look for the pack or mod on Modrinth."
+      "curseforgeDisabled": "CurseForge is turned off: the launcher works with Modrinth only. Look for the pack or mod on Modrinth.",
+      "vpnUnavailable": "MineDed VPN is temporarily unavailable. Try again later.",
+      "uacDeclined": "Administrator rights were not granted, and the “Selected programs” mode needs them. Allow the request or pick another mode.",
+      "helperFailed": "Couldn't start the VPN helper with administrator rights."
     }
+  },
+  "dialog": {
+    "png": "PNG image",
+    "exe": "Programs"
   },
   "import": {
     "button": "Import from file",
@@ -551,10 +559,18 @@
     "library": "Skin library",
     "preview": "Preview",
     "preview3d": "3D skin preview: drag to rotate",
-    "empty": "No skins yet — add a PNG below",
-    "path": "PNG file",
-    "pathHint": "64×64 or 64×32 skin texture; full path to the file",
-    "pathPlaceholder": "C:\\Users\\me\\Pictures\\skin.png",
+    "empty": "No skins yet — click “Add skin”",
+    "addButton": "Add skin",
+    "source": "Where from",
+    "fromComputer": "From computer",
+    "fromWeb": "From the web",
+    "pickFile": "Choose PNG…",
+    "fileHint": "64×64 or 64×32 skin texture",
+    "webSource": "Link or nickname",
+    "webHint": "A link to a PNG or a profile page, or a player's nickname",
+    "webPlaceholder": "Notch or https://…/skin.png",
+    "find": "Find",
+    "candidate": "New skin",
     "name": "Name",
     "namePlaceholder": "My skin",
     "model": "Model",
@@ -582,7 +598,7 @@
     "openVpn": "Open VPN"
   },
   "vpn": {
-    "intro": "Built-in VPN powered by mihomo. No admin rights needed: launcher traffic, and optionally the game, goes through the selected node.",
+    "intro": "Built-in VPN powered by mihomo: launcher traffic, and optionally the game and chosen programs, goes through the selected node.",
     "latency": {
       "unknown": "—",
       "ms": "{{ms}} ms"
@@ -602,12 +618,48 @@
       "off": "Off",
       "launcherOnly": "Launcher & downloads",
       "launcherAndGame": "Launcher + game",
-      "needNodes": "Add a subscription and fetch its nodes first."
+      "apps": "Selected programs",
+      "needNodes": "Add a subscription and fetch its nodes first.",
+      "adminNote": "This mode needs administrator rights: Windows asks for permission once when it is turned on."
     },
     "modeHint": {
       "off": "All connections go direct.",
       "launcherOnly": "Downloads, mod catalogs and sign-in go through the VPN; the game connects directly.",
-      "launcherAndGame": "The game also gets proxy settings (server auth, skins). Restart the game to apply."
+      "launcherAndGame": "The game also gets proxy settings (server auth, skins). Restart the game to apply.",
+      "apps": "The launcher, the game and the programs listed below go through the VPN; everything else goes direct."
+    },
+    "mineded": {
+      "title": "MineDed VPN",
+      "intro": "Our server's personal VPN: no subscription needed, the traffic quota renews monthly.",
+      "account": "Account",
+      "connect": "Connect to MineDed VPN",
+      "disconnect": "Turn off",
+      "connected": "Connected",
+      "needAccount": "MineDed VPN is for our server's accounts — sign in via “My server”.",
+      "openAccounts": "Open accounts",
+      "usage": "Traffic used",
+      "ofTotal": "{{used}} of {{total}} GB",
+      "left": "{{left}} GB left until {{date}}",
+      "leftNoDate": "{{left}} GB left",
+      "exhausted": "The monthly quota is used up. It renews on {{date}}.",
+      "exhaustedNoDate": "The monthly quota is used up."
+    },
+    "apps": {
+      "title": "Programs through VPN",
+      "hint": "Used in the “Selected programs” mode.",
+      "label": "Programs through VPN",
+      "empty": "The list is empty: add programs from the popular ones, the running ones or a file.",
+      "presets": "Popular",
+      "addPreset": "Add {{name}}",
+      "running": "From running",
+      "pickFile": "Choose file…",
+      "remove": "Remove {{name}}",
+      "save": "Save list",
+      "runningTitle": "Running programs",
+      "search": "Search programs",
+      "noRunning": "Nothing found",
+      "added": "Added",
+      "add": "Add {{name}}"
     },
     "sub": {
       "title": "Subscription",
@@ -619,10 +671,8 @@
       "urlsHint": "One per line. Links are stored on this computer only.",
       "urlsPlaceholder": "https://example.com/sub/…",
       "save": "Save and refresh",
-      "path": "Subscription file path",
-      "pathHint": "A mihomo/Clash config (YAML) or a list of vless://, trojan://… links",
-      "pathPlaceholder": "/home/user/subscription.yaml",
-      "import": "Import"
+      "pickFile": "Choose file…",
+      "fileHint": "A mihomo/Clash config (YAML) or a list of vless://, trojan://… links"
     },
     "nodes": {
       "title": "Nodes ({{n}})",
