@@ -6,7 +6,7 @@
 
 **Бесплатный лаунчер Minecraft для игры с друзьями — без аренды сервера.**
 
-*Free open-source Minecraft launcher: mods, skins, server-free multiplayer, voice chat and a built-in VPN.*
+*Free open-source Minecraft launcher: mods, skins, server-free multiplayer and voice chat.*
 
 [![Release](https://img.shields.io/github/v/release/Dedseckms/MineDed?style=for-the-badge&color=3fb950&label=версия)](https://github.com/Dedseckms/MineDed/releases/latest)
 [![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDedseckms%2FMineDed%2Fbadges%2Fdownloads.json&style=for-the-badge)](https://github.com/Dedseckms/MineDed/releases)
