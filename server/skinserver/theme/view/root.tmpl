@@ -1,0 +1,167 @@
+{{/* MineDed theme override of Drasl 4.0.1 view/root.tmpl: hero + actions; setup guide moved, unchanged, into <details>. */}}
+{{ template "layout" . }}
+
+{{ define "title" }}{{ .App.Config.ApplicationName }}{{ end }}
+
+{{ define "content" }}
+  {{ template "header" . }}
+  {{ $ru := eq .L.GetLanguage "ru" }}
+
+  {{ $authlibInjectorLink := render `<a href="{{ index . 0}}">{{ index . 0}}</a>` .App.AuthlibInjectorURL }}
+
+  <section class="hero">
+    <img class="hero-logo" src="{{ .App.PublicURL }}/logo.svg?v=1" alt="" width="88" height="88" />
+    <h1>{{ if $ru }}Аккаунт MineDed{{ else }}MineDed account{{ end }}</h1>
+    <p class="pitch muted">{{ if $ru }}Скины, плащи и вход в игру через лаунчер MineDed{{ else }}Skins, capes and game sign-in via the MineDed launcher{{ end }}</p>
+  </section>
+
+  <h3>{{ call .T "Log in" }}</h3>
+
+  {{ $dividerNeeded := false }}
+
+  {{ if gt (len .WebOIDCProviders) 0 }}
+    {{ if $dividerNeeded }}
+      <div class="divider">or</div>
+      {{ $dividerNeeded = false }}
+    {{ end }}
+    <h3><img class="openid-logo" src="{{ .App.PublicURL }}/openid-logo.svg" alt="{{ call .T "OpenID logo" }}"></h3>
+    {{ range $provider := $.WebOIDCProviders }}
+        <p>
+          <a href="{{ $.App.FrontEndURL }}/web/oidc-sign-in/{{ $provider.Name }}?returnUrl={{ $.URL }}">{{ call $.T "Sign in with %s" $provider.Name }}</a>
+        </p>
+    {{ end }}
+    {{ $dividerNeeded = true }}
+  {{ end }}
+
+  {{ if .App.Config.AllowPasswordLogin }}
+    {{ if $dividerNeeded }}
+      <div class="divider">{{ call .T "or" }}</div>
+      {{ $dividerNeeded = false }}
+    {{ end }}
+    <form action="{{ .App.FrontEndURL }}/web/login" method="post">
+      <input type="text" name="username" placeholder="{{ call .T "Username" }}" required />
+      <input hidden name="returnUrl" value="{{ .URL }}" />
+      <input hidden name="destination" value="{{ .Destination }}" />
+      <input
+        type="password"
+        name="password"
+        placeholder="{{ call .T "Password" }}"
+        required
+      />
+      <input type="submit" value="{{ call .T "Log in" }}" />
+    </form>
+    {{ $dividerNeeded = true }}
+  {{ end }}
+
+  <div class="actions">
+    {{ if not .User }}
+      <a class="btn" href="{{ .App.FrontEndURL }}/web/registration">{{ call .T "Registration" }}</a>
+    {{ end }}
+    <a class="btn" href="https://mineded.dedseckms.ru/">{{ if $ru }}Скачать MineDed{{ else }}Download MineDed{{ end }}</a>
+  </div>
+
+  <details class="setup">
+  <summary>{{ if $ru }}Для других лаунчеров и своих серверов{{ else }}For other launchers and your own servers{{ end }}</summary>
+
+  <h3>{{ call .T "Configuring your client" }}</h3>
+  <p>
+    {{ render (call .T `Using {{ index . 0 }} on the client requires a third-party launcher that supports custom API servers. {{ index . 1 }}, a fork of Prism Launcher, is recommended, but {{ index . 2 }} also works. Both are free/libre.`)
+    .App.Config.ApplicationName
+    (render `<a href="https://github.com/unmojang/FjordLauncher">Fjord Launcher</a>`)
+    (render `<a href="https://github.com/HMCL-dev/HMCL">HMCL</a>` ) }}
+  </p>
+
+  <h4>Fjord Launcher</h4>
+
+  <ol>
+    <li>{{ call .T "Click your account in the top right and select “Manage Accounts...”." }} </li>
+    <li>{{ call .T "Click “Add authlib-injector” in the right-hand sidebar." }}</li>
+    <li>{{ render
+      (call .T `Enter your player name and your {{ index . 0 }} password or Minecraft Token, and use {{ index . 1 }} for the URL. Click “OK”.`)
+      .App.Config.ApplicationName
+      $authlibInjectorLink
+    }}</li>
+  </ol>
+
+  <h4>HMCL</h4>
+
+  <ol>
+    <li>{{ call .T "Go to the “Account List” view by clicking the account at the top of the sidebar." }}</li>
+    <li>
+      {{ render
+        (call .T `At the bottom left, click “New Auth Server” and enter {{ index . 0 }}. Click “Next” and then “Finish”.`)
+        $authlibInjectorLink
+      }}
+    </li>
+    <li>
+      {{ call .T
+        "In the sidebar, click the newly-added authentication server, labeled “%[1]s”. Enter your %[2]s player name and password and click “Login”."
+        .App.Config.InstanceName
+        .App.Config.ApplicationName
+      }}
+    </li>
+  </ol>
+
+  <h4>{{ call .T "Other launchers" }}</h4>
+
+  <p>{{ render
+    (call .T `Use the authlib-injector URL {{ index . 0 }}.`)
+    $authlibInjectorLink
+  }}</p>
+
+  <h3>{{ call .T "Configuring your server" }}</h3>
+
+  <h4>{{ call .T "Minecraft 1.16 and later" }}</h4>
+
+  <p>{{ call .T "On recent versions of Minecraft, you can use %s on an unmodified Vanilla server. To do so, add the following arguments before you specify the jar file when you start the server:" .App.Config.ApplicationName }}</p>
+  <pre style="word-wrap: break-word; white-space: pre-wrap; overflow-x: auto">
+-Dminecraft.api.env=custom
+-Dminecraft.api.auth.host={{ .App.AuthURL }}
+-Dminecraft.api.account.host={{ .App.AccountURL }}
+-Dminecraft.api.profiles.host={{ .App.AccountURL }}
+-Dminecraft.api.session.host={{ .App.SessionURL }}
+-Dminecraft.api.services.host={{ .App.ServicesURL }}
+-Dminecraft.api.discovery.host={{ .App.DiscoveryURL }}/minecraft/client</pre>
+
+  <p>{{call .T "For example, the full command you use to start the server might be:" }}</p>
+  <pre style="word-wrap: break-word; white-space: pre-wrap; overflow-x: auto">
+java -Xmx1024M -Xms1024M \
+    -Dminecraft.api.env=custom \
+    -Dminecraft.api.auth.host={{ .App.AuthURL }} \
+    -Dminecraft.api.account.host={{ .App.AccountURL }} \
+    -Dminecraft.api.profiles.host={{ .App.AccountURL }} \
+    -Dminecraft.api.session.host={{ .App.SessionURL }} \
+    -Dminecraft.api.services.host={{ .App.ServicesURL }} \
+    -Dminecraft.api.discovery.host={{ .App.DiscoveryURL }}/minecraft/client \
+    -jar server.jar nogui</pre>
+
+  {{ if not .App.Config.SignPublicKeys }}
+    {{ render
+      (call .T "In <code>server.properties</code>, set <code>enforce-secure-profile=false</code>.")
+    }}
+  {{ end }}
+
+  <h4>{{ call .T "All other versions of Minecraft" }}</h4>
+
+  <p>{{ render
+    (call .T `Download <a href="{{ index . 0 }}">the latest release of Loki</a>. Rename it to <code>Loki.jar</code> and place it next to your server JAR.`)
+    "https://github.com/unmojang/Loki/releases/latest"
+  }}</p>
+  <p>{{ render
+    (call .T `Start your server with the argument <code>-javaagent:Loki.jar={{ index . 0 }}</code>. For example, the full command you use to start your server might be:`)
+    .App.AuthlibInjectorURL  }}
+    <pre style="word-wrap: break-word; white-space: pre-wrap; overflow-x: auto">
+java -Xmx1024M -Xms1024M \
+  -javaagent:Loki.jar={{ .App.AuthlibInjectorURL }} \
+  -jar server.jar nogui</pre>
+  </p>
+
+  <p>{{ render
+    (call .T `Loki is configured with JVM arguments. You can have it update itself to the latest version at startup, or raise its logging level while troubleshooting an issue. See <a href="{{ index . 0 }}">Loki's configuration</a> for the available options and <a href="{{ index . 1 }}">Loki's usage</a> to learn how to set them.`)
+    "https://github.com/unmojang/Loki/blob/master/doc/configuration.md"
+    "https://github.com/unmojang/Loki/blob/master/doc/usage.md"
+  }}</p>
+  </details>
+
+  {{ template "footer" . }}
+{{ end }}
