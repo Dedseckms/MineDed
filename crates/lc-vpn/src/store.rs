@@ -82,6 +82,8 @@ impl Files {
     }
 
     /// Created to make the elevated TUN helper stop mihomo and exit.
+    /// The helper exists only on Windows; Linux uses setcap instead.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn stop_flag(&self) -> PathBuf {
         self.dir.join("tun.stop")
     }
