@@ -622,3 +622,100 @@ async fn remove_invalidates_server_session() {
     assert!(e.mock.lock().unwrap().valid.is_none());
     assert!(e.tokens.get(&token_key(acc.id)).await.unwrap().is_none());
 }
+
+/// Mojang + Ely.by + skin sites imitated on one local server.
+async fn remote_env() -> (Env, String) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let slim = crate::remote::tests::skin_png(true);
+    let classic = crate::remote::tests::skin_png(false);
+    let b = base.clone();
+    let app = axum::Router::new().fallback(move |uri: Uri| {
+        let (slim, classic, b) = (slim.clone(), classic.clone(), b.clone());
+        async move {
+            let png = |d: Vec<u8>| ([("content-type", "image/png")], d).into_response();
+            let tex = base64::engine::general_purpose::STANDARD.encode(
+                json!({"textures": {"SKIN": {"url": format!("{b}/tex/slim.png"),
+                    "metadata": {"model": "slim"}}}})
+                .to_string(),
+            );
+            match uri.path() {
+                "/mojang/users/profiles/minecraft/Alex" => {
+                    json_resp(StatusCode::OK, json!({"id": PROFILE_ID, "name": "Alex"}))
+                }
+                p if p.starts_with("/session/session/minecraft/profile/") => json_resp(
+                    StatusCode::OK,
+                    json!({"id": PROFILE_ID, "name": "Alex",
+                        "properties": [{"name": "textures", "value": tex}]}),
+                ),
+                // Ely.by: no metadata → classic, even though the PNG is slim.
+                "/ely/textures/ElyGuy" => json_resp(
+                    StatusCode::OK,
+                    json!({"SKIN": {"url": format!("{b}/tex/slim.png")}}),
+                ),
+                "/tex/slim.png" | "/raw/slim" => png(slim),
+                "/tex/classic.png" => png(classic),
+                "/page" => (
+                    [("content-type", "text/html")],
+                    "<meta property=\"og:image\" content=\"/tex/classic.png\">",
+                )
+                    .into_response(),
+                "/big.png" => png(vec![0u8; 2 * 1024 * 1024]),
+                "/small.png" => png(crate::skins::tests::png(32, 32)),
+                _ => StatusCode::NOT_FOUND.into_response(),
+            }
+        }
+    });
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let mut e = env().await;
+    e.skins.remote = crate::remote::RemoteEndpoints {
+        mojang_api: format!("{base}/mojang"),
+        mojang_session: format!("{base}/session"),
+        ely_skinsystem: format!("{base}/ely"),
+    };
+    (e, base)
+}
+
+#[tokio::test]
+async fn fetch_remote_sources() {
+    let (e, base) = remote_env().await;
+    let r = e.skins.fetch_remote("Alex").await.unwrap();
+    assert_eq!(r.model, SkinModel::Slim, "from Mojang metadata");
+    assert_eq!(r.suggested_name, "Alex");
+    assert!(std::path::Path::new(&r.local_path).exists());
+
+    let r = e.skins.fetch_remote("ElyGuy").await.unwrap();
+    assert_eq!(r.model, SkinModel::Classic, "from Ely.by metadata");
+
+    let r = e
+        .skins
+        .fetch_remote(&format!("{base}/raw/slim"))
+        .await
+        .unwrap();
+    assert_eq!(r.model, SkinModel::Slim, "guessed from pixels");
+    assert_eq!(r.suggested_name, "slim");
+
+    let r = e.skins.fetch_remote(&format!("{base}/page")).await.unwrap();
+    assert_eq!(r.model, SkinModel::Classic);
+
+    let err = e.skins.fetch_remote("Nobody").await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+    let err = e
+        .skins
+        .fetch_remote(&format!("{base}/missing.png"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+    for bad in ["big.png", "small.png"] {
+        let err = e
+            .skins
+            .fetch_remote(&format!("{base}/{bad}"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidInput, "{bad}");
+    }
+    let err = e.skins.fetch_remote("not a nick!").await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+}

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use lc_runtime::Paths;
-use lc_types::skin::{Cape, Skin, SkinModel};
+use lc_types::skin::{Cape, RemoteSkin, Skin, SkinModel};
 use lc_types::{AccountId, AppError, AppResult, ErrorCode, SkinId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 
 use crate::contract::SkinService;
 use crate::fsutil::{io_err, read_optional, write_atomic};
+use crate::remote::{self, RemoteEndpoints};
 use crate::service::AccountsService;
 use crate::yggdrasil::{self as ygg, TextureKind};
 
@@ -63,7 +64,7 @@ fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn hex_sha256(data: &[u8]) -> String {
+pub(crate) fn hex_sha256(data: &[u8]) -> String {
     Sha256::digest(data)
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -73,6 +74,9 @@ fn hex_sha256(data: &[u8]) -> String {
 /// Real `SkinService`. Uploads go to the account's own Yggdrasil server.
 pub struct SkinsService {
     dir: PathBuf,
+    /// Downloaded previews of `fetch_remote` (`<cache>/skins-remote`).
+    remote_cache: PathBuf,
+    pub(crate) remote: RemoteEndpoints,
     accounts: Arc<AccountsService>,
     lock: Mutex<()>,
 }
@@ -89,6 +93,8 @@ impl SkinsService {
     pub fn new(paths: &Paths, accounts: Arc<AccountsService>) -> Self {
         Self {
             dir: paths.root().join("skins"),
+            remote_cache: paths.cache().join("skins-remote"),
+            remote: RemoteEndpoints::default(),
             accounts,
             lock: Mutex::new(()),
         }
@@ -150,7 +156,7 @@ impl SkinService for SkinsService {
         Ok(self.load()?.skins.iter().map(|s| self.to_dto(s)).collect())
     }
 
-    /// Identical PNG + model already in the library → the existing entry.
+    /// Identical PNG + model already in the library в†’ the existing entry.
     async fn add(&self, png_path: &str, name: &str, model: SkinModel) -> AppResult<Skin> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > MAX_NAME {
@@ -195,6 +201,19 @@ impl SkinService for SkinsService {
         index.skins.push(entry.clone());
         self.save(&index)?;
         Ok(self.to_dto(&entry))
+    }
+
+    /// Network goes through the downloader's `Route::Auto` client; bodies are
+    /// capped at 1 MB. The model comes from profile metadata when the source is
+    /// a nickname, otherwise from the PNG's arm pixels.
+    async fn fetch_remote(&self, source: &str) -> AppResult<RemoteSkin> {
+        remote::fetch_remote(
+            &self.accounts.http(),
+            &self.remote,
+            &self.remote_cache,
+            source,
+        )
+        .await
     }
 
     async fn remove(&self, id: SkinId) -> AppResult<()> {
