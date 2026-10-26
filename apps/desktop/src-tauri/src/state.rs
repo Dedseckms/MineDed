@@ -99,11 +99,12 @@ impl AppState {
         ));
         room_env.attach_instances(core.clone());
         let content = Arc::new(ContentServices::new(
-            paths,
+            paths.clone(),
             downloader.clone(),
             core.clone(),
             core.clone(),
         ));
+        room_env.attach_packs(content.clone(), paths.cache());
         let rooms = Arc::new(p2p);
 
         Ok(Self {

@@ -6,7 +6,10 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use lc_accounts::{AuthProvider, Secret, UserType};
+use lc_content::PackIo;
 use lc_core::InstanceService;
+use lc_runtime::NullSink;
+use lc_types::instance::PackFormat;
 use lc_types::room::InstanceSig;
 use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 use sha2::{Digest, Sha256};
@@ -32,6 +35,19 @@ pub trait RoomEnv: Send + Sync {
     fn game_dir(&self, _instance: InstanceId) -> Option<PathBuf> {
         None
     }
+    /// Host: exports `instance` as `.mrpack` for guests (Modrinth files as
+    /// download links, local files as overrides) into `pack_dir`. The rooms
+    /// service caches the file per room and deletes it when the room ends.
+    async fn export_pack(&self, _instance: InstanceId) -> AppResult<PathBuf> {
+        Err(AppError::new(
+            ErrorCode::NotImplemented,
+            "pack export is not available",
+        ))
+    }
+    /// Scratch directory for host pack exports and guest downloads.
+    fn pack_dir(&self) -> PathBuf {
+        std::env::temp_dir().join("lc-room-packs")
+    }
 }
 
 /// `RoomEnv` on top of `InstanceService` + `AuthProvider`. The instance
@@ -40,6 +56,8 @@ pub trait RoomEnv: Send + Sync {
 pub struct CoreRoomEnv {
     auth: Arc<dyn AuthProvider>,
     instances: OnceLock<Arc<dyn InstanceService>>,
+    /// Pack exporter and the cache dir for transfers (`attach_packs`).
+    packs: OnceLock<(Arc<dyn PackIo>, PathBuf)>,
 }
 
 impl CoreRoomEnv {
@@ -47,7 +65,15 @@ impl CoreRoomEnv {
         Self {
             auth,
             instances: OnceLock::new(),
+            packs: OnceLock::new(),
         }
+    }
+
+    /// Enables host pack export (`export_pack`); transfers go to
+    /// `<cache_dir>/room-packs`. Call once content is built; later calls are
+    /// ignored.
+    pub fn attach_packs(&self, packs: Arc<dyn PackIo>, cache_dir: PathBuf) {
+        let _ = self.packs.set((packs, cache_dir.join("room-packs")));
     }
 
     /// Call once core is built. Later calls are ignored. Also removes room
@@ -112,6 +138,34 @@ impl RoomEnv for CoreRoomEnv {
 
     fn game_dir(&self, instance: InstanceId) -> Option<PathBuf> {
         self.instances.get().map(|s| s.game_dir(instance))
+    }
+
+    async fn export_pack(&self, instance: InstanceId) -> AppResult<PathBuf> {
+        let (packs, dir) = self.packs.get().ok_or_else(|| {
+            AppError::new(ErrorCode::NotImplemented, "pack export is not attached")
+        })?;
+        tokio::fs::create_dir_all(dir).await?;
+        let path = dir.join(format!(
+            "host-{}-{}.mrpack",
+            instance.0,
+            uuid::Uuid::new_v4()
+        ));
+        let out = path.to_string_lossy().into_owned();
+        if let Err(e) = packs
+            .export(instance, PackFormat::Mrpack, &out, &NullSink::default())
+            .await
+        {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err(e);
+        }
+        Ok(path)
+    }
+
+    fn pack_dir(&self) -> PathBuf {
+        match self.packs.get() {
+            Some((_, dir)) => dir.clone(),
+            None => std::env::temp_dir().join("lc-room-packs"),
+        }
     }
 
     async fn identity(&self) -> AppResult<Identity> {

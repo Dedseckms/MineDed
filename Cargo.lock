@@ -3524,6 +3524,7 @@ dependencies = [
  "hmac",
  "iroh",
  "lc-accounts",
+ "lc-content",
  "lc-core",
  "lc-http",
  "lc-runtime",

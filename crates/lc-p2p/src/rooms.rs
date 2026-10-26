@@ -20,11 +20,12 @@ use iroh::endpoint::{presets, Builder, Connection, Incoming, RecvStream, SendStr
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use lc_accounts::Secret;
 use lc_http::{Downloader, Route};
-use lc_runtime::SettingsStore;
+use lc_runtime::{ProgressSink, SettingsStore};
 use lc_types::room::{InstanceSig, PathKind, Peer, RoomAuthMode, RoomKind, RoomRole, RoomState};
 use lc_types::voice::ChatMessage;
 use lc_types::{AppError, AppResult, ErrorCode, InstanceId, RoomId};
-use tokio::io::{AsyncWriteExt, BufReader};
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -34,7 +35,9 @@ use crate::contract::{DatagramTransport, RoomObserver, RoomService};
 use crate::env::{Identity, RoomEnv};
 use crate::hub::{CreateRoomReq, HubClient};
 use crate::lan::{self, LanSeen};
-use crate::proto::{ControlMsg, StreamOpen, VoiceHeader, ALPN, PROTOCOL_VERSION};
+use crate::proto::{
+    ControlMsg, PackReply, StreamOpen, VoiceHeader, ALPN, PACK_VERSION, PROTOCOL_VERSION,
+};
 use crate::servers;
 use crate::wire::{self, MAX_LINE, MAX_OPEN_LINE};
 
@@ -61,6 +64,10 @@ const MAX_PASSWORD_FAILS: u32 = 5;
 /// First lockout after `MAX_PASSWORD_FAILS`; doubles on every further failure.
 const PASSWORD_BACKOFF: Duration = Duration::from_secs(30);
 const PASSWORD_BACKOFF_MAX: Duration = Duration::from_secs(3600);
+/// Largest host pack (`.mrpack`) the host sends and a guest accepts.
+const MAX_PACK_BYTES: u64 = 500 * 1024 * 1024;
+/// How long a guest waits for the host to export its pack.
+const PACK_REPLY_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Kick / reject reasons on the wire (`ControlMsg::Kick::reason`).
 pub mod reasons {
@@ -154,6 +161,17 @@ struct HostCtx {
     banned: StdMutex<HashSet<String>>,
     /// Wrong password attempts per endpoint id: (count, last failure).
     pw_fails: StdMutex<HashMap<String, (u32, Instant)>>,
+    /// Game rooms: the hosted instance (pack export source).
+    instance: Option<InstanceId>,
+    /// Pack exported for guests, once per room; deleted when the room ends.
+    pack: tokio::sync::Mutex<Option<PackFile>>,
+}
+
+#[derive(Clone)]
+struct PackFile {
+    path: PathBuf,
+    size: u64,
+    sha256: String,
 }
 
 /// Inputs of `start_hosting`, shared by game and voice rooms.
@@ -197,8 +215,9 @@ pub(crate) struct Session {
     expires_at: String,
     password_protected: bool,
     pub(crate) local_addr: Option<SocketAddr>,
-    /// Guest: `servers.dat` holding our entry for `local_addr`.
-    servers_dat: Option<PathBuf>,
+    /// Guest: `servers.dat` holding our entry for `local_addr` (set by `join`
+    /// or `attach_instance`).
+    servers_dat: StdMutex<Option<PathBuf>>,
     my_id: String,
     my_name: String,
     endpoint: Endpoint,
@@ -866,7 +885,7 @@ impl P2pRooms {
             expires_at: resp.expires_at,
             password_protected: password.is_some(),
             local_addr: None,
-            servers_dat: None,
+            servers_dat: StdMutex::new(None),
             my_id: my_id.clone(),
             my_name: clean_name(&me.name),
             endpoint,
@@ -885,6 +904,8 @@ impl P2pRooms {
                 world: game.map(|(_, port)| watch::channel(port).0),
                 banned: StdMutex::new(HashSet::new()),
                 pw_fails: StdMutex::new(HashMap::new()),
+                instance: game.map(|(i, _)| i),
+                pack: tokio::sync::Mutex::new(None),
             }),
         });
         self.inner.set_current(Some(session.clone()));
@@ -1072,11 +1093,7 @@ impl P2pRooms {
             self.clone()
                 .datagram_loop(s.clone(), remote.clone(), conn.clone()),
         );
-        tokio::spawn(host_game_streams(
-            conn.clone(),
-            host.world.as_ref().map(watch::Sender::subscribe),
-            s.cancel.clone(),
-        ));
+        tokio::spawn(self.clone().host_streams(s.clone(), conn.clone()));
         let control = self.clone().control_loop(s.clone(), remote.clone(), reader);
         tokio::select! {
             () = s.cancel.cancelled() => {}
@@ -1239,14 +1256,11 @@ impl P2pRooms {
                         "unexpected hub response: game room without sig",
                     )
                 })?;
-                let local = local_sig.as_ref().ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::InvalidInput,
-                        "instance is required for game rooms",
-                    )
-                    .detail("reason", "instanceRequired")
-                })?;
-                check_sig(remote, local)?;
+                // No instance yet: the guest fetches the host's pack and
+                // calls `attach_instance` later.
+                if let Some(local) = local_sig.as_ref() {
+                    check_sig(remote, local)?;
+                }
             }
             if resp.password_protected && password.is_none() {
                 return Err(
@@ -1355,7 +1369,7 @@ impl P2pRooms {
             expires_at: String::new(),
             password_protected: resp.password_protected,
             local_addr,
-            servers_dat,
+            servers_dat: StdMutex::new(servers_dat),
             my_id,
             my_name: clean_name(&me.name),
             endpoint,
@@ -1721,6 +1735,203 @@ impl P2pRooms {
         }
     }
 
+    // ----------------------------------------------------------- host pack
+
+    /// Host: every bi-stream after the control stream starts with a
+    /// `StreamOpen` line: a game connection to the world's current LAN port
+    /// (refused while the world isn't open and in voice rooms) or a pack
+    /// request. Only admitted peers get here.
+    async fn host_streams(self, s: Arc<Session>, conn: Connection) {
+        loop {
+            let (send, recv) = tokio::select! {
+                () = s.cancel.cancelled() => return,
+                st = conn.accept_bi() => match st {
+                    Ok(v) => v,
+                    Err(_) => return,
+                },
+            };
+            tokio::spawn(self.clone().host_stream(s.clone(), send, recv));
+        }
+    }
+
+    async fn host_stream(self, s: Arc<Session>, mut send: SendStream, mut recv: RecvStream) {
+        let open = tokio::time::timeout(
+            self.inner.cfg.hello_timeout,
+            wire::read_line_unbuffered(&mut recv, MAX_OPEN_LINE),
+        )
+        .await;
+        let open = match open {
+            Ok(Ok(line)) => serde_json::from_str::<StreamOpen>(&line).ok(),
+            _ => None,
+        };
+        match open {
+            Some(StreamOpen::Game) => match s.world_port().flatten() {
+                Some(port) => serve_game_stream(send, recv, port).await,
+                None => {
+                    let _ = send.reset(1u32.into());
+                    let _ = recv.stop(1u32.into());
+                }
+            },
+            Some(StreamOpen::Pack { version }) => {
+                let _ = recv.stop(0u32.into());
+                tokio::select! {
+                    () = s.cancel.cancelled() => {
+                        let _ = send.reset(1u32.into());
+                    }
+                    r = self.serve_pack(&s, &mut send, version) => {
+                        if let Err(e) = r {
+                            tracing::debug!("rooms: pack transfer failed: {}", e.message);
+                            let _ = send.reset(1u32.into());
+                        }
+                    }
+                }
+            }
+            None => {
+                let _ = send.reset(1u32.into());
+            }
+        }
+    }
+
+    /// Host: answers one pack request (`PackReply` line, then the file).
+    async fn serve_pack(&self, s: &Session, send: &mut SendStream, version: u32) -> AppResult<()> {
+        let (line, file) = match self.host_pack(s, version).await {
+            Ok(p) => (
+                wire::encode(&PackReply::Ready {
+                    size: p.size,
+                    sha256: p.sha256.clone(),
+                })?,
+                Some(p),
+            ),
+            Err(reason) => (
+                wire::encode(&PackReply::Error {
+                    reason: reason.to_owned(),
+                })?,
+                None,
+            ),
+        };
+        send.write_all(line.as_bytes())
+            .await
+            .map_err(|e| net_err("pack stream", e))?;
+        if let Some(p) = file {
+            let mut f = tokio::fs::File::open(&p.path).await?.take(p.size);
+            tokio::io::copy(&mut f, send)
+                .await
+                .map_err(|e| net_err("pack stream", e))?;
+        }
+        send.finish().map_err(|e| net_err("pack stream", e))?;
+        Ok(())
+    }
+
+    /// Host: the room's exported pack (exported on first request, cached per
+    /// room). `Err` is the wire reason for `PackReply::Error`.
+    async fn host_pack(&self, s: &Session, version: u32) -> Result<PackFile, &'static str> {
+        if version != PACK_VERSION {
+            return Err("unsupported");
+        }
+        let Some((h, instance)) = s.host.as_ref().and_then(|h| h.instance.map(|i| (h, i))) else {
+            return Err("not_game_room");
+        };
+        let mut cache = h.pack.lock().await;
+        let pack = match cache.as_ref() {
+            Some(p) => p.clone(),
+            None => {
+                let path = self.inner.env.export_pack(instance).await.map_err(|e| {
+                    tracing::warn!("rooms: pack export failed: {}", e.message);
+                    "export_failed"
+                })?;
+                let p = match file_sha256(&path).await {
+                    Ok((size, sha256)) => PackFile { path, size, sha256 },
+                    Err(e) => {
+                        tracing::warn!("rooms: exported pack is unreadable: {}", e.message);
+                        let _ = tokio::fs::remove_file(&path).await;
+                        return Err("export_failed");
+                    }
+                };
+                *cache = Some(p.clone());
+                p
+            }
+        };
+        if pack.size > MAX_PACK_BYTES {
+            return Err("too_large");
+        }
+        Ok(pack)
+    }
+
+    /// Guest: fetches the host's pack into `RoomEnv::pack_dir`.
+    async fn download_pack(&self, sink: &dyn ProgressSink) -> AppResult<String> {
+        let s = self.require_session()?;
+        if s.role != RoomRole::Guest || s.kind != RoomKind::Game {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "only guests of game rooms can download the host's pack",
+            )
+            .detail("reason", "notGameGuest"));
+        }
+        let conn = s
+            .connections(None)
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::new(ErrorCode::Network, "host is not connected"))?;
+        let dir = self.inner.env.pack_dir();
+        tokio::fs::create_dir_all(&dir).await?;
+        let name = format!("guest-{}-{}", s.room_id.0, uuid::Uuid::new_v4());
+        let part = dir.join(format!("{name}.mrpack.part"));
+        let res = tokio::select! {
+            () = s.cancel.cancelled() => {
+                Err(AppError::new(ErrorCode::Network, "the room was closed"))
+            }
+            () = sink.cancel_token().cancelled() => {
+                Err(AppError::new(ErrorCode::Cancelled, "cancelled by user"))
+            }
+            r = fetch_pack(&conn, &part, sink) => r,
+        };
+        if let Err(e) = res {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(e);
+        }
+        let done = dir.join(format!("{name}.mrpack"));
+        tokio::fs::rename(&part, &done).await?;
+        Ok(done.to_string_lossy().into_owned())
+    }
+
+    /// Guest: binds the room to `instance` (signature check, server list).
+    async fn attach(&self, instance: InstanceId) -> AppResult<RoomState> {
+        let _op = self.inner.op.lock().await;
+        let s = self.require_session()?;
+        if s.role != RoomRole::Guest || s.kind != RoomKind::Game {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "only guests of game rooms can attach an instance",
+            )
+            .detail("reason", "notGameGuest"));
+        }
+        let local = self.inner.env.instance_sig(instance).await?;
+        if let Some(remote) = s.sig.as_ref() {
+            check_sig(remote, &local)?;
+        }
+        let host_name = s
+            .peers()
+            .map
+            .values()
+            .find(|e| e.conn.is_some())
+            .map(|e| e.peer.name.clone())
+            .unwrap_or_else(|| "Host".into());
+        let new = self
+            .inner
+            .env
+            .game_dir(instance)
+            .map(|d| servers::servers_dat(&d));
+        let old = std::mem::replace(&mut *lock(&s.servers_dat), new.clone());
+        if let Some(old) = old {
+            remove_server_entry(old).await;
+        }
+        if let (Some(path), Some(addr)) = (new, s.local_addr) {
+            add_server_entry(path, host_name, addr).await;
+        }
+        self.emit_state();
+        Ok(s.state())
+    }
+
     fn require_session(&self) -> AppResult<Arc<Session>> {
         self.inner
             .current()
@@ -1838,6 +2049,14 @@ impl RoomService for P2pRooms {
 
     async fn send_chat(&self, text: &str) -> AppResult<ChatMessage> {
         self.chat(text).await
+    }
+
+    async fn download_host_pack(&self, sink: &dyn ProgressSink) -> AppResult<String> {
+        self.download_pack(sink).await
+    }
+
+    async fn attach_instance(&self, instance: InstanceId) -> AppResult<RoomState> {
+        self.attach(instance).await
     }
 }
 
@@ -2012,8 +2231,14 @@ async fn remove_server_entry(path: PathBuf) {
 
 async fn shutdown(s: &Session) {
     s.cancel.cancel();
-    if let Some(path) = s.servers_dat.clone() {
+    let dat = lock(&s.servers_dat).take();
+    if let Some(path) = dat {
         remove_server_entry(path).await;
+    }
+    if let Some(h) = &s.host {
+        if let Some(p) = h.pack.lock().await.take() {
+            let _ = tokio::fs::remove_file(&p.path).await;
+        }
     }
     let conns = {
         let mut p = s.peers();
@@ -2157,47 +2382,123 @@ fn spawn_writer(mut send: SendStream, mut rx: mpsc::Receiver<String>) {
     });
 }
 
-/// Host: every bi-stream after the control stream is one game connection to
-/// the world's current LAN port. Refused (stream reset, the guest's game
-/// connection closes) while the world isn't open and in voice rooms (`None`).
-async fn host_game_streams(
-    conn: Connection,
-    world: Option<watch::Receiver<Option<u16>>>,
-    cancel: CancellationToken,
-) {
+/// Size and SHA-256 (hex) of a file.
+async fn file_sha256(path: &std::path::Path) -> AppResult<(u64, String)> {
+    let mut f = tokio::fs::File::open(path).await?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut size = 0u64;
     loop {
-        let (send, recv) = tokio::select! {
-            () = cancel.cancelled() => return,
-            s = conn.accept_bi() => match s {
-                Ok(s) => s,
-                Err(_) => return,
-            },
-        };
-        match world.as_ref().and_then(|w| *w.borrow()) {
-            Some(port) => {
-                tokio::spawn(serve_game_stream(send, recv, port));
-            }
-            None => {
-                let (mut send, mut recv) = (send, recv);
-                let _ = send.reset(1u32.into());
-                let _ = recv.stop(1u32.into());
-            }
+        let n = f.read(&mut buf).await?;
+        if n == 0 {
+            break;
         }
+        h.update(&buf[..n]);
+        size += u64::try_from(n).unwrap_or(0);
+    }
+    Ok((size, hex::encode(h.finalize())))
+}
+
+fn host_too_old() -> AppError {
+    AppError::new(
+        ErrorCode::NotImplemented,
+        "the host's launcher is too old to share its modpack",
+    )
+    .detail("reason", "hostTooOld")
+}
+
+fn pack_reply_error(reason: &str) -> AppError {
+    match reason {
+        "unsupported" => host_too_old(),
+        "too_large" => AppError::new(ErrorCode::InvalidInput, "the host's modpack is too large")
+            .detail("reason", "packTooLarge"),
+        "not_game_room" => AppError::new(ErrorCode::InvalidInput, "the room has no modpack")
+            .detail("reason", "notGameRoom"),
+        _ => AppError::new(ErrorCode::Internal, "the host could not export its modpack")
+            .detail("reason", "hostExportFailed"),
     }
 }
 
-async fn serve_game_stream(mut send: SendStream, mut recv: RecvStream, port: u16) {
-    let open = match wire::read_line_unbuffered(&mut recv, MAX_OPEN_LINE).await {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-    if !matches!(
-        serde_json::from_str::<StreamOpen>(&open),
-        Ok(StreamOpen::Game)
-    ) {
-        let _ = send.reset(1u32.into());
-        return;
+/// Guest: one pack request on a fresh stream; writes the verified file to
+/// `part`.
+async fn fetch_pack(
+    conn: &Connection,
+    part: &std::path::Path,
+    sink: &dyn ProgressSink,
+) -> AppResult<()> {
+    sink.progress(0, None, "rooms.packExport");
+    let (mut send, mut recv) = conn
+        .open_bi()
+        .await
+        .map_err(|e| net_err("pack stream", e))?;
+    let open = wire::encode(&StreamOpen::Pack {
+        version: PACK_VERSION,
+    })?;
+    // Older hosts reset unknown streams (or every stream while their world
+    // is closed) without a reply; a live connection then means "too old".
+    if let Err(e) = send.write_all(open.as_bytes()).await {
+        if conn.close_reason().is_none() {
+            tracing::debug!("rooms: pack request refused: {e}");
+            return Err(host_too_old());
+        }
+        return Err(net_err("pack stream", e));
     }
+    let _ = send.finish();
+    let reply = tokio::time::timeout(
+        PACK_REPLY_TIMEOUT,
+        wire::read_line_unbuffered(&mut recv, MAX_OPEN_LINE),
+    )
+    .await
+    .map_err(|_| timeout_err("pack export"))?;
+    let line = match reply {
+        Ok(l) => l,
+        Err(e) if conn.close_reason().is_none() => {
+            tracing::debug!("rooms: no pack reply: {}", e.message);
+            return Err(host_too_old());
+        }
+        Err(e) => return Err(net_err("host disconnected", e.message)),
+    };
+    let (size, sha256) = match serde_json::from_str::<PackReply>(&line).map_err(wire::proto_err)? {
+        PackReply::Ready { size, sha256 } => (size, sha256),
+        PackReply::Error { reason } => return Err(pack_reply_error(&reason)),
+    };
+    if size > MAX_PACK_BYTES {
+        return Err(pack_reply_error("too_large"));
+    }
+    let mut file = tokio::fs::File::create(part).await?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let (mut done, mut shown) = (0u64, 0u64);
+    sink.progress(0, Some(size), "rooms.packDownload");
+    while done < size {
+        sink.check_cancelled()?;
+        let want = usize::try_from(size - done).map_or(buf.len(), |r| r.min(buf.len()));
+        let n = match recv.read(&mut buf[..want]).await {
+            Ok(Some(n)) => n,
+            Ok(None) => return Err(net_err("pack transfer", "host closed the stream early")),
+            Err(e) => return Err(net_err("pack transfer", e)),
+        };
+        hasher.update(&buf[..n]);
+        file.write_all(&buf[..n]).await?;
+        done += u64::try_from(n).unwrap_or(0);
+        if done - shown >= 1 << 20 || done == size {
+            sink.progress(done, Some(size), "rooms.packDownload");
+            shown = done;
+        }
+    }
+    file.flush().await?;
+    drop(file);
+    if hex::encode(hasher.finalize()) != sha256.to_ascii_lowercase() {
+        return Err(
+            AppError::new(ErrorCode::HashMismatch, "the host's modpack is corrupted")
+                .detail("expected", sha256),
+        );
+    }
+    Ok(())
+}
+
+/// Host: one game connection to the world's LAN port.
+async fn serve_game_stream(mut send: SendStream, recv: RecvStream, port: u16) {
     match TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
         Ok(tcp) => pipe(tcp, send, recv).await,
         Err(_) => {
@@ -2205,7 +2506,6 @@ async fn serve_game_stream(mut send: SendStream, mut recv: RecvStream, port: u16
         }
     }
 }
-
 /// Guest: each local TCP connection becomes one bi-stream to the host.
 async fn guest_tunnel(listener: TcpListener, conn: Connection, cancel: CancellationToken) {
     loop {
@@ -2355,6 +2655,19 @@ mod tests {
         let e = check_host_auth_mode(RoomAuthMode::Open, &online).unwrap_err();
         assert_eq!(e.code, ErrorCode::InvalidInput);
         assert_eq!(e.details.unwrap()["expected"], "yggdrasil");
+    }
+
+    #[test]
+    fn pack_reasons_map_to_errors() {
+        let r = |x: &str| pack_reply_error(x).details.unwrap()["reason"].clone();
+        assert_eq!(r("unsupported"), "hostTooOld");
+        assert_eq!(
+            pack_reply_error("unsupported").code,
+            ErrorCode::NotImplemented
+        );
+        assert_eq!(r("too_large"), "packTooLarge");
+        assert_eq!(r("not_game_room"), "notGameRoom");
+        assert_eq!(r("export_failed"), "hostExportFailed");
     }
 
     #[test]
