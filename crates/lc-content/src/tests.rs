@@ -143,6 +143,9 @@ impl InstanceService for Instances {
         if let Some(icon) = patch.icon {
             i.icon = Some(icon);
         }
+        if let Some(p) = patch.preset {
+            i.preset = Some(p);
+        }
         Ok(i.clone())
     }
     async fn delete(&self, id: InstanceId) -> AppResult<()> {
@@ -544,6 +547,48 @@ async fn preset_installs_mods_and_flags() {
     assert!(inst.jvm_args.contains(&"-XX:+UseG1GC".to_owned()));
     assert!(!inst.memory.auto);
     assert_eq!(inst.memory.max_mb, 2048);
+    assert_eq!(inst.preset, Some(PerfPreset::Potato));
+    let opts = std::fs::read_to_string(game.join("options.txt")).unwrap();
+    assert!(opts.contains("renderDistance:6"));
+}
+
+#[tokio::test]
+async fn preset_on_vanilla_writes_options() {
+    let e = env();
+    let id = e.add_instance("1.12.2", LoaderKind::Vanilla);
+    let game = e.inst.game_dir(id);
+    std::fs::create_dir_all(&game).unwrap();
+    std::fs::write(game.join("options.txt"), "lang:en_us\nrenderDistance:12\n").unwrap();
+    e.svc
+        .apply(id, PerfPreset::Balanced, &NullSink::default())
+        .await
+        .unwrap();
+    let opts = std::fs::read_to_string(game.join("options.txt")).unwrap();
+    assert!(opts.starts_with("lang:en_us\nrenderDistance:10\n"));
+    assert!(opts.contains("fancyGraphics:false"));
+    assert!(!opts.contains("simulationDistance"));
+    let inst = e.inst.get(id).await.unwrap();
+    assert_eq!(inst.preset, Some(PerfPreset::Balanced));
+    assert!(inst.jvm_args.contains(&"-XX:+UseG1GC".to_owned()));
+}
+
+#[tokio::test]
+async fn preset_without_any_mod_fails_visibly() {
+    let e = env();
+    let id = e.add_instance("1.21.1", LoaderKind::Fabric);
+    // No fixtures at all → every slug unavailable.
+    let err = e
+        .svc
+        .apply(id, PerfPreset::Potato, &NullSink::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+    assert!(err.details.unwrap().contains_key("reason"));
+    let inst = e.inst.get(id).await.unwrap();
+    // Settings still applied, but the preset is not marked as applied.
+    assert_eq!(inst.preset, None);
+    assert!(inst.jvm_args.contains(&"-XX:+UseG1GC".to_owned()));
+    assert!(e.inst.game_dir(id).join("options.txt").exists());
 }
 
 // ---------------------------------------------------------------------------
