@@ -1,0 +1,19 @@
+# MineDed VPN access for hub (/me/vpn). Added by start.sh when HUB_VPN_API_URL is set in .env.
+# hub joins the s-ui project network (mineded-vpn_default, /opt/vpn) and calls the panel
+# token API by container name over plain HTTP; the panel stays unpublished (127.0.0.1 only).
+services:
+  hub:
+    environment:
+      # http://mineded-vpn:2095/<PANEL_PATH>/apiv2 (secret path, .env only).
+      HUB_VPN_API_URL: ${HUB_VPN_API_URL:?}
+      HUB_VPN_API_TOKEN: ${HUB_VPN_API_TOKEN:?set HUB_VPN_API_TOKEN in .env}
+      # https://relay.dedseckms.ru/<SUB_PATH> (secret path, .env only).
+      HUB_VPN_SUB_BASE: ${HUB_VPN_SUB_BASE:?set HUB_VPN_SUB_BASE in .env}
+      HUB_VPN_QUOTA_GB: ${HUB_VPN_QUOTA_GB:-256}
+    networks: [vpn_net]
+
+networks:
+  # Owned by the mineded-vpn project (/opt/vpn).
+  vpn_net:
+    external: true
+    name: mineded-vpn_default
