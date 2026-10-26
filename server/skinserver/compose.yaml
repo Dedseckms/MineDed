@@ -14,7 +14,7 @@ services:
       context: .
       dockerfile: Dockerfile
     # Tag bumps with the web theme (theme/), so `up --build` swaps the image.
-    image: mineup/drasl:4.0.1-hc-theme1
+    image: mineup/drasl:4.0.1-hc-theme2
     container_name: mineup-skin-drasl
     restart: unless-stopped
     # Image has no USER; it runs as uid 0 but with every capability dropped,
