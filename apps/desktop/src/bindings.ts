@@ -78,6 +78,11 @@ export const commands = {
 	/**  False when the quota is used up or the key is disabled. */
 	enabled: boolean,
 } | null, AppError>(__TAURI_INVOKE("vpn_mineded_access", { accountId, provision })),
+	/**
+	 *  Switches between the MineDed and the user's own subscription (both kept);
+	 *  reconnects a running VPN.
+	 */
+	vpnSetSource: (source: VpnSource) => typedError<VpnState, AppError>(__TAURI_INVOKE("vpn_set_source", { source })),
 	vpnApps: () => typedError<VpnApp[], AppError>(__TAURI_INVOKE("vpn_apps")),
 	vpnSetApps: (apps: VpnApp[]) => typedError<null, AppError>(__TAURI_INVOKE("vpn_set_apps", { apps })),
 	vpnRunningApps: () => typedError<VpnApp[], AppError>(__TAURI_INVOKE("vpn_running_apps")),
@@ -831,9 +836,20 @@ export type VpnNode = {
 	selected: boolean,
 };
 
+/**  Which subscription the VPN uses. Both are stored independently. */
+export type VpnSource = 
+/**  Personal MineDed VPN key from hub (`VpnController::mineded_access`). */
+"mineded" | 
+/**  The user's own subscription (URL or imported file). */
+"own";
+
 export type VpnState = {
 	mode: VpnMode,
 	running: boolean,
+	/**  Active subscription; `None` when neither is configured. */
+	source?: VpnSource | null,
+	hasMineded?: boolean | null,
+	hasOwn?: boolean | null,
 	node: string | null,
 	latencyMs: number | null,
 	/**  RFC 3339 of the last successful subscription refresh. */
