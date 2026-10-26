@@ -27,6 +27,18 @@ pub struct Skin {
     pub local_only: bool,
 }
 
+/// A skin downloaded for preview by `SkinService::fetch_remote`, not yet in the library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSkin {
+    /// Cached PNG; pass it to `SkinService::add`.
+    pub local_path: String,
+    /// Guessed from the source (profile metadata) or the PNG's arm pixels.
+    pub model: SkinModel,
+    /// Nickname or file name, for the library entry.
+    pub suggested_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Cape {

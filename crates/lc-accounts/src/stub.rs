@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use lc_types::account::{Account, YggdrasilServer};
-use lc_types::skin::{Cape, Skin, SkinModel};
+use lc_types::skin::{Cape, RemoteSkin, Skin, SkinModel};
 use lc_types::{AccountId, AppError, AppResult, SkinId};
 use url::Url;
 
@@ -72,6 +72,10 @@ impl SkinService for StubSkins {
 
     async fn add(&self, _png_path: &str, _name: &str, _model: SkinModel) -> AppResult<Skin> {
         Err(AppError::not_implemented("SkinService::add"))
+    }
+
+    async fn fetch_remote(&self, _source: &str) -> AppResult<RemoteSkin> {
+        Err(AppError::not_implemented("SkinService::fetch_remote"))
     }
 
     async fn remove(&self, _id: SkinId) -> AppResult<()> {
