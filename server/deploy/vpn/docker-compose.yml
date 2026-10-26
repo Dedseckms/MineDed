@@ -1,0 +1,31 @@
+# MineDed VPN: s-ui panel (embedded sing-box core) on the VPS, deployed to /opt/vpn.
+# Hysteria2 on 8443/udp (primary), VLESS Reality on 8443/tcp (fallback).
+# Panel (2095) and subscription server (2096) are bound to loopback and exposed only
+# through host Caddy on secret paths (see vpn.caddy.template).
+name: mineded-vpn
+
+services:
+  s-ui:
+    image: alireza7/s-ui:v1.6.6@sha256:c3cc6fa2d8fef0213923ec0aeeb46c912ff67179cbc6481b849b75d6720ed1d2
+    container_name: mineded-vpn
+    restart: unless-stopped
+    environment:
+      SUI_LOG_LEVEL: warn
+    volumes:
+      - ./db:/app/db
+      # Caddy-managed Let's Encrypt cert for relay.dedseckms.ru (Hysteria2 TLS), read-only.
+      # The directory is mounted (not the files) so renewals are visible in the container.
+      - /var/lib/caddy/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/relay.dedseckms.ru:/certs:ro
+    ports:
+      - "127.0.0.1:2095:2095"
+      - "127.0.0.1:2096:2096"
+      - "8443:8443/tcp"
+      - "8443:8443/udp"
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

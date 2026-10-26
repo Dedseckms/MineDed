@@ -1,0 +1,11 @@
+# Restart the VPN container when Caddy renews the relay.dedseckms.ru certificate.
+# Install: /etc/systemd/system/mineded-vpn-cert.{path,service}; systemctl enable --now mineded-vpn-cert.path
+[Unit]
+Description=Watch relay.dedseckms.ru certificate for MineDed VPN
+
+[Path]
+PathChanged=/var/lib/caddy/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/relay.dedseckms.ru/relay.dedseckms.ru.crt
+Unit=mineded-vpn-cert.service
+
+[Install]
+WantedBy=multi-user.target
