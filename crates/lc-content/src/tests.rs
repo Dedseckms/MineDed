@@ -828,3 +828,85 @@ async fn modpack_failures_leave_no_instance() {
     // The verified pack stays cached for a retry.
     assert!(e._dir.path().join("cache/content/packs").exists());
 }
+
+#[tokio::test]
+async fn add_local_copies_replaces_and_indexes() {
+    let e = env();
+    let id = e.add_instance("1.21.1", LoaderKind::Fabric);
+    let src = e._dir.path().join("picked");
+    std::fs::create_dir_all(src.join("MyPack/assets")).unwrap();
+    std::fs::write(src.join("MyPack/pack.mcmeta"), "{}").unwrap();
+    std::fs::write(src.join("MyPack/assets/a.png"), "png").unwrap();
+    std::fs::write(src.join("cool.jar"), "v1").unwrap();
+    std::fs::write(src.join("bad.zip"), "z").unwrap();
+    let s = |p: PathBuf| p.to_string_lossy().into_owned();
+    let game = e.inst.game_dir(id);
+
+    // Wrong type for the kind: nothing copied.
+    let err = e
+        .svc
+        .add_local(
+            id,
+            ContentKind::Mod,
+            vec![s(src.join("cool.jar")), s(src.join("bad.zip"))],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert_eq!(err.details.unwrap()["reason"], "wrongFileType");
+    assert!(!game.join("mods/cool.jar").exists());
+    assert!(e
+        .svc
+        .add_local(id, ContentKind::Modpack, vec![s(src.join("bad.zip"))])
+        .await
+        .is_err());
+
+    let added = e
+        .svc
+        .add_local(id, ContentKind::Mod, vec![s(src.join("cool.jar"))])
+        .await
+        .unwrap();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].source, ContentSourceKind::Local);
+    assert_eq!(std::fs::read(game.join("mods/cool.jar")).unwrap(), b"v1");
+
+    // Same name replaces the file, including a disabled copy.
+    e.svc.set_enabled(id, "cool.jar", false).await.unwrap();
+    std::fs::write(src.join("cool.jar"), "v2").unwrap();
+    e.svc
+        .add_local(id, ContentKind::Mod, vec![s(src.join("cool.jar"))])
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(game.join("mods/cool.jar")).unwrap(), b"v2");
+    assert!(!game.join("mods/cool.jar.disabled").exists());
+
+    // Folder resource pack.
+    let added = e
+        .svc
+        .add_local(id, ContentKind::ResourcePack, vec![s(src.join("MyPack"))])
+        .await
+        .unwrap();
+    assert_eq!(added[0].file_name, "MyPack");
+    assert!(game.join("resourcepacks/MyPack/assets/a.png").exists());
+    assert!(src.join("MyPack/pack.mcmeta").exists());
+
+    let list = e.svc.list(id).await.unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list
+        .iter()
+        .all(|c| c.source == ContentSourceKind::Local && c.project_id.is_none()));
+    let idx = crate::index::ContentIndex::load(&e.inst.paths.instance(id))
+        .await
+        .unwrap();
+    let jar = &idx.files["mods/cool.jar"];
+    assert_eq!(jar.source, ContentSourceKind::Local);
+    assert_eq!(jar.sha1.as_deref(), Some(sha1_hex(b"v2").as_str()));
+    assert!(idx.files.contains_key("resourcepacks/MyPack"));
+
+    // Folder packs can be disabled and removed.
+    e.svc.set_enabled(id, "MyPack", false).await.unwrap();
+    assert!(game.join("resourcepacks/MyPack.disabled").is_dir());
+    e.svc.remove(id, "MyPack").await.unwrap();
+    assert!(!game.join("resourcepacks/MyPack.disabled").exists());
+    assert_eq!(e.svc.list(id).await.unwrap().len(), 1);
+}

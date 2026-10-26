@@ -4,6 +4,7 @@
 mod api;
 pub mod contract;
 mod index;
+mod local;
 mod modmeta;
 mod modrinth;
 mod packs;
