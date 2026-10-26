@@ -153,6 +153,7 @@ function InstanceContent({ instance }: { instance: Instance }) {
               kind={TAB_KIND[tab]}
               items={installedOfKind(installed, TAB_KIND[tab])}
               onBrowse={() => browse(TAB_KIND[tab] as SearchKind)}
+              onInstall={setRequest}
             />
           </>
         )}

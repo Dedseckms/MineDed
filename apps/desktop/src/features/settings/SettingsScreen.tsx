@@ -23,7 +23,7 @@ import {
 import { useDraftValue } from "../../hooks/useDraftValue";
 import { ACCENT_PRESETS, isHexColor } from "../../lib/color";
 import { BACKGROUND_IDS, type BackgroundId, resolveBackground } from "../../lib/backdrop";
-import { BackgroundScene } from "../appearance/backgrounds";
+import { BackgroundPreview } from "../appearance/backgrounds";
 import { MemoryEditor, useFormatMb } from "../common/MemoryEditor";
 import { AboutSection } from "../updates/AboutSection";
 import { VoiceSettingsSection } from "../voice/VoiceSettingsSection";
@@ -96,9 +96,16 @@ export function AccentPicker({ value, onChange }: { value: string | null; onChan
   );
 }
 
-/** Built-in background previews (static) plus "none". */
-export function BackgroundPicker({ value, onChange }: { value: BackgroundId | null; onChange: (v: BackgroundId | null) => void }) {
+/** Settings save delay of the background picker: rapid clicks cost one save and one scene swap. */
+export const BACKGROUND_SAVE_MS = 300;
+
+/**
+ * Built-in background previews (static, memoised) plus "none". The selection
+ * updates at once; the save (and the window background) follow after a pause.
+ */
+export function BackgroundPicker({ value: saved, onChange: commit }: { value: BackgroundId | null; onChange: (v: BackgroundId | null) => void }) {
   const { t } = useTranslation();
+  const [value, onChange] = useDraftValue<BackgroundId | null>(saved, commit, BACKGROUND_SAVE_MS);
   const tile = (selected: boolean) =>
     `relative aspect-video w-full cursor-pointer overflow-hidden rounded-lg border-2 text-left transition-colors ${
       selected ? "border-accent" : "border-border hover:border-muted"
@@ -123,7 +130,7 @@ export function BackgroundPicker({ value, onChange }: { value: BackgroundId | nu
             onClick={() => onChange(id)}
             className={tile(value === id)}
           >
-            <BackgroundScene id={id} className="absolute inset-0" />
+            <BackgroundPreview id={id} />
             <span className="absolute inset-x-0 bottom-0 truncate bg-surface px-1.5 py-0.5 text-[0.7rem] text-text">
               {t(`settings.backgrounds.${id}`)}
             </span>

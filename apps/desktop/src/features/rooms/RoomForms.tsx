@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { InstanceId, RoomAuthMode, RoomKind } from "../../bindings";
@@ -196,6 +196,16 @@ export function JoinRoomForm() {
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [touched, setTouched] = useState(false);
+  // Deep link `join/<code>`: prefill once (also when the form is already shown).
+  const pendingJoin = useNavStore((s) => s.pendingJoin);
+  useEffect(() => {
+    if (pendingJoin === null) return;
+    const next = useNavStore.getState().takeJoin();
+    if (next) {
+      setCode(next);
+      setTouched(true);
+    }
+  }, [pendingJoin]);
   const parsed = parseJoinInput(code);
   const codeError = parsed.ok ? null : parsed.error;
   const pwError = validateRoomPassword(password);
@@ -230,6 +240,7 @@ export function JoinRoomForm() {
               id={id}
               aria-describedby={d}
               invalid={inv}
+              data-testid="join-code"
               className="font-mono"
               value={code}
               placeholder={t("rooms.join.codePlaceholder")}

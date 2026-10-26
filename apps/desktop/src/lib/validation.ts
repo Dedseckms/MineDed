@@ -1,5 +1,6 @@
 // Pure form validators. Each returns an i18n key under `validation.*` or `null`.
 import type { ProxyCfg, ProxyKind } from "../bindings";
+import { extractInviteCode } from "./deepLink";
 
 export type ValidationKey = `validation.${string}`;
 
@@ -128,8 +129,9 @@ export type RegisterErrors = Partial<Record<keyof RegisterDraft, ValidationKey>>
 
 export function validateRegister(d: RegisterDraft): RegisterErrors {
   const errors: RegisterErrors = {};
-  if (d.invite.trim().length === 0) errors.invite = "validation.required";
-  else if (!/^[A-Za-z0-9_-]{4,128}$/.test(d.invite.trim())) errors.invite = "validation.invite";
+  const invite = extractInviteCode(d.invite);
+  if (invite.length === 0) errors.invite = "validation.required";
+  else if (!/^[A-Za-z0-9_-]{4,128}$/.test(invite)) errors.invite = "validation.invite";
   const nick = validateNick(d.username);
   if (nick) errors.username = nick;
   if (d.password.length === 0) errors.password = "validation.required";

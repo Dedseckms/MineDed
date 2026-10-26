@@ -384,8 +384,16 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
         link: `${ROOM_LINK_PREFIX}${code}`,
         passwordProtected: password !== null,
         localAddr: null,
+        // Like the backend: the room exists before the world is opened to LAN.
+        worldOpen: false,
       };
       emitRoom();
+      const hostRoomId = room.roomId;
+      later(tickMs * 6, () => {
+        if (room?.roomId !== hostRoomId) return;
+        room = { ...room, worldOpen: true };
+        emitRoom();
+      });
       scheduleGuest(room.roomId, 0, tickMs * 10);
       scheduleGuest(room.roomId, 1, tickMs * 30);
       return ok(structuredClone(room));

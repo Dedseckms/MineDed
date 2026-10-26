@@ -108,6 +108,20 @@ body {
   }
 }
 
+@keyframes bg-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Background cross-fade (`FADE_MS` in backgrounds.tsx). */
+.bg-fade-in {
+  animation: bg-fade-in 350ms ease-out both;
+}
+
 .bg-drift {
   animation: bg-drift 160s linear infinite;
   will-change: transform;
@@ -118,6 +132,8 @@ body {
   will-change: transform;
 }
 
+[data-light-mode="true"] .bg-fade-in,
+[data-reduce-motion="true"] .bg-fade-in,
 [data-light-mode="true"] .bg-drift,
 [data-light-mode="true"] .bg-sway,
 [data-reduce-motion="true"] .bg-drift,

@@ -12,8 +12,33 @@ import type {
   SearchQuery,
   SortBy,
 } from "../bindings";
+import type { ContentVersionRef, LocalDepIssue } from "../bindings";
 
 export const PAGE_SIZE = 12;
+
+/** Local dependency issues grouped by the jar that declares them (input order kept). */
+export function groupIssuesByFile(issues: LocalDepIssue[]): Array<[string, LocalDepIssue[]]> {
+  const map = new Map<string, LocalDepIssue[]>();
+  for (const i of issues) {
+    const list = map.get(i.fileName);
+    if (list) list.push(i);
+    else map.set(i.fileName, [i]);
+  }
+  return [...map.entries()];
+}
+
+/** Distinct suggested installs (one per project) plus their known titles. */
+export function suggestedPicks(issues: LocalDepIssue[]): { picks: ContentVersionRef[]; titles: Record<string, string> } {
+  const picks: ContentVersionRef[] = [];
+  const titles: Record<string, string> = {};
+  for (const i of issues) {
+    const s = i.suggestion;
+    if (!s || picks.some((p) => p.source === s.source && p.projectId === s.projectId)) continue;
+    picks.push(s);
+    if (i.suggestionTitle) titles[s.projectId] = i.suggestionTitle;
+  }
+  return { picks, titles };
+}
 
 /** Catalog sources the user can search: Modrinth only (CurseForge is turned off). */
 export const SEARCH_SOURCES = ["modrinth"] as const satisfies readonly ContentSourceKind[];

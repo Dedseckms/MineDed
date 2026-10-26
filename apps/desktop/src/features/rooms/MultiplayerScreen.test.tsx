@@ -53,6 +53,10 @@ describe("Multiplayer screen (mocks)", () => {
     expect(screen.getByRole("button", { name: "Copy link" })).toBeTruthy();
     expect(screen.getByText("You are the host")).toBeTruthy();
     expect(screen.queryByTestId("room-local-addr")).toBeNull();
+    // Code is shown at once; the world-open banner flips when the LAN port is found.
+    expect(screen.getByTestId("world-closed").textContent).toContain("Open to LAN");
+    expect(await screen.findByTestId("world-open", {}, { timeout: 4000 })).toBeTruthy();
+    expect(screen.queryByTestId("world-closed")).toBeNull();
 
     expect(await screen.findByText("AlexBuilder", { selector: "p" }, { timeout: 4000 })).toBeTruthy();
     expect(await screen.findByText("Direct", {}, { timeout: 4000 })).toBeTruthy();
@@ -96,6 +100,8 @@ describe("Multiplayer screen (mocks)", () => {
     expect(screen.getByText("You are a guest")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Kick/ })).toBeNull();
     expect(screen.getByText("Steve_Host")).toBeTruthy();
+    expect(screen.getByTestId("server-added").textContent).toContain("MineDed — Steve_Host");
+    expect(screen.queryByTestId("world-closed")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Leave" }));
     await confirmIn("Leave the room?", "Leave");
