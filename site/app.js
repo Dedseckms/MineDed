@@ -238,7 +238,7 @@
   }
 
   function shotSrc(id) {
-    return "screenshots/" + id + "-" + lang + ".webp";
+    return "screenshots/" + id + "-" + lang + ".webp?v=6";
   }
 
   function paintShots() {
