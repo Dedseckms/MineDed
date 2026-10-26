@@ -656,12 +656,18 @@ struct PackEnv {
     base: DirEnv,
     pack: Vec<u8>,
     exports: Arc<std::sync::atomic::AtomicUsize>,
+    /// Instance whose mod set differs from the host's.
+    bad: InstanceId,
 }
 
 #[async_trait]
 impl RoomEnv for PackEnv {
     async fn instance_sig(&self, instance: InstanceId) -> AppResult<InstanceSig> {
-        self.base.instance_sig(instance).await
+        let mut sig = self.base.instance_sig(instance).await?;
+        if instance == self.bad {
+            sig.mods_hash = "other".into();
+        }
+        Ok(sig)
     }
     async fn identity(&self) -> AppResult<Identity> {
         self.base.identity().await
@@ -693,10 +699,12 @@ async fn host_pack_roundtrip_and_attach() {
     let root = std::env::temp_dir().join(format!("lc-p2p-pack-{}", uuid::Uuid::new_v4()));
     let pack: Vec<u8> = (0..700_000u32).map(|i| (i % 253) as u8).collect();
     let exports = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let bad = InstanceId::new();
     let env = |name: &'static str, sub: &str| PackEnv {
         base: DirEnv(FakeEnv { name, mods: "m1" }, root.join(sub)),
         pack: pack.clone(),
         exports: exports.clone(),
+        bad,
     };
     let host = side_env(
         &hub_url,
@@ -743,7 +751,10 @@ async fn host_pack_roundtrip_and_attach() {
     }
     assert_eq!(exports.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-    // Attach: the server-list entry appears in the instance.
+    // A mismatching instance is refused; a matching one gets the
+    // server-list entry.
+    let err = guest.rooms.attach_instance(bad).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
     guest
         .rooms
         .attach_instance(InstanceId::new())
@@ -761,6 +772,27 @@ async fn host_pack_roundtrip_and_attach() {
         .count();
     assert_eq!(left, 0);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn join_without_instance_host_cannot_export() {
+    let (host, guest, _hub, _lookup) = direct_pair(None).await;
+    let st = guest.rooms.join("ABCD-1234", None, None).await.unwrap();
+    assert!(st.local_addr.is_some());
+    // The host's env can't export: clear error instead of a hang.
+    let err = guest
+        .rooms
+        .download_host_pack(&lc_runtime::NullSink::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.details.unwrap()["reason"], "hostExportFailed");
+    guest
+        .rooms
+        .attach_instance(InstanceId::new())
+        .await
+        .unwrap();
+    guest.rooms.leave().await.unwrap();
+    host.rooms.leave().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -925,24 +957,6 @@ async fn instance_mismatch_and_bad_codes() {
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidInput);
-    // Without an instance the guest may join (to fetch the host's pack), but
-    // attaching a mismatching instance is refused.
-    let st = guest.rooms.join("ABCD-1234", None, None).await.unwrap();
-    assert!(st.local_addr.is_some());
-    let err = guest
-        .rooms
-        .attach_instance(InstanceId::new())
-        .await
-        .unwrap_err();
-    assert_eq!(err.code, ErrorCode::Conflict);
-    // The host's env can't export: clear error instead of a hang.
-    let err = guest
-        .rooms
-        .download_host_pack(&lc_runtime::NullSink::default())
-        .await
-        .unwrap_err();
-    assert_eq!(err.details.unwrap()["reason"], "hostExportFailed");
-    guest.rooms.leave().await.unwrap();
     let err = guest
         .rooms
         .join("ZZZZ-9999", Some(InstanceId::new()), None)
