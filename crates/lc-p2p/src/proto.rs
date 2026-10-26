@@ -68,6 +68,25 @@ pub enum ControlMsg {
 pub enum StreamOpen {
     /// Guest → host: proxy to the host's LAN game port.
     Game,
+    /// Guest → host: send the hosted instance as `.mrpack`. The host answers
+    /// with one [`PackReply`] JSON line; after `Ready` exactly `size` raw
+    /// bytes follow and the stream is finished. Hosts predating this message
+    /// reset the stream without a reply.
+    Pack { version: u32 },
+}
+
+/// Version of the host pack transfer (`StreamOpen::Pack::version`).
+pub const PACK_VERSION: u32 = 1;
+
+/// Host → guest answer to [`StreamOpen::Pack`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum PackReply {
+    /// `sha256`: lowercase hex of the whole file.
+    Ready { size: u64, sha256: String },
+    /// `reason`: `unsupported` (pack version), `not_game_room`, `too_large`,
+    /// `export_failed`.
+    Error { reason: String },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -140,5 +159,22 @@ mod tests {
     fn control_msg_json() {
         let s = serde_json::to_string(&ControlMsg::Ping { nonce: 1 }).unwrap();
         assert_eq!(s, r#"{"t":"ping","nonce":1}"#);
+    }
+
+    #[test]
+    fn pack_messages_json() {
+        let s = serde_json::to_string(&StreamOpen::Pack { version: 1 }).unwrap();
+        assert_eq!(s, r#"{"t":"pack","version":1}"#);
+        assert_eq!(
+            serde_json::to_string(&StreamOpen::Game).unwrap(),
+            r#"{"t":"game"}"#
+        );
+        let r: PackReply = serde_json::from_str(r#"{"t":"error","reason":"too_large"}"#).unwrap();
+        assert_eq!(
+            r,
+            PackReply::Error {
+                reason: "too_large".into()
+            }
+        );
     }
 }

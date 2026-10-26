@@ -651,6 +651,118 @@ impl RoomEnv for DirEnv {
     }
 }
 
+/// Host env exporting a fixed pack; guest env with its own pack dir.
+struct PackEnv {
+    base: DirEnv,
+    pack: Vec<u8>,
+    exports: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl RoomEnv for PackEnv {
+    async fn instance_sig(&self, instance: InstanceId) -> AppResult<InstanceSig> {
+        self.base.instance_sig(instance).await
+    }
+    async fn identity(&self) -> AppResult<Identity> {
+        self.base.identity().await
+    }
+    fn game_dir(&self, instance: InstanceId) -> Option<std::path::PathBuf> {
+        self.base.game_dir(instance)
+    }
+    async fn export_pack(&self, _instance: InstanceId) -> AppResult<std::path::PathBuf> {
+        self.exports
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = self.pack_dir();
+        tokio::fs::create_dir_all(&dir).await?;
+        let path = dir.join(format!("host-{}.mrpack", uuid::Uuid::new_v4()));
+        tokio::fs::write(&path, &self.pack).await?;
+        Ok(path)
+    }
+    fn pack_dir(&self) -> std::path::PathBuf {
+        self.base.1.join("packs")
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_pack_roundtrip_and_attach() {
+    let (hub_url, _hub) = spawn_hub(vec![]).await;
+    let host_tweak: EndpointTweak = Arc::new(loopback_only);
+    let lookup = MemoryLookup::new();
+    let gl = lookup.clone();
+    let guest_tweak: EndpointTweak = Arc::new(move |b| loopback_only(b).address_lookup(gl.clone()));
+    let root = std::env::temp_dir().join(format!("lc-p2p-pack-{}", uuid::Uuid::new_v4()));
+    let pack: Vec<u8> = (0..700_000u32).map(|i| (i % 253) as u8).collect();
+    let exports = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let env = |name: &'static str, sub: &str| PackEnv {
+        base: DirEnv(FakeEnv { name, mods: "m1" }, root.join(sub)),
+        pack: pack.clone(),
+        exports: exports.clone(),
+    };
+    let host = side_env(
+        &hub_url,
+        base_cfg(host_tweak, vec![]),
+        Arc::new(env("Host", "host")),
+    )
+    .await;
+    let guest = side_env(
+        &hub_url,
+        base_cfg(guest_tweak, vec![]),
+        Arc::new(env("Guest", "guest")),
+    )
+    .await;
+    host.rooms
+        .create(InstanceId::new(), RoomAuthMode::Open, None)
+        .await
+        .unwrap();
+    lookup.add_endpoint_info(host.rooms.endpoint_addr().unwrap());
+
+    // Host can't download its own pack.
+    let err = host
+        .rooms
+        .download_host_pack(&lc_runtime::NullSink::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.details.unwrap()["reason"], "notGameGuest");
+
+    // Joined without an instance: no server-list entry yet.
+    let st = guest.rooms.join("ABCD-1234", None, None).await.unwrap();
+    let local = st.local_addr.unwrap();
+    let dat = root.join("guest").join("servers.dat");
+    assert!(!dat.exists());
+
+    // Two downloads, one export (cached per room).
+    for _ in 0..2 {
+        let path = guest
+            .rooms
+            .download_host_pack(&lc_runtime::NullSink::default())
+            .await
+            .unwrap();
+        assert!(path.ends_with(".mrpack"));
+        assert_eq!(std::fs::read(&path).unwrap(), pack);
+        std::fs::remove_file(&path).unwrap();
+    }
+    assert_eq!(exports.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    // Attach: the server-list entry appears in the instance.
+    guest
+        .rooms
+        .attach_instance(InstanceId::new())
+        .await
+        .unwrap();
+    let bytes = std::fs::read(&dat).unwrap();
+    let needle = format!("127.0.0.1:{}", local.rsplit(':').next().unwrap());
+    assert!(bytes.windows(needle.len()).any(|w| w == needle.as_bytes()));
+
+    guest.rooms.leave().await.unwrap();
+    host.rooms.leave().await.unwrap();
+    // The host's cached export is gone with the room.
+    let left = std::fs::read_dir(root.join("host").join("packs"))
+        .unwrap()
+        .count();
+    assert_eq!(left, 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn room_before_world_open_and_server_list() {
     let (hub_url, _hub) = spawn_hub(vec![]).await;
@@ -813,10 +925,24 @@ async fn instance_mismatch_and_bad_codes() {
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidInput);
-    // Game rooms need an instance to compare against.
-    let err = guest.rooms.join("ABCD-1234", None, None).await.unwrap_err();
-    assert_eq!(err.code, ErrorCode::InvalidInput);
-    assert_eq!(err.details.unwrap()["reason"], "instanceRequired");
+    // Without an instance the guest may join (to fetch the host's pack), but
+    // attaching a mismatching instance is refused.
+    let st = guest.rooms.join("ABCD-1234", None, None).await.unwrap();
+    assert!(st.local_addr.is_some());
+    let err = guest
+        .rooms
+        .attach_instance(InstanceId::new())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict);
+    // The host's env can't export: clear error instead of a hang.
+    let err = guest
+        .rooms
+        .download_host_pack(&lc_runtime::NullSink::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.details.unwrap()["reason"], "hostExportFailed");
+    guest.rooms.leave().await.unwrap();
     let err = guest
         .rooms
         .join("ZZZZ-9999", Some(InstanceId::new()), None)
