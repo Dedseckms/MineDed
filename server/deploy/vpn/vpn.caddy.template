@@ -1,13 +1,9 @@
 # Imported inside the relay.dedseckms.ru site block (/opt/relay/caddy/relay.caddy):
 #   import /opt/vpn/caddy/vpn.caddy
-# Rendered on the server into /opt/vpn/caddy/vpn.caddy (0600 root) with the secret
-# paths from /opt/vpn/.secrets. s-ui webPath/subPath equal these paths, so no rewrite.
-handle /__PANEL_PATH__/* {
-	request_body {
-		max_size 1MB
-	}
-	reverse_proxy 127.0.0.1:2095
-}
+# Rendered on the server into /opt/vpn/caddy/vpn.caddy (0644 root: the caddy user must read it)
+# with SUB_PATH from /opt/vpn/.secrets. s-ui subPath equals this path, so no rewrite.
+# The s-ui admin panel is NOT exposed: owner uses an SSH tunnel to 127.0.0.1:2095,
+# hub reaches the API over the docker network (http://mineded-vpn:2095/...).
 handle /__SUB_PATH__/* {
 	@write not method GET HEAD
 	respond @write 405
