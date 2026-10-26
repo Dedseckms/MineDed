@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { isDemo } from "../../api/client";
 import type { Peer } from "../../bindings";
 import {
   useSetPeerMuted,
@@ -191,7 +192,8 @@ export function VoiceControls() {
       <div className="flex flex-col gap-1.5 border-t border-border pt-3">
         <OverlayButton />
         <p className="text-xs text-muted">{t(system.data?.wayland ? "voice.overlay.hintWayland" : "voice.overlay.hint")}</p>
-        <BorderlessHelper />
+        {/* The showcase leaves room for the participants list. */}
+        {isDemo ? null : <BorderlessHelper />}
       </div>
     </Section>
   );

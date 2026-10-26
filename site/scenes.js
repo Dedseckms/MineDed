@@ -104,7 +104,7 @@
     },
     forest: {
       sky: ["#0b1330", "#1a2a55", "#2c4068"],
-      orb: { x: 64, y: 40, s: 16, color: "#e8ecf5", glow: "#9fb4e0" },
+      orb: { x: 288, y: 36, s: 16, color: "#e8ecf5", glow: "#9fb4e0" },
       stars: "#dfe6ff",
       far: [{ color: "#1d3346", base: 74, amp: 12, step: 8, seed: 2 }],
       near: [{ color: "#2a1d14", cap: "#1f4a2a", capH: 4, base: 40, amp: 8, step: 8, seed: 7 }],
@@ -131,7 +131,7 @@
     },
     ocean: {
       sky: ["#5fb7f2", "#a7dcf7", "#d8f1fb"],
-      orb: { x: 70, y: 36, s: 18, color: "#fff6c7", glow: "#ffe58a" },
+      orb: { x: 284, y: 36, s: 18, color: "#fff6c7", glow: "#ffe58a" },
       clouds: "#ffffff",
       far: [{ color: "#7fb08a", cap: "#e9d9a1", capH: 3, base: 66, amp: 6, step: 8, seed: 6 }],
       near: [
@@ -226,7 +226,9 @@
     if (sc.orb) {
       var o = sc.orb;
       back += rect(o.x - o.s * 2, o.y - o.s * 2, o.s * 4, o.s * 4, "url(#glow-" + uid + ")") +
-        rect(o.x - o.s / 2, o.y - o.s / 2, o.s, o.s, o.color);
+        rect(o.x - o.s / 2, o.y - o.s / 4, o.s, o.s / 2, o.color) +
+        rect(o.x - o.s * 3 / 8, o.y - o.s * 3 / 8, o.s * 3 / 4, o.s * 3 / 4, o.color) +
+        rect(o.x - o.s / 4, o.y - o.s / 2, o.s / 2, o.s, o.color);
     }
     var html = svg(back);
     if (sc.clouds) {
