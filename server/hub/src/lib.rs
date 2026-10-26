@@ -1,11 +1,12 @@
 //! Hub HTTP API. Routes and shapes follow `server/openapi/hub.yaml`
-//! (CONTRACT, lead). Implemented: health, rooms (+WS). Mirrors and skins are 501 stubs.
+//! (CONTRACT, lead). Implemented: health, rooms (+WS), VPN access. Mirrors and skins are 501 stubs.
 
 pub mod auth;
 pub mod error;
 pub mod ratelimit;
 pub mod rfc3339;
 pub mod rooms;
+pub mod vpn;
 mod ws;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -28,6 +29,7 @@ use crate::auth::{Identity, TokenValidator};
 use crate::error::ApiError;
 use crate::ratelimit::RateLimiter;
 use crate::rooms::{normalize_code, validate_endpoint_id, AuthMode, CreateRoom, Limits, RoomStore};
+use crate::vpn::{VpnConfig, VpnService};
 
 pub const API_PREFIX: &str = "/api/v1";
 
@@ -39,6 +41,8 @@ pub struct Config {
     pub limits: Limits,
     /// Take the client IP from `X-Real-IP` (set by the reverse proxy).
     pub trust_proxy: bool,
+    /// MineDed VPN backend; `None` = feature off (`/me/vpn` answers 503).
+    pub vpn: Option<VpnConfig>,
 }
 
 impl Default for Config {
@@ -51,6 +55,7 @@ impl Default for Config {
                 max_rooms_per_user: 3,
             },
             trust_proxy: false,
+            vpn: None,
         }
     }
 }
@@ -65,6 +70,10 @@ struct Limiters {
     join: RateLimiter<IpAddr>,
     ws: RateLimiter<IpAddr>,
     close: RateLimiter<IpAddr>,
+    /// `POST /me/vpn` per profile.
+    vpn_provision: RateLimiter<String>,
+    /// `GET /me/vpn` per profile.
+    vpn_get: RateLimiter<String>,
 }
 
 #[derive(Clone)]
@@ -73,11 +82,13 @@ pub struct AppState {
     validator: Arc<dyn TokenValidator>,
     rooms: Arc<RoomStore>,
     limiters: Arc<Limiters>,
+    vpn: Option<Arc<VpnService>>,
 }
 
 impl AppState {
     pub fn new(cfg: Config, validator: Arc<dyn TokenValidator>) -> Self {
         let rooms = Arc::new(RoomStore::new(cfg.limits));
+        let vpn = cfg.vpn.clone().map(|v| Arc::new(VpnService::new(v)));
         Self {
             cfg: Arc::new(cfg),
             validator,
@@ -88,7 +99,10 @@ impl AppState {
                 join: RateLimiter::per_minute(20, 10),
                 ws: RateLimiter::per_minute(60, 20),
                 close: RateLimiter::per_minute(30, 10),
+                vpn_provision: RateLimiter::per_hour(10, 3),
+                vpn_get: RateLimiter::per_minute(30, 10),
             }),
+            vpn,
         }
     }
 
@@ -105,6 +119,8 @@ impl AppState {
                 s.limiters.join.sweep();
                 s.limiters.ws.sweep();
                 s.limiters.close.sweep();
+                s.limiters.vpn_provision.sweep();
+                s.limiters.vpn_get.sweep();
             }
         })
     }
@@ -117,6 +133,7 @@ pub fn router(state: AppState) -> Router {
         .route("/skins", get(not_implemented).post(not_implemented))
         .route("/skins/{id}", delete(not_implemented))
         .route("/me/skin", post(not_implemented))
+        .route("/me/vpn", get(get_vpn).post(provision_vpn))
         .route("/rooms", post(create_room))
         .route("/rooms/{code}/join", post(join_room))
         .route("/rooms/{room_id}", delete(close_room))
@@ -318,6 +335,47 @@ async fn close_room(
     // Unknown/already closed room: idempotent 204.
     s.rooms.close(room_id, Some(&who.user_id), None)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Caller's VPN client key (`mc-<uuid>`) and the backend, after auth and rate limiting.
+async fn vpn_caller(
+    s: &AppState,
+    headers: &HeaderMap,
+    rl: &RateLimiter<String>,
+) -> Result<(Arc<VpnService>, String), ApiError> {
+    let who = require_identity(s, headers).await?;
+    let key = vpn::client_key(&who.user_id).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "authExpired",
+            "token has no Yggdrasil profile",
+        )
+    })?;
+    rl.check(&key).map_err(ApiError::rate_limited)?;
+    let svc = s.vpn.clone().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "network",
+            "VPN is not configured",
+        )
+    })?;
+    Ok((svc, key))
+}
+
+async fn get_vpn(State(s): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
+    let (svc, key) = vpn_caller(&s, &headers, &s.limiters.vpn_get).await?;
+    svc.get(&key)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("no VPN access for this profile"))
+}
+
+async fn provision_vpn(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let (svc, key) = vpn_caller(&s, &headers, &s.limiters.vpn_provision).await?;
+    svc.provision(&key).await.map(Json)
 }
 
 #[derive(Deserialize)]
