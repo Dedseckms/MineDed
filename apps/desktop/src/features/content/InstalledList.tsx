@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ContentKind, InstalledContent, Instance } from "../../bindings";
+import type { ContentKind, InstalledContent, Instance, LocalDepIssue } from "../../bindings";
 import { pickFiles } from "../../api/dialog";
-import { useAddLocalContent, useRemoveContent, useSetContentEnabled } from "../../api/queries";
+import { useAddLocalContent, useCheckLocalDeps, useRemoveContent, useSetContentEnabled } from "../../api/queries";
+import type { InstallRequest } from "./InstallPlanDialog";
+import { LocalDepsDialog } from "./LocalDepsDialog";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
@@ -52,8 +54,26 @@ function Row({
   );
 }
 
+/**
+ * Dependency check of local mod jars: after "Add from computer" (only the new
+ * files; the dialog opens only when something is wrong) and on demand (all mods).
+ */
+function useLocalDeps(instance: Instance) {
+  const check = useCheckLocalDeps(instance.id);
+  const [issues, setIssues] = useState<LocalDepIssue[] | null>(null);
+  const run = (fileNames: string[], quiet: boolean) => {
+    if (fileNames.length === 0 && quiet) return;
+    check.mutate(fileNames, {
+      onSuccess: (found) => {
+        if (found.length > 0 || !quiet) setIssues(found);
+      },
+    });
+  };
+  return { check, issues, run, close: () => setIssues(null) };
+}
+
 /** "Add from computer": multi-file pick → `content_add_local`; errors shown under the list. */
-function useAddLocal(instance: Instance, kind: ContentKind) {
+function useAddLocal(instance: Instance, kind: ContentKind, onAdded: (files: string[]) => void) {
   const { t } = useTranslation();
   const add = useAddLocalContent(instance.id);
   const [pickError, setPickError] = useState<unknown>(null);
@@ -64,7 +84,7 @@ function useAddLocal(instance: Instance, kind: ContentKind) {
     try {
       const exts = [...LOCAL_EXTS[kind]];
       const paths = await pickFiles([{ name: t(`dialog.${exts[0] ?? "zip"}`), extensions: exts }]);
-      if (paths.length > 0) add.mutate({ kind, paths });
+      if (paths.length > 0) add.mutate({ kind, paths }, { onSuccess: (added) => onAdded(added.map((c) => c.fileName)) });
     } catch (e) {
       setPickError(e);
     }
@@ -83,11 +103,14 @@ export function InstalledList({
   kind,
   items,
   onBrowse,
+  onInstall,
 }: {
   instance: Instance;
   kind: ContentKind;
   items: InstalledContent[];
   onBrowse: () => void;
+  /** Installs suggested dependencies through the regular plan dialog. */
+  onInstall: (r: InstallRequest) => void;
 }) {
   const { t } = useTranslation();
   const [filter, setFilter] = useState("");
@@ -96,7 +119,21 @@ export function InstalledList({
   const remove = useRemoveContent(instance.id);
   const shown = filterInstalled(items, filter);
   const enabled = items.filter((c) => c.enabled).length;
-  const addLocal = useAddLocal(instance, kind);
+  const mods = kind === "mod";
+  const deps = useLocalDeps(instance);
+  const addLocal = useAddLocal(instance, kind, (files) => {
+    if (mods) deps.run(files, true);
+  });
+  const depsDialog = (
+    <LocalDepsDialog
+      issues={deps.issues}
+      onClose={deps.close}
+      onInstall={(r) => {
+        deps.close();
+        onInstall(r);
+      }}
+    />
+  );
 
   if (items.length === 0) {
     return (
@@ -110,6 +147,7 @@ export function InstalledList({
           </div>
         </EmptyState>
         <ErrorMessage error={addLocal.error} />
+        {depsDialog}
       </div>
     );
   }
@@ -127,13 +165,24 @@ export function InstalledList({
         />
         <span className="text-xs text-muted">{t("content.enabledCount", { enabled, total: items.length })}</span>
         <div className="ml-auto flex flex-wrap gap-2">
+          {mods ? (
+            <Button
+              size="sm"
+              icon={<Icon name="shield" />}
+              loading={deps.check.isPending}
+              onClick={() => deps.run(items.map((c) => c.fileName), false)}
+            >
+              {t("content.localDeps.check")}
+            </Button>
+          ) : null}
           {addLocal.button}
           <Button size="sm" icon={<Icon name="search" />} onClick={onBrowse}>
             {t("content.browse")}
           </Button>
         </div>
       </div>
-      <ErrorMessage error={addLocal.error} />
+      <ErrorMessage error={addLocal.error ?? deps.check.error} />
+      {depsDialog}
       <div className="rounded-xl border border-border bg-surface">
         {shown.length === 0 ? (
           <p className="p-4 text-sm text-muted">{t("content.noMatches")}</p>

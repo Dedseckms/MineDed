@@ -137,6 +137,8 @@ export const useAppVersion = () =>
 export function useSaveSettings() {
   const qc = useQueryClient();
   return useMutation({
+    // Saves run one at a time, in order (no overlapping writes from quick toggles).
+    scope: { id: "settings" },
     mutationFn: async (next: Settings) => unwrap(await api.settingsSet(next)),
     onMutate: async (next) => {
       await qc.cancelQueries({ queryKey: qk.settings });
@@ -303,6 +305,13 @@ export interface AddLocalVars {
 }
 
 /** Adds own files from disk (`content_add_local`); refreshes the list and toasts the count. */
+/** Dependency check of local mod jars (`content_check_local`); nothing is cached. */
+export function useCheckLocalDeps(instance: InstanceId) {
+  return useMutation({
+    mutationFn: async (fileNames: string[]) => unwrap(await api.contentCheckLocal(instance, fileNames)),
+  });
+}
+
 export function useAddLocalContent(instance: InstanceId) {
   const qc = useQueryClient();
   return useMutation({

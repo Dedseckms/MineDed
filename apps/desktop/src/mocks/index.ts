@@ -9,6 +9,7 @@ import type {
   AppError,
   ContentSourceKind,
   InstalledContent,
+  LocalDepIssue,
   Instance,
   InstanceId,
   ResolvePlan,
@@ -517,6 +518,50 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       if (!list?.some((c) => c.fileName === fileName)) return notFound(`file ${fileName}`);
       installed[instanceId] = list.filter((c) => c.fileName !== fileName);
       return ok(null);
+    },
+
+    // Issues are derived from file names: "addon" → needs Fabric API, "old" →
+    // wants a newer Sodium, "forge" on a non-Forge instance → wrong loader,
+    // "conflict" → clashes with an installed Sodium.
+    contentCheckLocal: async (instanceId, fileNames) => {
+      await wait();
+      const inst = findInstance(instanceId);
+      if (!inst) return notFound(`instance ${instanceId}`);
+      const have = (installed[instanceId] ?? []).filter((c) => c.enabled);
+      const has = (projectId: string) => have.some((c) => c.projectId === projectId);
+      const issues: LocalDepIssue[] = [];
+      for (const fileName of fileNames) {
+        const n = fileName.toLowerCase();
+        if (!n.endsWith(".jar")) continue;
+        if (n.includes("forge") && inst.loader.kind !== "forge" && inst.loader.kind !== "neoForge") {
+          issues.push({ fileName, kind: "wrongLoader", modId: "forge", versionReq: null, suggestion: null, suggestionTitle: null });
+          continue;
+        }
+        if (n.includes("addon") && !has("P7dR8mSH")) {
+          issues.push({
+            fileName,
+            kind: "missing",
+            modId: "fabric-api",
+            versionReq: "*",
+            suggestion: { source: "modrinth", projectId: "P7dR8mSH", versionId: null },
+            suggestionTitle: "Fabric API",
+          });
+        }
+        if (n.includes("old")) {
+          issues.push({
+            fileName,
+            kind: has("AANobbMI") ? "wrongVersion" : "missing",
+            modId: "sodium",
+            versionReq: ">=0.6.0",
+            suggestion: { source: "modrinth", projectId: "AANobbMI", versionId: null },
+            suggestionTitle: "Sodium",
+          });
+        }
+        if (n.includes("conflict")) {
+          issues.push({ fileName, kind: "conflict", modId: "sodium", versionReq: null, suggestion: null, suggestionTitle: null });
+        }
+      }
+      return ok(issues);
     },
 
     contentResolve: async (instanceId, picks) => {

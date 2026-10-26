@@ -2,13 +2,15 @@
 // (blocky step paths and pixel rects, no images). Layers: sky (static),
 // clouds (drift), far hills (sway) and the foreground (static). Animations are
 // CSS transforms on HTML layers only, so they stay on the compositor.
-import { type ReactNode, useId, useMemo } from "react";
+import { type ReactNode, memo, useEffect, useId, useMemo, useState } from "react";
 
 import type { BackgroundId } from "../../lib/backdrop";
 
 const W = 320;
 const H = 180;
 const VIEW = `0 0 ${W} ${H}`;
+/** Cross-fade length; keep in sync with `.bg-fade-in` in `styles.css`. */
+export const FADE_MS = 350;
 
 interface Hill {
   color: string;
@@ -348,7 +350,46 @@ export function BackgroundScene({ id, animate = false, className = "" }: { id: B
   );
 }
 
-/** Full-window background behind the shell (fixed, below everything). */
+/** Static previews (settings tiles): re-rendered only when the id changes. */
+export const BackgroundPreview = memo(function BackgroundPreview({ id }: { id: BackgroundId }) {
+  return <BackgroundScene id={id} className="absolute inset-0" />;
+});
+
+/**
+ * Layers to keep mounted when the background changes from `shown` to `next`:
+ * at most the outgoing one and the new one. A switch during a fade drops the
+ * half-faded scene in between (it becomes the outgoing one at full opacity).
+ */
+export function nextLayers(shown: BackgroundId, next: BackgroundId, animate: boolean): { prev: BackgroundId | null; cur: BackgroundId } {
+  return { prev: animate && shown !== next ? shown : null, cur: next };
+}
+
+/**
+ * Full-window background behind the shell (fixed, below everything). Changes
+ * cross-fade with a CSS animation (compositor only); with reduced motion the
+ * scene is swapped instantly. Never more than two scenes are mounted.
+ */
 export function AppBackground({ id, animate }: { id: BackgroundId; animate: boolean }) {
-  return <BackgroundScene id={id} animate={animate} className="fixed inset-0 -z-10" />;
+  const [layers, setLayers] = useState<{ prev: BackgroundId | null; cur: BackgroundId }>({ prev: null, cur: id });
+  // Adjust state during render (no extra commit with three scenes).
+  if (layers.cur !== id) setLayers(nextLayers(layers.cur, id, animate));
+  const prev = layers.cur === id ? layers.prev : null;
+  // Unmount the outgoing scene once the fade is over (a timer, not
+  // `animationend`: that never fires when CSS turns animations off).
+  useEffect(() => {
+    if (!prev) return;
+    const t = setTimeout(() => setLayers((l) => (l.cur === id ? { prev: null, cur: id } : l)), FADE_MS + 50);
+    return () => clearTimeout(t);
+  }, [prev, id]);
+  return (
+    <div aria-hidden className="pointer-events-none fixed inset-0 -z-10" data-testid="app-background">
+      {prev ? <BackgroundScene key={`prev-${prev}`} id={prev} className="absolute inset-0" /> : null}
+      <BackgroundScene
+        key={`cur-${id}`}
+        id={id}
+        animate={animate}
+        className={`absolute inset-0 ${prev ? "bg-fade-in" : ""}`}
+      />
+    </div>
+  );
 }

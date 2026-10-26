@@ -149,9 +149,11 @@
       "mode": "Sign in or register",
       "register": "Register",
       "invite": "Invite code",
-      "inviteHint": "Get it from the server owner",
+      "inviteHint": "Invite code or link from the server owner",
       "confirm": "Repeat password",
-      "noServer": "Server is not configured — set its address in Settings"
+      "noServer": "Server is not configured — set its address in Settings",
+      "paste": "Paste",
+      "pasteFailed": "Couldn't read the clipboard — paste manually (Ctrl+V)"
     }
   },
   "settings": {
@@ -558,6 +560,26 @@
         "iris": "Iris",
         "oculus": "Oculus"
       }
+    },
+    "localDeps": {
+      "title": "Mod dependencies",
+      "intro": "These files have dependency problems:",
+      "ok": "No dependency problems found.",
+      "check": "Check dependencies",
+      "install": "Install {{title}}",
+      "installAll": "Install everything needed ({{n}})",
+      "kind": {
+        "missing": "Missing",
+        "wrongVersion": "Wrong version",
+        "conflict": "Conflict",
+        "wrongLoader": "Wrong loader"
+      },
+      "detail": {
+        "missing": "Requires {{mod}} ({{req}})",
+        "wrongVersion": "Requires {{mod}} {{req}}",
+        "conflict": "Incompatible with the installed {{mod}}",
+        "wrongLoader": "Built for {{mod}}, not for this instance"
+      }
     }
   },
   "skins": {
@@ -702,7 +724,7 @@
     "passwordHint": "Without a password anyone with the code can join.",
     "create": {
       "title": "Open world to friends",
-      "intro": "Create a room, send the code to friends, then open your world to LAN in game (Esc → Open to LAN).",
+      "intro": "Create a room — the code appears right away. Send it to friends and open your world to LAN in game (Esc → Open to LAN): the launcher picks it up by itself.",
       "submit": "Create room"
     },
     "authMode": {
@@ -749,7 +771,11 @@
       "voiceGuestTitle": "Voice room",
       "voiceHostHint": "Send the code to friends; join the server in game as usual.",
       "voiceGuestHint": "Join the server in game as usual — voice and chat work here.",
-      "voiceLeaveMessage": "You will leave the voice and chat of this room."
+      "voiceLeaveMessage": "You will leave the voice and chat of this room.",
+      "openWorld": "Open your world to LAN: Esc → Open to LAN. Friends can't join until the world is open.",
+      "worldOpen": "World is open — friends can connect.",
+      "serverAdded": "Server “MineDed — {{host}}” was added to the game's server list.",
+      "serverAddedGeneric": "Server “MineDed — …” was added to the game's server list."
     },
     "peers": {
       "title": "Players ({{n}})",

@@ -66,8 +66,27 @@ function RoomHeader({ room, onLeave }: { room: RoomState; onLeave: () => void })
         <CopyButton value={room.link} label={t("common.copyLink")} />
       </div>
 
+      {host && !voice && room.worldOpen != null ? (
+        room.worldOpen ? (
+          <div role="status" data-testid="world-open" className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm">
+            <Icon name="check" className="size-4 shrink-0 text-accent" />
+            {t("rooms.room.worldOpen")}
+          </div>
+        ) : (
+          <div role="status" data-testid="world-closed" className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm">
+            <Icon name="alert" className="size-4 shrink-0 text-warning" />
+            {t("rooms.room.openWorld")}
+          </div>
+        )
+      ) : null}
+
       {room.localAddr ? (
         <div className="flex flex-col gap-2 rounded-lg border border-accent/30 bg-accent/10 p-3">
+          <p className="text-sm" data-testid="server-added">
+            {room.peers.length === 1 && room.peers[0]
+              ? t("rooms.room.serverAdded", { host: room.peers[0].name })
+              : t("rooms.room.serverAddedGeneric")}
+          </p>
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex min-w-0 flex-1 flex-col">
               <span className="text-xs text-muted">{t("rooms.room.localAddr")}</span>

@@ -193,6 +193,18 @@ details.setup { margin-top: 1.5em; background: transparent; }
 details.setup > summary { color: var(--muted); }
 details.setup[open] > summary { margin-bottom: 0.5em; }
 
+/* ---- Launcher links, advanced (technical) settings ---- */
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
+.btn-primary:hover { color: var(--accent-fg, #fff); background: color-mix(in srgb, var(--accent) 88%, #000); }
+.btn-small { min-height: 34px; padding: 6px 12px; font-size: 0.9rem; white-space: nowrap; }
+.launcher-cta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 0.5em 0 1em; }
+.launcher-cta p { margin: 0; flex: 1 1 16em; }
+.launcher-inline { margin-left: 0.6em; font-size: 0.9em; white-space: nowrap; }
+details.advanced { background: transparent; }
+details.advanced > summary { color: var(--muted); }
+details.advanced[open] > summary { margin-bottom: 0.5em; }
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; word-break: break-all; }
+
 fieldset { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.6em 1em 0.8em; margin: 0.8em 0; }
 legend { padding: 0 0.4em; font-weight: 600; }
 

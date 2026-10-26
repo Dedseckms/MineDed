@@ -8,6 +8,7 @@ import { useAccounts, useAppVersion, useSettings } from "../../api/queries";
 import { backdropFlags } from "../../lib/backdrop";
 import { usePttSoundCue } from "../../hooks/usePttSoundCue";
 import { AppBackground } from "../appearance/backgrounds";
+import { useDeepLinks } from "../../hooks/useDeepLinks";
 import { Icon, type IconName } from "../../components/ui/Icon";
 import { Toaster } from "../../components/ui/Toaster";
 import { Badge } from "../../components/ui/feedback";
@@ -166,6 +167,7 @@ export function AppShell() {
   useApplyAppearance();
   useBackendSync();
   usePttSoundCue();
+  useDeepLinks();
   const { reduced, light } = useMotionPrefs();
   const settings = useSettings();
   const { background } = backdropFlags(settings.data, light);

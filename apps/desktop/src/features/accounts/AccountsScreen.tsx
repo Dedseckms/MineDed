@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { Account } from "../../bindings";
@@ -18,7 +18,9 @@ import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
 import { Field, Segmented, TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
+import { extractInviteCode } from "../../lib/deepLink";
 import { isNotImplemented } from "../../lib/errors";
+import { useNavStore } from "../../stores/navStore";
 import { NICK_MAX, type RegisterDraft, hasErrors, validateNick, validateRegister } from "../../lib/validation";
 import { SkinFlat } from "../skins/SkinPreview";
 
@@ -95,7 +97,12 @@ function SoonNotice() {
 
 function YggdrasilSection() {
   const { t } = useTranslation();
-  const [mode, setMode] = useState<YggMode>("login");
+  // Deep link `invite/<code>` opens the registration form.
+  const pendingInvite = useNavStore((s) => s.pendingInvite);
+  const [mode, setMode] = useState<YggMode>(pendingInvite !== null ? "register" : "login");
+  useEffect(() => {
+    if (pendingInvite !== null) setMode("register");
+  }, [pendingInvite]);
   return (
     <div className="flex flex-col gap-4">
       <Segmented<YggMode>
@@ -125,6 +132,26 @@ function RegisterForm() {
     register.reset();
   };
   const err = (k: keyof RegisterDraft) => (touched ? (errors[k] ?? null) : null);
+  const [pasteFailed, setPasteFailed] = useState(false);
+  const pendingInvite = useNavStore((s) => s.pendingInvite);
+  useEffect(() => {
+    if (pendingInvite === null) return;
+    const code = useNavStore.getState().takeInvite();
+    if (code) {
+      setDraft((d) => ({ ...d, invite: code }));
+      register.reset();
+    }
+    // Only the prefill matters here (`register` is a fresh object each render).
+  }, [pendingInvite]);
+  const paste = async () => {
+    setPasteFailed(false);
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text.trim()) set({ invite: extractInviteCode(text) });
+    } catch {
+      setPasteFailed(true);
+    }
+  };
 
   return (
     <form
@@ -134,7 +161,7 @@ function RegisterForm() {
         setTouched(true);
         if (hasErrors(errors) || !server) return;
         register.mutate(
-          { apiRoot: server.apiRoot, invite: draft.invite.trim(), username: draft.username, password: draft.password },
+          { apiRoot: server.apiRoot, invite: extractInviteCode(draft.invite), username: draft.username, password: draft.password },
           {
             onSettled: () => setDraft((d) => ({ ...d, password: "", confirm: "" })),
             onSuccess: () => {
@@ -146,9 +173,26 @@ function RegisterForm() {
       }}
     >
       {unavailable ? <SoonNotice /> : null}
-      <Field label={t("accounts.yggdrasil.invite")} error={err("invite")} hint={t("accounts.yggdrasil.inviteHint")}>
+      <Field
+        label={t("accounts.yggdrasil.invite")}
+        error={err("invite") ?? (pasteFailed ? "accounts.yggdrasil.pasteFailed" : null)}
+        hint={t("accounts.yggdrasil.inviteHint")}
+      >
         {(id, d, inv) => (
-          <TextInput id={id} aria-describedby={d} invalid={inv} value={draft.invite} onChange={(e) => set({ invite: e.target.value })} />
+          <div className="flex gap-2">
+            <TextInput
+              id={id}
+              aria-describedby={d}
+              invalid={inv}
+              className="flex-1"
+              data-testid="invite-input"
+              value={draft.invite}
+              onChange={(e) => set({ invite: e.target.value })}
+            />
+            <Button type="button" icon={<Icon name="copy" />} onClick={() => void paste()}>
+              {t("accounts.yggdrasil.paste")}
+            </Button>
+          </div>
         )}
       </Field>
       <Field label={t("accounts.nick")} error={err("username")} hint={t("accounts.nickHint")}>
