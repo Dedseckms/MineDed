@@ -26,6 +26,9 @@ pub const HELPER_ARG: &str = "--lc-vpn-tun-helper";
 pub(crate) const EXIT_DECLINED: i32 = 2;
 #[cfg(windows)]
 pub(crate) const EXIT_SPAWN_FAILED: i32 = 3;
+/// Helper exit code: mihomo is not the pinned build (passed through the wrapper).
+#[cfg(windows)]
+pub(crate) const EXIT_BAD_BINARY: i32 = 67;
 
 /// Entry point for the CLI hook in the app's `main`: when the process was
 /// started as the TUN helper, runs it to completion and returns its exit code.
@@ -124,7 +127,7 @@ fn ps_literal(s: &str) -> String {
 
 /// Script that starts `launcher HELPER_ARG ...` elevated and waits for it.
 /// Exit codes: 0 helper finished, [`EXIT_DECLINED`] UAC declined,
-/// [`EXIT_SPAWN_FAILED`] anything else.
+/// [`EXIT_SPAWN_FAILED`] anything else, [`EXIT_BAD_BINARY`] passed through.
 #[cfg(windows)]
 pub(crate) fn wrapper_script(launcher: &Path, h: &HelperArgs) -> String {
     let mut args = vec![quote_arg(HELPER_ARG)];
@@ -140,6 +143,7 @@ pub(crate) fn wrapper_script(launcher: &Path, h: &HelperArgs) -> String {
          \x20 exit {EXIT_SPAWN_FAILED}\n\
          }}\n\
          $p.WaitForExit()\n\
+         if ($p.ExitCode -eq {EXIT_BAD_BINARY}) {{ exit {EXIT_BAD_BINARY} }}\n\
          exit 0\n",
         exe = ps_literal(&launcher.to_string_lossy()),
         args = ps_literal(&args.join(" ")),
@@ -188,7 +192,7 @@ mod helper {
 
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-    use super::HelperArgs;
+    use super::{HelperArgs, EXIT_BAD_BINARY};
 
     const POLL: Duration = Duration::from_millis(250);
 
@@ -220,6 +224,19 @@ mod helper {
         let Ok(log2) = log.try_clone() else {
             return 65;
         };
+        // Verify through a handle that denies writers and renames until mihomo
+        // is spawned, so the checked file is the one that runs elevated.
+        use std::os::windows::fs::OpenOptionsExt;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.read(true).share_mode(1); // FILE_SHARE_READ
+        let Ok(mut lock) = opts.open(&a.mihomo) else {
+            return EXIT_BAD_BINARY;
+        };
+        if crate::binary::verify_exe_file(&mut lock, &a.mihomo, crate::binary::pinned_exe_sha256())
+            .is_err()
+        {
+            return EXIT_BAD_BINARY;
+        }
         use std::os::windows::process::CommandExt;
         let child = Command::new(&a.mihomo)
             .arg("-d")
@@ -232,6 +249,7 @@ mod helper {
             .stderr(Stdio::from(log2))
             .creation_flags(0x0800_0000)
             .spawn();
+        drop(lock);
         let Ok(mut child) = child else {
             return 66;
         };
@@ -283,6 +301,11 @@ pub(crate) async fn linux_prepare(src: &Path, dir: &Path) -> AppResult<std::path
             .await
             .map_err(|e| io(e, &target))?;
     }
+    // Only the pinned build ever gets capabilities.
+    let t = target.clone();
+    tokio::task::spawn_blocking(move || crate::binary::verify_exe(&t))
+        .await
+        .map_err(|e| AppError::internal(format!("verify task failed: {e}")))??;
     if has_caps(&target).await == Some(true) {
         return Ok(target);
     }

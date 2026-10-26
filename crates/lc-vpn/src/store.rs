@@ -30,6 +30,10 @@ pub(crate) struct Stored {
     /// Programs routed in `VpnMode::Apps`.
     #[serde(default)]
     pub apps: Vec<VpnApp>,
+    /// Mode the user had on before a restart that was not resumed
+    /// automatically (`apps` needs a UAC/pkexec prompt).
+    #[serde(default)]
+    pub resume: Option<VpnMode>,
 }
 
 fn mode_off() -> VpnMode {
@@ -45,6 +49,7 @@ impl Default for Stored {
             selected: None,
             updated: None,
             apps: Vec::new(),
+            resume: None,
         }
     }
 }
@@ -165,6 +170,7 @@ mod tests {
                 process: "Telegram.exe".into(),
                 path: None,
             }],
+            resume: Some(VpnMode::Apps),
         };
         f.save_state(&s).unwrap();
         assert!(f.load_state() == s);

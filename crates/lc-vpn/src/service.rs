@@ -145,20 +145,25 @@ impl MihomoVpn {
     }
 
     /// Re-applies the persisted mode at app start (starts mihomo if the VPN
-    /// was on). Failures are kept in `state().error` and returned; a failed
-    /// `apps` mode (e.g. UAC declined) falls back to off.
+    /// was on). Failures are kept in `state().error` and returned.
+    /// `apps` mode is never elevated at startup: it is restored as off and
+    /// remembered in the store (`resume`), so one click turns it on again.
     pub async fn restore(&self) -> AppResult<()> {
         let mode = self.shared().store.mode;
+        if mode == VpnMode::Apps {
+            {
+                let mut s = self.shared();
+                s.store.mode = VpnMode::Off;
+                s.store.resume = Some(VpnMode::Apps);
+                s.error = None;
+            }
+            return self.save();
+        }
         if mode == VpnMode::Off || self.shared().proxies.is_empty() {
             return Ok(());
         }
         let _op = self.inner.op.lock().await;
-        let res = start_locked(&self.inner, mode, &NullSink::default()).await;
-        if res.is_err() && mode == VpnMode::Apps {
-            self.shared().store.mode = VpnMode::Off;
-            self.save()?;
-        }
-        res
+        start_locked(&self.inner, mode, &NullSink::default()).await
     }
 
     /// Stops mihomo and waits for it to exit. Call on app exit.
@@ -503,6 +508,12 @@ fn elevated_error(code: Option<i32>, fallback: AppError) -> AppError {
             "cannot start the elevated VPN helper",
         )
         .detail("reason", "helperFailed"),
+        Some(tun::EXIT_BAD_BINARY) => AppError::new(
+            ErrorCode::HashMismatch,
+            "mihomo executable does not match the pinned build; refusing to run it with \
+             elevated rights",
+        )
+        .detail("reason", "binaryMismatch"),
         _ => fallback,
     }
 }
@@ -549,6 +560,13 @@ async fn spawn_mihomo(
         None
     };
     let elevated = tun && cfg!(windows);
+    if elevated {
+        // Fail with a clear error before the UAC prompt; the helper re-checks.
+        let e = exe.clone();
+        tokio::task::spawn_blocking(move || binary::verify_exe(&e))
+            .await
+            .map_err(|e| AppError::internal(format!("verify task failed: {e}")))??;
+    }
     let secret = random_secret()?;
     // Ports may be grabbed between probing and mihomo's bind: retry (but
     // never ask for admin rights twice).
@@ -922,7 +940,11 @@ impl VpnController for MihomoVpn {
                 return Err(e);
             }
         }
-        self.shared().store.mode = mode;
+        {
+            let mut s = self.shared();
+            s.store.mode = mode;
+            s.store.resume = None;
+        }
         self.save()?;
         Ok(Self::build_state(&self.shared()))
     }
@@ -1152,6 +1174,21 @@ mod tests {
         assert!(v.set_mode(VpnMode::Apps).await.is_err());
         assert_eq!(v.state().await.unwrap().mode, VpnMode::Off);
         assert_eq!(vpn(&paths).state().await.unwrap().mode, VpnMode::Off);
+
+        // Saved apps mode is not elevated at startup: off, remembered.
+        v.shared().store.mode = VpnMode::Apps;
+        v.save().unwrap();
+        let again = vpn(&paths);
+        again.restore().await.unwrap();
+        let st = again.state().await.unwrap();
+        assert_eq!((st.mode, st.running, st.error), (VpnMode::Off, false, None));
+        let stored = Files::new(&paths).load_state();
+        assert_eq!(
+            (stored.mode, stored.resume),
+            (VpnMode::Off, Some(VpnMode::Apps))
+        );
+        again.set_mode(VpnMode::Off).await.unwrap();
+        assert_eq!(Files::new(&paths).load_state().resume, None);
         let _ = std::fs::remove_dir_all(paths.root());
     }
 

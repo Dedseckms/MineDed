@@ -25,6 +25,10 @@ pub(crate) enum Packing {
 pub(crate) struct Asset {
     pub name: &'static str,
     pub sha256: &'static str,
+    /// SHA-256 of the unpacked executable (= the bundled sidecar fetched by
+    /// `apps/desktop/src-tauri/binaries/fetch-mihomo.*`). Checked before
+    /// mihomo gets admin rights / capabilities.
+    pub exe_sha256: &'static str,
     pub size: u64,
     pub packing: Packing,
 }
@@ -37,6 +41,7 @@ const ASSETS: &[(&str, &str, Asset)] = &[
         Asset {
             name: "mihomo-windows-amd64-compatible-v1.19.33.zip",
             sha256: "7aaf636a4f2172dcd8ec34ac4f52797b059195e5afd6409508c963e545f8864d",
+            exe_sha256: "926bfea2ce48a247d6a7ce4cf641980e416202d5e40fe4ee5c949089ace0e197",
             size: 22_543_546,
             packing: Packing::Zip,
         },
@@ -47,6 +52,7 @@ const ASSETS: &[(&str, &str, Asset)] = &[
         Asset {
             name: "mihomo-windows-arm64-v1.19.33.zip",
             sha256: "a2a26869a14634c49f3fbcecc593b498ed8591fbdd7616b24475b3d60b148da3",
+            exe_sha256: "6f6e471b2fea55c54c0d98fc4b559fb06627456ed50febaf7a5572508b225529",
             size: 20_212_418,
             packing: Packing::Zip,
         },
@@ -57,6 +63,7 @@ const ASSETS: &[(&str, &str, Asset)] = &[
         Asset {
             name: "mihomo-linux-amd64-compatible-v1.19.33.gz",
             sha256: "386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6",
+            exe_sha256: "817f50b3ac6a8b1c4360c5cf2961906057f3a883d970ebbcb0028a01632b620f",
             size: 22_893_972,
             packing: Packing::Gzip,
         },
@@ -67,6 +74,7 @@ const ASSETS: &[(&str, &str, Asset)] = &[
         Asset {
             name: "mihomo-linux-arm64-v1.19.33.gz",
             sha256: "ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187",
+            exe_sha256: "8c73570d9a5f388bc2f58eee0b347ccfab84fb3cf1a0f8f2cf5eac7005fbcdc0",
             size: 20_824_326,
             packing: Packing::Gzip,
         },
@@ -81,6 +89,47 @@ pub(crate) fn asset_for(os: &str, arch: &str) -> Option<Asset> {
         .iter()
         .find(|(o, a, _)| *o == os && *a == arch)
         .map(|(_, _, asset)| *asset)
+}
+
+/// Pinned executable digest for this platform.
+pub(crate) fn pinned_exe_sha256() -> Option<&'static str> {
+    asset_for(std::env::consts::OS, std::env::consts::ARCH).map(|a| a.exe_sha256)
+}
+
+/// Refuses an executable that is not the pinned mihomo build. Reads through
+/// `file` so the caller can keep it open (locked against writes) until spawn.
+pub(crate) fn verify_exe_file(
+    file: &mut std::fs::File,
+    path: &Path,
+    expected: Option<&str>,
+) -> AppResult<()> {
+    let refuse = |actual: String| {
+        AppError::new(
+            ErrorCode::HashMismatch,
+            "mihomo executable does not match the pinned build; refusing to run it with \
+             elevated rights (reinstall the launcher or delete the file to re-download it)",
+        )
+        .detail("path", path.display().to_string())
+        .detail("version", MIHOMO_VERSION)
+        .detail("actualSha256", actual)
+    };
+    let Some(expected) = expected else {
+        return Err(refuse(String::new()));
+    };
+    let mut h = Sha256::new();
+    std::io::copy(file, &mut h).map_err(|e| io_err(e, path))?;
+    let actual = hex::encode(h.finalize());
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(refuse(actual))
+    }
+}
+
+/// [`verify_exe_file`] against the pinned digest of this platform.
+pub(crate) fn verify_exe(path: &Path) -> AppResult<()> {
+    let mut f = std::fs::File::open(path).map_err(|e| io_err(e, path))?;
+    verify_exe_file(&mut f, path, pinned_exe_sha256())
 }
 
 pub(crate) fn exe_name() -> &'static str {
@@ -341,6 +390,25 @@ mod tests {
                 .all(|u| u.scheme() == "https" && u.as_str().ends_with(a.name)));
         }
         assert!(asset_for("macos", "x86_64").is_none());
+        assert!(ASSETS.iter().all(|(_, _, a)| a.exe_sha256.len() == 64));
+    }
+
+    #[test]
+    fn exe_pin_refuses_foreign_binaries() {
+        let dir = tmp("pin");
+        let p = dir.join("mihomo");
+        std::fs::write(&p, b"MZ-binary").unwrap();
+        let good = hex::encode(Sha256::digest(b"MZ-binary"));
+        let mut f = std::fs::File::open(&p).unwrap();
+        verify_exe_file(&mut f, &p, Some(&good)).unwrap();
+        let mut f = std::fs::File::open(&p).unwrap();
+        let err = verify_exe_file(&mut f, &p, Some(&"0".repeat(64))).unwrap_err();
+        assert_eq!(err.code, ErrorCode::HashMismatch);
+        let mut f = std::fs::File::open(&p).unwrap();
+        assert!(verify_exe_file(&mut f, &p, None).is_err());
+        // A random file is never the pinned build.
+        assert_eq!(verify_exe(&p).unwrap_err().code, ErrorCode::HashMismatch);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -356,6 +424,7 @@ mod tests {
         let asset = Asset {
             name: "a.gz",
             sha256: digest,
+            exe_sha256: "",
             size: archive_bytes.len() as u64,
             packing: Packing::Gzip,
         };
@@ -404,6 +473,7 @@ mod tests {
         let asset = Asset {
             name: "m.gz",
             sha256: digest,
+            exe_sha256: "",
             size: good.len() as u64,
             packing: Packing::Gzip,
         };
