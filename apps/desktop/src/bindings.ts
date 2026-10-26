@@ -48,6 +48,8 @@ export const commands = {
 	accountSetDefault: (id: AccountId) => typedError<null, AppError>(__TAURI_INVOKE("account_set_default", { id })),
 	skinLibrary: () => typedError<Skin[], AppError>(__TAURI_INVOKE("skin_library")),
 	skinAdd: (pngPath: string, name: string, model: SkinModel) => typedError<Skin, AppError>(__TAURI_INVOKE("skin_add", { pngPath, name, model })),
+	/**  Downloads a skin by URL or nickname for preview (not added to the library). */
+	skinFetchRemote: (source: string) => typedError<RemoteSkin, AppError>(__TAURI_INVOKE("skin_fetch_remote", { source })),
 	skinRemove: (id: SkinId) => typedError<null, AppError>(__TAURI_INVOKE("skin_remove", { id })),
 	skinApply: (account: AccountId, skin: SkinId) => typedError<null, AppError>(__TAURI_INVOKE("skin_apply", { account, skin })),
 	capeList: (account: AccountId) => typedError<Cape[], AppError>(__TAURI_INVOKE("cape_list", { account })),
@@ -462,6 +464,16 @@ export type ProxyCfg = {
 };
 
 export type ProxyKind = "http" | "socks5";
+
+/**  A skin downloaded for preview by `SkinService::fetch_remote`, not yet in the library. */
+export type RemoteSkin = {
+	/**  Cached PNG; pass it to `SkinService::add`. */
+	localPath: string,
+	/**  Guessed from the source (profile metadata) or the PNG's arm pixels. */
+	model: SkinModel,
+	/**  Nickname or file name, for the library entry. */
+	suggestedName: string,
+};
 
 /**  Result of dependency resolution; confirmed by the user, then installed. */
 export type ResolvePlan = {
