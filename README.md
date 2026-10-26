@@ -1,17 +1,44 @@
+<div align="center">
+
+<img src="apps/desktop/public/logo.svg" width="112" alt="MineUP">
+
 # MineUP
 
-Кроссплатформенный (Windows / Linux) лаунчер Minecraft: все версии игры, Fabric / Quilt / Forge / NeoForge, моды и готовые сборки из Modrinth, свой сервер скинов, мультиплеер по коду комнаты, голосовой чат и встроенный VPN на случай блокировок.
+**Бесплатный лаунчер Minecraft для игры с друзьями — без аккаунта Microsoft, без аренды сервера, даже при блокировках.**
 
-[Сайт Лаунчера](https://mineup.dedseckms.ru/)
+*Free open-source Minecraft launcher: mods, skins, server-free multiplayer, voice chat and a built-in VPN.*
+
+[![Release](https://img.shields.io/github/v/release/Dedseckms/MineUP?style=for-the-badge&color=3fb950&label=версия)](https://github.com/Dedseckms/MineUP/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Dedseckms/MineUP/total?style=for-the-badge&color=2f81f7&label=загрузки)](https://github.com/Dedseckms/MineUP/releases)
+[![Platforms](https://img.shields.io/badge/Windows%20%7C%20Linux-555?style=for-the-badge&logo=linux&logoColor=white)](#установка)
+[![License](https://img.shields.io/github/license/Dedseckms/MineUP?style=for-the-badge&color=8957e5)](LICENSE)
+
+### [⬇ Скачать](https://github.com/Dedseckms/MineUP/releases/latest) · [🌐 Сайт](https://mineup.dedseckms.ru/) · [🚀 Быстрый старт](#быстрый-старт)
+
+<img src="site/screenshots/play-ru.webp" width="860" alt="Экран «Играть»">
+
+</div>
+
+## Возможности
+
+| | |
+|---|---|
+| 🎮 **Все версии и загрузчики** | Vanilla, Fabric, Quilt, Forge, NeoForge — ставятся в один клик, Java подбирается сама |
+| 🧩 **Моды и сборки** | Каталог Modrinth: моды, шейдеры, ресурспаки и готовые сборки с зависимостями и обновлениями |
+| 👕 **Свои скины** | Собственный сервер скинов и плащей с 3D-превью — друзья видят ваш скин в игре |
+| 🌍 **Мультиплеер без сервера** | Открой мир друзьям по коду комнаты: P2P-шифрование, relay на запас, без проброса портов |
+| 🎙 **Голос и чат** | Встроенный голосовой и текстовый чат, push-to-talk, окно поверх игры |
+| 🛡 **Работает при блокировках** | Встроенный VPN (VLESS / mihomo), зеркала и умная маршрутизация |
+| 🥔 **Слабые ПК** | Пресеты оптимизации: моды, память, флаги JVM и настройки графики |
+| 🔄 **Автообновления** | Подписанные обновления с GitHub или зеркала |
 
 ## Скриншоты
 
-| ![Играть](site/screenshots/play-ru.webp) | ![Сборки](site/screenshots/instances-ru.webp) |
+| | |
 |---|---|
-| ![Каталог модов](site/screenshots/catalog-ru.webp) | ![Каталог сборок](site/screenshots/modpacks-ru.webp) |
-| ![Скины в 3D](site/screenshots/skins-ru.webp) | ![Комната, голос и чат](site/screenshots/multiplayer-ru.webp) |
-| ![VPN](site/screenshots/vpn-ru.webp) | ![Внешний вид](site/screenshots/settings-ru.webp) |
-
+| ![Сборки](site/screenshots/instances-ru.webp) | ![Каталог модов](site/screenshots/catalog-ru.webp) |
+| ![Каталог сборок](site/screenshots/modpacks-ru.webp) | ![Скины в 3D](site/screenshots/skins-ru.webp) |
+| ![Комната, голос и чат](site/screenshots/multiplayer-ru.webp) | ![VPN](site/screenshots/vpn-ru.webp) |
 ## Установка
 
 Скачайте установщик из [Releases](https://github.com/Dedseckms/MineUP/releases/latest):
