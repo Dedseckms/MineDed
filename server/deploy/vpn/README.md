@@ -16,9 +16,12 @@ Mirror of `/opt/vpn/DEPLOY.md` without secrets.
 - Per-user clients, 256 GiB (274877906944 B) each; `globalReset = "0 0 1 * *"` (1st of every month,
   `timeLocation = Europe/Moscow`) zeroes usage and re-enables depleted clients. A client over quota is
   disabled by the deplete job: auth fails, its subscription URL returns 400.
-- Panel `127.0.0.1:2095`, subscription server `127.0.0.1:2096`; exposed only via host Caddy at secret
-  paths under `relay.dedseckms.ru` (`vpn.caddy.template` -> `/opt/vpn/caddy/vpn.caddy`, imported in the
-  relay site block of `/opt/relay/caddy/relay.caddy`). s-ui `webPath`/`subPath` equal those paths.
+- Subscription server `127.0.0.1:2096`, exposed only via host Caddy at the secret `subPath` under
+  `relay.dedseckms.ru` (`vpn.caddy.template` -> `/opt/vpn/caddy/vpn.caddy`, imported in the relay site
+  block of `/opt/relay/caddy/relay.caddy`).
+- Panel `127.0.0.1:2095` is NOT published (removed from Caddy 2026-10-26). Owner access via SSH tunnel:
+  `ssh -i %USERPROFILE%\.ssh\mineded_vps -L 2095:127.0.0.1:2095 root@31.59.192.133`, then
+  `http://127.0.0.1:2095/<PANEL_PATH>/`. hub uses the docker network (see API below).
 - Subscription per client: `https://relay.dedseckms.ru/<subPath>/<client name>` (base64 links),
   `?format=clash` (mihomo), `?format=json` (sing-box). The client `name` is a random id (`u<32 hex>`)
   and acts as the subscription secret; `remark` is the human name.
@@ -59,6 +62,9 @@ hub keys clients by `remark = mc-<undashed profile uuid>` (the random `name` sta
 6. `ufw allow 8443/tcp; ufw allow 8443/udp`; install and enable `mineded-vpn-cert.path`; cron backup.
 
 ## Rollback
+
+- Re-publish panel: restore `/opt/vpn/backups/vpn.caddy.20261026-111359.bak` to
+  `/opt/vpn/caddy/vpn.caddy` (0644), `caddy validate --config /etc/caddy/Caddyfile`, `systemctl reload caddy`.
 
 - Caddy: restore `/opt/vpn/backups/relay.caddy.<ts>` to `/opt/relay/caddy/relay.caddy`,
   `caddy validate`, `systemctl reload caddy`.
