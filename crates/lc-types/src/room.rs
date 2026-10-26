@@ -84,4 +84,10 @@ pub struct RoomState {
     pub password_protected: bool,
     /// Guest only: local `127.0.0.1:<port>` to add as a server in the game.
     pub local_addr: Option<String>,
+    /// Host of a game room: the room exists before the world is opened to LAN;
+    /// `false` until the LAN port is detected (guests can't play yet).
+    /// `None` for guests and voice rooms.
+    #[serde(default)]
+    #[specta(optional)]
+    pub world_open: Option<bool>,
 }

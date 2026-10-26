@@ -6,8 +6,10 @@ mod env;
 mod hub;
 pub mod lan;
 mod launch;
+mod nbt;
 pub mod proto;
 mod rooms;
+mod servers;
 mod stub;
 mod wire;
 

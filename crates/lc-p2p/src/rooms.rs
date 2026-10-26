@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -34,6 +35,7 @@ use crate::env::{Identity, RoomEnv};
 use crate::hub::{CreateRoomReq, HubClient};
 use crate::lan::{self, LanSeen};
 use crate::proto::{ControlMsg, StreamOpen, VoiceHeader, ALPN, PROTOCOL_VERSION};
+use crate::servers;
 use crate::wire::{self, MAX_LINE, MAX_OPEN_LINE};
 
 /// Hook to adjust the iroh endpoint builder (tests: trust a self-signed relay,
@@ -47,6 +49,10 @@ const MAX_DATAGRAM: usize = 1024;
 const MAX_CHAT_CHARS: usize = 500;
 const MAX_NAME_CHARS: usize = 32;
 const PATH_POLL: Duration = Duration::from_secs(2);
+/// How often the host re-checks its LAN world.
+const WORLD_POLL: Duration = Duration::from_secs(3);
+/// Failed checks in a row before the world counts as closed.
+const WORLD_MISSES: u8 = 2;
 const DGRAM_QUEUE: usize = 256;
 /// Pending control lines per peer; a peer that falls this far behind is dropped.
 const CONTROL_QUEUE: usize = 256;
@@ -74,8 +80,6 @@ pub struct P2pConfig {
     /// Relay URLs used instead of the ones returned by hub (tests, self-hosting).
     /// An empty list disables relays (direct connections only).
     pub relay_override: Option<Vec<String>>,
-    /// How long `create` waits for "Open to LAN".
-    pub lan_wait: Duration,
     /// Limit for the `Hello` / `Welcome` handshake.
     pub hello_timeout: Duration,
     /// Limit for reaching the host.
@@ -96,7 +100,6 @@ impl Default for P2pConfig {
     fn default() -> Self {
         Self {
             relay_override: None,
-            lan_wait: Duration::from_secs(120),
             hello_timeout: Duration::from_secs(10),
             connect_timeout: Duration::from_secs(30),
             identity_timeout: Duration::from_secs(30),
@@ -112,7 +115,6 @@ impl fmt::Debug for P2pConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("P2pConfig")
             .field("relay_override", &self.relay_override)
-            .field("lan_wait", &self.lan_wait)
             .field("hello_timeout", &self.hello_timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("identity_timeout", &self.identity_timeout)
@@ -145,9 +147,9 @@ struct HostCtx {
     hub: HubClient,
     host_token: Secret,
     password: Option<Secret>,
-    /// LAN port fixed at create time; never re-read while the room lives.
-    /// `None` for voice rooms (no game tunnel).
-    lan_port: Option<u16>,
+    /// Game rooms: current LAN port of the hosted world (`None` until the
+    /// world is opened to LAN, or after it closed). `None` for voice rooms.
+    world: Option<watch::Sender<Option<u16>>>,
     /// Endpoint ids and (yggdrasil rooms) profile uuids kicked from this room.
     banned: StdMutex<HashSet<String>>,
     /// Wrong password attempts per endpoint id: (count, last failure).
@@ -162,7 +164,16 @@ struct Hosting {
     sig: Option<InstanceSig>,
     auth_mode: RoomAuthMode,
     password: Option<Secret>,
-    lan_port: Option<u16>,
+    /// Game rooms: hosted instance and its LAN port if already open.
+    game: Option<(InstanceId, Option<u16>)>,
+}
+
+/// Endpoint bound ahead of hub's answer with the relays we expect it to
+/// return (override or the last answer), so bind + home relay (~1 s)
+/// overlaps identity / hub work.
+struct Prebound {
+    relays: Vec<RelayUrl>,
+    ep: AppResult<Endpoint>,
 }
 
 /// Guest side of a finished `Hello` / `Welcome` exchange.
@@ -186,6 +197,8 @@ pub(crate) struct Session {
     expires_at: String,
     password_protected: bool,
     pub(crate) local_addr: Option<SocketAddr>,
+    /// Guest: `servers.dat` holding our entry for `local_addr`.
+    servers_dat: Option<PathBuf>,
     my_id: String,
     my_name: String,
     endpoint: Endpoint,
@@ -233,7 +246,16 @@ impl Session {
             link: join_link(&self.code),
             password_protected: self.password_protected,
             local_addr: self.local_addr.map(|a| a.to_string()),
+            world_open: self.world_port().map(|p| p.is_some()),
         }
+    }
+
+    /// Host of a game room: `Some(current LAN port)`.
+    fn world_port(&self) -> Option<Option<u16>> {
+        self.host
+            .as_ref()
+            .and_then(|h| h.world.as_ref())
+            .map(|w| *w.borrow())
     }
 
     /// Queues `line` for the given peers (all when `only` is `None`), skipping
@@ -331,9 +353,11 @@ pub(crate) struct Inner {
     /// Serialises create / join / leave.
     op: tokio::sync::Mutex<()>,
     session: StdMutex<Option<Arc<Session>>>,
-    /// Last LAN port seen in a game log or a local LAN announcement. Only
-    /// consulted by `create`.
+    /// Last LAN port seen in a game log or a local LAN announcement; followed
+    /// by a hosted game room for its lifetime.
     lan_port: Arc<watch::Sender<Option<LanSeen>>>,
+    /// Relay URLs of hub's last answer (prebinding).
+    relay_cache: StdMutex<Option<Vec<RelayUrl>>>,
     /// Endpoint key for the app's lifetime, so a host's ban of this launcher
     /// survives a rejoin.
     secret: SecretKey,
@@ -388,6 +412,7 @@ impl P2pRooms {
                 op: tokio::sync::Mutex::new(()),
                 session: StdMutex::new(None),
                 lan_port: Arc::new(lan_port),
+                relay_cache: StdMutex::new(None),
                 secret: SecretKey::generate(),
                 emit: StdMutex::new(()),
             }),
@@ -399,8 +424,8 @@ impl P2pRooms {
     }
 
     /// Feed log lines of a running game; picks up the integrated server's
-    /// LAN port (server-thread lines only, chat is ignored). The port is
-    /// used only by a later `create` for the same instance.
+    /// LAN port (server-thread lines only, chat is ignored). Used by a game
+    /// room hosted for the same instance (now or later).
     pub fn feed_game_log(&self, instance: InstanceId, line: &str) {
         if let Some(port) = lan::port_from_log_line(line) {
             self.inner.lan_port.send_replace(Some(LanSeen {
@@ -523,41 +548,178 @@ impl P2pRooms {
             .collect()
     }
 
-    /// Waits until a verified LAN port of `instance` (or of an unknown local
-    /// game, from a LAN announcement) is known.
-    async fn wait_lan_port(&self, instance: InstanceId) -> AppResult<u16> {
-        let mut rx = self.inner.lan_port.subscribe();
-        let deadline = tokio::time::Instant::now() + self.inner.cfg.lan_wait;
-        loop {
-            let cur = *rx.borrow_and_update();
-            if let Some(seen) = cur.filter(|s| s.instance.is_none_or(|i| i == instance)) {
-                if lan::is_local_port_open(seen.port).await {
-                    return Ok(seen.port);
-                }
-                // Stale port from an earlier game session.
-                self.inner.lan_port.send_if_modified(|v| {
-                    let stale = *v == Some(seen);
-                    if stale {
-                        *v = None;
-                    }
-                    stale
-                });
+    /// Verified LAN port of `instance` (or of an unknown local game, from a
+    /// LAN announcement), if one is known right now. A stale port (closed
+    /// since) is forgotten.
+    async fn probe_lan(&self, instance: InstanceId) -> Option<u16> {
+        let seen =
+            (*self.inner.lan_port.borrow()).filter(|s| s.instance.is_none_or(|i| i == instance))?;
+        if lan::is_local_port_open(seen.port).await {
+            return Some(seen.port);
+        }
+        self.forget_lan(seen);
+        None
+    }
+
+    /// Drops `seen` if it is still the last LAN port.
+    fn forget_lan(&self, seen: LanSeen) {
+        self.inner.lan_port.send_if_modified(|v| {
+            let same = *v == Some(seen);
+            if same {
+                *v = None;
             }
-            match tokio::time::timeout_at(deadline, rx.changed()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(_)) | Err(_) => {
-                    return Err(AppError::new(
-                        ErrorCode::NotFound,
-                        "no LAN world detected; open the world to LAN first",
-                    )
-                    .detail("hint", "openToLan"));
+            same
+        });
+    }
+
+    /// Host of a game room: follows the LAN world for the room's lifetime.
+    /// A new port is taken only while the current one is closed (world not
+    /// open yet, or reopened); a port that stops answering marks the world
+    /// closed.
+    async fn watch_world(self, s: Arc<Session>, instance: InstanceId) {
+        let Some(world) = s.host.as_ref().and_then(|h| h.world.as_ref()) else {
+            return;
+        };
+        if self.inner.cfg.lan_multicast {
+            tokio::spawn(lan::listen_announcements(
+                self.inner.lan_port.clone(),
+                s.cancel.child_token(),
+            ));
+        }
+        let mut rx = self.inner.lan_port.subscribe();
+        rx.borrow_and_update();
+        let mut misses = 0u8;
+        loop {
+            let tick = tokio::select! {
+                () = s.cancel.cancelled() => return,
+                r = rx.changed() => {
+                    if r.is_err() {
+                        return;
+                    }
+                    rx.borrow_and_update();
+                    false
                 }
+                () = tokio::time::sleep(WORLD_POLL) => true,
+            };
+            let cur = *world.borrow();
+            if let Some(port) = cur {
+                if lan::is_local_port_open(port).await {
+                    misses = 0;
+                    // The world is up: another port can't take over.
+                    let other = (*self.inner.lan_port.borrow()).filter(|v| v.port != port);
+                    if let (false, Some(seen)) = (tick, other) {
+                        tracing::debug!(
+                            "rooms: ignoring LAN port {} while {port} is open",
+                            seen.port
+                        );
+                        self.forget_lan(seen);
+                    }
+                    continue;
+                }
+            }
+            let next = match self.probe_lan(instance).await {
+                Some(p) if Some(p) != cur => Some(p),
+                Some(_) => {
+                    misses = 0;
+                    continue;
+                }
+                None if cur.is_some() => {
+                    misses += 1;
+                    if misses < WORLD_MISSES {
+                        continue;
+                    }
+                    None
+                }
+                None => continue,
+            };
+            misses = 0;
+            world.send_replace(next);
+            match next {
+                Some(p) => tracing::info!("rooms: hosting LAN world on port {p}"),
+                None => tracing::info!("rooms: LAN world closed"),
+            }
+            self.emit_state();
+        }
+    }
+
+    /// Relays hub is expected to return: the override or its last answer.
+    fn expected_relays(&self) -> Option<Vec<RelayUrl>> {
+        match &self.inner.cfg.relay_override {
+            Some(list) => Some(list.iter().filter_map(|u| u.parse().ok()).collect()),
+            None => lock(&self.inner.relay_cache).clone(),
+        }
+    }
+
+    async fn prebind(&self, accept: bool) -> Option<Prebound> {
+        let relays = self.expected_relays()?;
+        let ep = self
+            .bind_endpoint(self.inner.secret.clone(), &relays, accept)
+            .await;
+        Some(Prebound { relays, ep })
+    }
+
+    /// Runs `prep` (identity, hub) while the endpoint is prebound. If `prep`
+    /// fails, the bind is abandoned.
+    async fn with_prebind<T>(
+        &self,
+        accept: bool,
+        prep: impl std::future::Future<Output = AppResult<T>>,
+    ) -> AppResult<(T, Option<Prebound>)> {
+        let bind = self.prebind(accept);
+        tokio::pin!(bind);
+        tokio::pin!(prep);
+        let mut bound = None;
+        let value = tokio::select! {
+            v = &mut prep => v,
+            p = &mut bind => {
+                bound = Some(p);
+                (&mut prep).await
+            }
+        };
+        match value {
+            Ok(v) => {
+                let pre = match bound {
+                    Some(p) => p,
+                    None => bind.await,
+                };
+                Ok((v, pre))
+            }
+            Err(e) => {
+                discard(bound.flatten()).await;
+                Err(e)
             }
         }
     }
 
+    /// Endpoint for the relays hub returned: the prebound one when it used
+    /// the same relays, otherwise a fresh bind.
+    async fn endpoint_for(
+        &self,
+        pre: Option<Prebound>,
+        from_hub: Vec<String>,
+        accept: bool,
+    ) -> (Vec<RelayUrl>, AppResult<Endpoint>) {
+        let relays = self.relays(from_hub);
+        if self.inner.cfg.relay_override.is_none() {
+            *lock(&self.inner.relay_cache) = Some(relays.clone());
+        }
+        match pre {
+            Some(p) if same_relays(&p.relays, &relays) => {
+                tracing::debug!("rooms: using the prebound endpoint");
+                return (relays, p.ep);
+            }
+            other => discard(other).await,
+        }
+        let ep = self
+            .bind_endpoint(self.inner.secret.clone(), &relays, accept)
+            .await;
+        (relays, ep)
+    }
+
     // ---------------------------------------------------------------- host
 
+    /// Creates the room right away; the LAN world may be opened later
+    /// (`RoomState::world_open`).
     async fn create_room(
         &self,
         instance: InstanceId,
@@ -569,33 +731,36 @@ impl P2pRooms {
             return Err(AppError::new(ErrorCode::Conflict, "already in a room"));
         }
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
-        let hub = self.hub().await?;
-        let me = self.identity().await?;
-        check_host_auth_mode(auth_mode, &me)?;
-        let sig = self.inner.env.instance_sig(instance).await?;
-
-        let cancel = CancellationToken::new();
-        if self.inner.cfg.lan_multicast {
-            tokio::spawn(lan::listen_announcements(
-                self.inner.lan_port.clone(),
-                cancel.clone(),
-            ));
+        let prep = async {
+            let hub = self.hub().await?;
+            let me = self.identity().await?;
+            check_host_auth_mode(auth_mode, &me)?;
+            let sig = self.inner.env.instance_sig(instance).await?;
+            let port = self.probe_lan(instance).await;
+            Ok((hub, me, sig, port))
+        };
+        let ((hub, me, sig, port), pre) = self.with_prebind(true, prep).await?;
+        match port {
+            Some(p) => tracing::info!("rooms: hosting LAN world on port {p}"),
+            None => tracing::info!("rooms: room created before the world is open to LAN"),
         }
-        let detected = self.wait_lan_port(instance).await;
-        // Detection is over: the port is fixed for the room's lifetime.
-        cancel.cancel();
-        let lan_port = detected?;
-        tracing::info!("rooms: hosting LAN world on port {lan_port}");
-        self.start_hosting(Hosting {
-            hub,
-            me,
-            kind: RoomKind::Game,
-            sig: Some(sig),
-            auth_mode,
-            password,
-            lan_port: Some(lan_port),
-        })
-        .await
+        let mut pre = pre;
+        let res = self
+            .start_hosting(
+                Hosting {
+                    hub,
+                    me,
+                    kind: RoomKind::Game,
+                    sig: Some(sig),
+                    auth_mode,
+                    password,
+                    game: Some((instance, port)),
+                },
+                &mut pre,
+            )
+            .await;
+        discard(pre).await;
+        res
     }
 
     async fn create_voice_room(&self, password: Option<String>) -> AppResult<RoomState> {
@@ -604,10 +769,14 @@ impl P2pRooms {
             return Err(AppError::new(ErrorCode::Conflict, "already in a room"));
         }
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
-        let hub = self.hub().await?;
-        let mut me = self.identity().await?;
+        let prep = async {
+            let hub = self.hub().await?;
+            let me = self.identity().await?;
+            Ok((hub, me))
+        };
+        let ((hub, mut me), mut pre) = self.with_prebind(true, prep).await?;
         // Never waits for a LAN world: voice rooms have no game tunnel.
-        loop {
+        let res = loop {
             // No game server here: the mode only says whether guests must prove
             // a Yggdrasil account (and lets bans stick to the profile).
             let auth_mode = if me.hub_token.is_some() {
@@ -616,15 +785,18 @@ impl P2pRooms {
                 RoomAuthMode::Open
             };
             let res = self
-                .start_hosting(Hosting {
-                    hub: hub.clone(),
-                    me: me.clone(),
-                    kind: RoomKind::Voice,
-                    sig: None,
-                    auth_mode,
-                    password: password.clone(),
-                    lan_port: None,
-                })
+                .start_hosting(
+                    Hosting {
+                        hub: hub.clone(),
+                        me: me.clone(),
+                        kind: RoomKind::Voice,
+                        sig: None,
+                        auth_mode,
+                        password: password.clone(),
+                        game: None,
+                    },
+                    &mut pre,
+                )
                 .await;
             match res {
                 // Hub refused our Yggdrasil token: a voice room works without
@@ -639,13 +811,16 @@ impl P2pRooms {
                     );
                     me.hub_token = None;
                 }
-                other => return other,
+                other => break other,
             }
-        }
+        };
+        discard(pre).await;
+        res
     }
 
     /// Registers the room in hub and starts accepting peers. Caller holds `op`.
-    async fn start_hosting(&self, h: Hosting) -> AppResult<RoomState> {
+    /// Takes the prebound endpoint once hub accepted the room.
+    async fn start_hosting(&self, h: Hosting, pre: &mut Option<Prebound>) -> AppResult<RoomState> {
         let Hosting {
             hub,
             me,
@@ -653,10 +828,9 @@ impl P2pRooms {
             sig,
             auth_mode,
             password,
-            lan_port,
+            game,
         } = h;
-        let secret = self.inner.secret.clone();
-        let my_id = secret.public().to_string();
+        let my_id = self.inner.secret.public().to_string();
         let req = CreateRoomReq {
             endpoint_id: my_id.clone(),
             kind,
@@ -672,8 +846,8 @@ impl P2pRooms {
             t.elapsed().as_millis()
         );
         let host_token = Secret::new(resp.host_token);
-        let relays = self.relays(resp.relay_urls);
-        let endpoint = match self.bind_endpoint(secret, &relays, true).await {
+        let (_, bound) = self.endpoint_for(pre.take(), resp.relay_urls, true).await;
+        let endpoint = match bound {
             Ok(ep) => ep,
             Err(e) => {
                 let _ = hub.close_room(resp.room_id, &host_token).await;
@@ -692,6 +866,7 @@ impl P2pRooms {
             expires_at: resp.expires_at,
             password_protected: password.is_some(),
             local_addr: None,
+            servers_dat: None,
             my_id: my_id.clone(),
             my_name: clean_name(&me.name),
             endpoint,
@@ -707,7 +882,7 @@ impl P2pRooms {
                 hub,
                 host_token,
                 password,
-                lan_port,
+                world: game.map(|(_, port)| watch::channel(port).0),
                 banned: StdMutex::new(HashSet::new()),
                 pw_fails: StdMutex::new(HashMap::new()),
             }),
@@ -719,6 +894,9 @@ impl P2pRooms {
             self.inner.observer.on_state(Some(state.clone()));
             state
         };
+        if let Some((instance, _)) = game {
+            tokio::spawn(self.clone().watch_world(session.clone(), instance));
+        }
         tokio::spawn(self.clone().host_accept_loop(session.clone()));
         Ok(state)
     }
@@ -896,7 +1074,7 @@ impl P2pRooms {
         );
         tokio::spawn(host_game_streams(
             conn.clone(),
-            host.lan_port,
+            host.world.as_ref().map(watch::Sender::subscribe),
             s.cancel.clone(),
         ));
         let control = self.clone().control_loop(s.clone(), remote.clone(), reader);
@@ -1022,67 +1200,70 @@ impl P2pRooms {
             return Err(AppError::new(ErrorCode::Conflict, "already in a room"));
         }
         let password = password.filter(|p| !p.is_empty()).map(Secret::new);
-        let hub = self.hub().await?;
-        let me = self.identity().await?;
-        // Computed up front so a broken instance fails before hub is asked.
-        let local_sig = match instance {
-            Some(i) => Some(self.inner.env.instance_sig(i).await?),
-            None => None,
+        let prep = async {
+            let hub = self.hub().await?;
+            let me = self.identity().await?;
+            // Computed up front so a broken instance fails before hub is asked.
+            let local_sig = match instance {
+                Some(i) => Some(self.inner.env.instance_sig(i).await?),
+                None => None,
+            };
+            let my_id = self.inner.secret.public().to_string();
+            let resp = hub
+                .join_room(
+                    &code,
+                    &my_id,
+                    &clean_name(&me.name),
+                    me.uuid.as_deref(),
+                    me.hub_token.as_ref(),
+                )
+                .await
+                .map_err(|e| {
+                    if e.code == ErrorCode::AuthRequired && me.hub_token.is_none() {
+                        e.detail("reason", "yggdrasilAccountRequired")
+                    } else {
+                        e
+                    }
+                })?;
+            if resp.auth_mode == RoomAuthMode::Yggdrasil && me.hub_token.is_none() {
+                return Err(AppError::new(
+                    ErrorCode::AuthRequired,
+                    "this room needs an account on the project's Yggdrasil server",
+                )
+                .detail("reason", "yggdrasilAccountRequired"));
+            }
+            if resp.kind == RoomKind::Game {
+                let remote = resp.sig.as_ref().ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::Network,
+                        "unexpected hub response: game room without sig",
+                    )
+                })?;
+                let local = local_sig.as_ref().ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::InvalidInput,
+                        "instance is required for game rooms",
+                    )
+                    .detail("reason", "instanceRequired")
+                })?;
+                check_sig(remote, local)?;
+            }
+            if resp.password_protected && password.is_none() {
+                return Err(
+                    AppError::new(ErrorCode::InvalidInput, "room password required")
+                        .detail("reason", "passwordRequired"),
+                );
+            }
+            let host_id: EndpointId = resp
+                .host_endpoint_id
+                .parse()
+                .map_err(|e| net_err("invalid host endpoint id", e))?;
+            Ok((me, resp, host_id))
         };
-
-        let secret = self.inner.secret.clone();
-        let my_id = secret.public().to_string();
-        let resp = hub
-            .join_room(
-                &code,
-                &my_id,
-                &clean_name(&me.name),
-                me.uuid.as_deref(),
-                me.hub_token.as_ref(),
-            )
-            .await
-            .map_err(|e| {
-                if e.code == ErrorCode::AuthRequired && me.hub_token.is_none() {
-                    e.detail("reason", "yggdrasilAccountRequired")
-                } else {
-                    e
-                }
-            })?;
-        if resp.auth_mode == RoomAuthMode::Yggdrasil && me.hub_token.is_none() {
-            return Err(AppError::new(
-                ErrorCode::AuthRequired,
-                "this room needs an account on the project's Yggdrasil server",
-            )
-            .detail("reason", "yggdrasilAccountRequired"));
-        }
-        if resp.kind == RoomKind::Game {
-            let remote = resp.sig.as_ref().ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::Network,
-                    "unexpected hub response: game room without sig",
-                )
-            })?;
-            let local = local_sig.as_ref().ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::InvalidInput,
-                    "instance is required for game rooms",
-                )
-                .detail("reason", "instanceRequired")
-            })?;
-            check_sig(remote, local)?;
-        }
-        if resp.password_protected && password.is_none() {
-            return Err(
-                AppError::new(ErrorCode::InvalidInput, "room password required")
-                    .detail("reason", "passwordRequired"),
-            );
-        }
-        let host_id: EndpointId = resp
-            .host_endpoint_id
-            .parse()
-            .map_err(|e| net_err("invalid host endpoint id", e))?;
-        let relays = self.relays(resp.relay_urls);
-        let endpoint = self.bind_endpoint(secret, &relays, false).await?;
+        let ((me, resp, host_id), pre) = self.with_prebind(false, prep).await?;
+        let my_id = self.inner.secret.public().to_string();
+        let (relays, bound) = self.endpoint_for(pre, resp.relay_urls.clone(), false).await;
+        let endpoint = bound?;
 
         let handshake = self
             .guest_connect(
@@ -1128,6 +1309,18 @@ impl P2pRooms {
             None
         };
         let local_addr = listener.as_ref().map(|(_, a)| *a);
+        // Our entry in the instance's server list (multiplayer screen).
+        let servers_dat = match (local_addr, instance) {
+            (Some(addr), Some(i)) => match self.inner.env.game_dir(i) {
+                Some(dir) => {
+                    let path = servers::servers_dat(&dir);
+                    add_server_entry(path.clone(), host_name.clone(), addr).await;
+                    Some(path)
+                }
+                None => None,
+            },
+            _ => None,
+        };
 
         let host_key = host_id.to_string();
         let (tx, rx) = mpsc::channel(CONTROL_QUEUE);
@@ -1162,6 +1355,7 @@ impl P2pRooms {
             expires_at: String::new(),
             password_protected: resp.password_protected,
             local_addr,
+            servers_dat,
             my_id,
             my_name: clean_name(&me.name),
             endpoint,
@@ -1783,8 +1977,44 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Closes an unused prebound endpoint.
+async fn discard(pre: Option<Prebound>) {
+    if let Some(Prebound { ep: Ok(ep), .. }) = pre {
+        ep.close().await;
+    }
+}
+
+fn same_relays(a: &[RelayUrl], b: &[RelayUrl]) -> bool {
+    let set = |v: &[RelayUrl]| v.iter().map(ToString::to_string).collect::<HashSet<_>>();
+    set(a) == set(b)
+}
+
+/// Guest: our entry on top of the instance's server list. Failures only
+/// cost the convenience, never the room.
+async fn add_server_entry(path: PathBuf, host_name: String, addr: SocketAddr) {
+    let res =
+        tokio::task::spawn_blocking(move || servers::add_entry(&path, &host_name, addr)).await;
+    match res {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("rooms: cannot add the room to servers.dat: {e}"),
+        Err(e) => tracing::warn!("rooms: cannot add the room to servers.dat: {e}"),
+    }
+}
+
+async fn remove_server_entry(path: PathBuf) {
+    let res = tokio::task::spawn_blocking(move || servers::remove_entries(&path)).await;
+    match res {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::warn!("rooms: cannot clean servers.dat: {e}"),
+        Err(e) => tracing::warn!("rooms: cannot clean servers.dat: {e}"),
+    }
+}
+
 async fn shutdown(s: &Session) {
     s.cancel.cancel();
+    if let Some(path) = s.servers_dat.clone() {
+        remove_server_entry(path).await;
+    }
     let conns = {
         let mut p = s.peers();
         let conns: Vec<Connection> = p.map.values().filter_map(|e| e.conn.clone()).collect();
@@ -1928,8 +2158,13 @@ fn spawn_writer(mut send: SendStream, mut rx: mpsc::Receiver<String>) {
 }
 
 /// Host: every bi-stream after the control stream is one game connection to
-/// the LAN port fixed at create time. Voice rooms (`None`) refuse them.
-async fn host_game_streams(conn: Connection, lan_port: Option<u16>, cancel: CancellationToken) {
+/// the world's current LAN port. Refused (stream reset, the guest's game
+/// connection closes) while the world isn't open and in voice rooms (`None`).
+async fn host_game_streams(
+    conn: Connection,
+    world: Option<watch::Receiver<Option<u16>>>,
+    cancel: CancellationToken,
+) {
     loop {
         let (send, recv) = tokio::select! {
             () = cancel.cancelled() => return,
@@ -1938,7 +2173,7 @@ async fn host_game_streams(conn: Connection, lan_port: Option<u16>, cancel: Canc
                 Err(_) => return,
             },
         };
-        match lan_port {
+        match world.as_ref().and_then(|w| *w.borrow()) {
             Some(port) => {
                 tokio::spawn(serve_game_stream(send, recv, port));
             }
