@@ -2,7 +2,7 @@
 
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{PackFormat, PerfPreset};
 use lc_types::task::{TaskEvent, TaskKind};
@@ -106,6 +106,17 @@ pub async fn content_add_local(
     paths: Vec<String>,
 ) -> AppResult<Vec<InstalledContent>> {
     state.content.add_local(instance, kind, paths).await
+}
+
+/// Dependency problems of local mod jars (`fileNames` empty = every local mod).
+#[tauri::command]
+#[specta::specta]
+pub async fn content_check_local(
+    state: State<'_, AppState>,
+    instance: InstanceId,
+    file_names: Vec<String>,
+) -> AppResult<Vec<LocalDepIssue>> {
+    state.content.check_local(instance, file_names).await
 }
 
 #[tauri::command]

@@ -910,3 +910,83 @@ async fn add_local_copies_replaces_and_indexes() {
     assert!(!game.join("resourcepacks/MyPack.disabled").exists());
     assert_eq!(e.svc.list(id).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn check_local_reports_and_suggests() {
+    use crate::localdeps::tests::jar;
+    use lc_types::content::LocalDepIssueKind;
+
+    let env = env();
+    let id = env.add_instance("1.21.1", LoaderKind::Fabric);
+    let mods = env.inst.game_dir(id).join("mods");
+    std::fs::create_dir_all(&mods).unwrap();
+    let fmj = |v: serde_json::Value| vec![("fabric.mod.json", v.to_string().into_bytes())];
+    std::fs::write(
+        mods.join("a.jar"),
+        jar(&fmj(
+            serde_json::json!({"id": "a", "version": "1.0.0", "depends": {
+                "fabric-api": ">=0.90", "cloth_config_api": "*", "lib": "*", "minecraft": "1.21.1"
+            }}),
+        )),
+    )
+    .unwrap();
+    std::fs::write(
+        mods.join("lib.jar.disabled"),
+        jar(&fmj(serde_json::json!({"id": "lib", "version": "1"}))),
+    )
+    .unwrap();
+
+    env.project("FAPI0001", "fabric-api", "mod");
+    let v1 = env.mr_version("FAPI0001", "0.92.0", "fabric-api.jar", &["fabric"], &[]);
+    env.versions("FAPI0001", "fabric-api", &[v1]);
+    env.project("CLOTH001", "cloth-config", "mod");
+    let v2 = env.mr_version("CLOTH001", "15.0.0", "cloth.jar", &["fabric"], &[]);
+    env.versions("CLOTH001", "cloth-config", &[v2]);
+    env.http.route(
+        &format!("{MR}/search"),
+        serde_json::json!({"hits": [{"project_id": "CLOTH001", "slug": "cloth-config",
+            "title": "Cloth Config API", "project_type": "mod"}], "offset": 0, "total_hits": 1})
+        .to_string(),
+    );
+
+    let mut issues = env.svc.check_local(id, Vec::new()).await.unwrap();
+    issues.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
+    let got: Vec<_> = issues
+        .iter()
+        .map(|i| {
+            (
+                i.mod_id.as_str(),
+                i.kind,
+                i.suggestion.as_ref().and_then(|s| s.version_id.as_deref()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "cloth_config_api",
+                LocalDepIssueKind::Missing,
+                Some("15.0.0")
+            ),
+            ("fabric-api", LocalDepIssueKind::Missing, Some("0.92.0")),
+            ("lib", LocalDepIssueKind::Missing, None),
+        ]
+    );
+    assert_eq!(issues[0].suggestion_title.as_deref(), Some("cloth-config"));
+    assert_eq!(issues[1].version_req.as_deref(), Some(">=0.90"));
+
+    // Explicit file list: the disabled jar has no deps; unknown names fail.
+    let only = env
+        .svc
+        .check_local(id, vec!["lib.jar".into()])
+        .await
+        .unwrap();
+    assert!(only.is_empty());
+    let err = env
+        .svc
+        .check_local(id, vec!["nope.jar".into()])
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+}
