@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "lc-accounts",
@@ -2617,7 +2617,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hub"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3368,7 +3368,7 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "lc-accounts"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3392,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "lc-content"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -3415,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "lc-core"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3440,7 +3440,7 @@ dependencies = [
 
 [[package]]
 name = "lc-http"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3458,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "lc-loaders"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -3477,7 +3477,7 @@ dependencies = [
 
 [[package]]
 name = "lc-p2p"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3506,7 +3506,7 @@ dependencies = [
 
 [[package]]
 name = "lc-runtime"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "lc-types",
@@ -3518,7 +3518,7 @@ dependencies = [
 
 [[package]]
 name = "lc-types"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3530,7 +3530,7 @@ dependencies = [
 
 [[package]]
 name = "lc-voice"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "cpal",
@@ -3547,7 +3547,7 @@ dependencies = [
 
 [[package]]
 name = "lc-vpn"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axum",
