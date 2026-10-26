@@ -19,6 +19,8 @@ node_modules/
 *.pem
 *.key
 server/deploy/drasl/*.toml.local
+/.vpn-subscription.txt
+server/deploy/vpn/config.json
 
 # OS / editors
 .DS_Store

@@ -1,0 +1,15 @@
+# Imported inside the relay.dedseckms.ru site block (/opt/relay/caddy/relay.caddy):
+#   import /opt/vpn/caddy/vpn.caddy
+# Rendered on the server into /opt/vpn/caddy/vpn.caddy (0600 root) with the secret
+# paths from /opt/vpn/.secrets. s-ui webPath/subPath equal these paths, so no rewrite.
+handle /__PANEL_PATH__/* {
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy 127.0.0.1:2095
+}
+handle /__SUB_PATH__/* {
+	@write not method GET HEAD
+	respond @write 405
+	reverse_proxy 127.0.0.1:2096
+}

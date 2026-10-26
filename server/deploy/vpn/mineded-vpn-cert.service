@@ -1,0 +1,8 @@
+[Unit]
+Description=Restart MineDed VPN after certificate renewal
+
+[Service]
+Type=oneshot
+# Give Caddy time to write the matching key before restarting.
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/docker restart mineded-vpn
