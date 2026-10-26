@@ -93,7 +93,25 @@ fn init_logging(app: &tauri::AppHandle) -> Option<tracing_appender::non_blocking
     Some(guard)
 }
 
+/// WebKitGTK shows a black window on many older and NVIDIA GPUs (DMA-BUF renderer,
+/// accelerated compositing). Turn both off unless the user already set them.
+#[cfg(target_os = "linux")]
+fn linux_webkit_workarounds() {
+    for key in [
+        "WEBKIT_DISABLE_DMABUF_RENDERER",
+        "WEBKIT_DISABLE_COMPOSITING_MODE",
+    ] {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, "1");
+        }
+    }
+}
+
 pub fn run() {
+    // Before any thread or GTK starts: env must be set while single-threaded.
+    #[cfg(target_os = "linux")]
+    linux_webkit_workarounds();
+
     let builder = bindings::specta_builder();
 
     let result = tauri::Builder::default()
