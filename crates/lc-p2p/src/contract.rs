@@ -9,8 +9,10 @@ use lc_types::{AppResult, InstanceId};
 
 #[async_trait]
 pub trait RoomService: Send + Sync {
-    /// Registers a room in hub, starts the iroh endpoint, waits for the LAN port
-    /// ("Open to LAN"). `password` is checked by the host over P2P, never sent to hub.
+    /// Registers a room in hub and starts the iroh endpoint without waiting for
+    /// "Open to LAN": the LAN port is detected in the background
+    /// (`RoomState::world_open`). `password` is checked by the host over P2P,
+    /// never sent to hub.
     async fn create(
         &self,
         instance: InstanceId,
