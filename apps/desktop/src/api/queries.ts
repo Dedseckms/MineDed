@@ -13,6 +13,7 @@ import type {
   AccountId,
   AppError,
   ContentFilter,
+  ContentKind,
   ContentSourceKind,
   ContentVersionRef,
   InstalledContent,
@@ -48,6 +49,7 @@ import { useToastStore } from "../stores/toastStore";
 import { useVoiceStore } from "../stores/voiceStore";
 import { useTaskStore } from "../stores/taskStore";
 import { createTaskChannel } from "./channel";
+import { contentAddLocal } from "./localContent";
 import { api, unwrap } from "./client";
 
 export const qk = {
@@ -291,6 +293,28 @@ export function useRemoveContent(instance: InstanceId) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (fileName: string) => unwrap(await api.contentRemove(instance, fileName)),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.content(instance) }),
+  });
+}
+
+export interface AddLocalVars {
+  kind: ContentKind;
+  paths: string[];
+}
+
+/** Adds own files from disk (`content_add_local`); refreshes the list and toasts the count. */
+export function useAddLocalContent(instance: InstanceId) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ kind, paths }: AddLocalVars) => unwrap(await contentAddLocal(instance, kind, paths)),
+    onSuccess: (added) => {
+      useToastStore.getState().push({
+        tone: "info",
+        messageKey: "content.addedLocal",
+        params: { n: String(added.length) },
+        dedupeKey: `addLocal:${instance}`,
+      });
+    },
     onSettled: () => qc.invalidateQueries({ queryKey: qk.content(instance) }),
   });
 }

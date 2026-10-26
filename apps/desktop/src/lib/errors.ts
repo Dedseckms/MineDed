@@ -70,6 +70,7 @@ export const KNOWN_REASONS = [
   "vpnUnavailable",
   "uacDeclined",
   "helperFailed",
+  "vpnNotRunning",
 ] as const;
 export type KnownReason = (typeof KNOWN_REASONS)[number];
 
@@ -89,8 +90,18 @@ export interface ErrorView {
   copyText: string;
 }
 
-function knownReason(details: Record<string, string>, code: ErrorCode): KnownReason | null {
-  const r = details.reason ?? details.hubCode ?? (code === "rateLimited" ? "rateLimited" : undefined);
+/** Backend errors without a `reason` detail, recognised by their developer message. */
+function reasonFromMessage(code: ErrorCode, message: string): KnownReason | undefined {
+  if (code === "invalidInput" && /vpn is not running/i.test(message)) return "vpnNotRunning";
+  return undefined;
+}
+
+function knownReason(details: Record<string, string>, code: ErrorCode, message: string): KnownReason | null {
+  const r =
+    details.reason ??
+    details.hubCode ??
+    (code === "rateLimited" ? "rateLimited" : undefined) ??
+    reasonFromMessage(code, message);
   return r && (KNOWN_REASONS as readonly string[]).includes(r) ? (r as KnownReason) : null;
 }
 
@@ -98,7 +109,7 @@ function knownReason(details: Record<string, string>, code: ErrorCode): KnownRea
 export function errorView(e: unknown): ErrorView {
   const err = toAppError(e);
   const raw = err.details ?? {};
-  const reason = knownReason(raw, err.code);
+  const reason = knownReason(raw, err.code, err.message);
   const params: Record<string, string> = {};
   let messageKey: string = `errors.${err.code}`;
   if (reason === "rateLimited") {

@@ -177,3 +177,17 @@ export function visibleRange(
   const end = Math.min(count, Math.ceil((scrollTop + viewport) / rowHeight) + overscan);
   return [start, Math.max(start, end)];
 }
+
+/** Kinds that can be added from disk, with the file extensions the picker offers. */
+export const LOCAL_EXTS = {
+  mod: ["jar"],
+  resourcePack: ["zip"],
+  shader: ["zip"],
+  dataPack: ["zip"],
+} as const satisfies Partial<Record<ContentKind, readonly string[]>>;
+
+export type LocalKind = keyof typeof LOCAL_EXTS;
+
+export function isLocalKind(kind: ContentKind): kind is LocalKind {
+  return kind in LOCAL_EXTS;
+}

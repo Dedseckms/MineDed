@@ -385,21 +385,24 @@
       "curseforgeDisabled": "CurseForge is turned off: the launcher works with Modrinth only. Look for the pack or mod on Modrinth.",
       "vpnUnavailable": "MineDed VPN is temporarily unavailable. Try again later.",
       "uacDeclined": "Administrator rights were not granted, and the “Selected programs” mode needs them. Allow the request or pick another mode.",
-      "helperFailed": "Couldn't start the VPN helper with administrator rights."
+      "helperFailed": "Couldn't start the VPN helper with administrator rights.",
+      "vpnNotRunning": "The VPN is off. Turn on the VPN to check the ping."
     }
   },
   "dialog": {
     "png": "PNG image",
-    "exe": "Programs"
+    "exe": "Programs",
+    "modpack": "Modpack (.mrpack, .zip)",
+    "jar": "Mods (.jar)",
+    "zip": "Archives (.zip)"
   },
   "import": {
     "button": "Import from file",
     "title": "Import modpack",
     "submit": "Import",
-    "hint": "Only Modrinth modpacks (.mrpack) are supported.",
-    "path": "Pack file",
-    "pathHint": "Full path to the .mrpack file on this computer",
-    "pathPlaceholder": "C:\\Users\\me\\Downloads\\pack.mrpack"
+    "hint": "A Modrinth modpack (.mrpack) or a modpack archive (.zip).",
+    "pickFile": "Choose file…",
+    "noFile": "No file selected"
   },
   "export": {
     "title": "Export “{{name}}”",
@@ -471,6 +474,8 @@
     "updates_other": "{{count}} updates available",
     "updateAll": "Update all",
     "browse": "Find more",
+    "addLocal": "Add from computer",
+    "addedLocal": "Files added: {{n}}",
     "filterInstalled": "Filter installed",
     "enabledCount": "{{enabled}} of {{total}} enabled",
     "noMatches": "No matches",
@@ -678,6 +683,7 @@
       "title": "Nodes ({{n}})",
       "label": "VPN nodes",
       "pingAll": "Ping all",
+      "pingNeedsVpn": "Turn on the VPN to check the ping",
       "empty": "No nodes yet",
       "emptyHint": "Add a subscription by link or from a file.",
       "search": "Search nodes",

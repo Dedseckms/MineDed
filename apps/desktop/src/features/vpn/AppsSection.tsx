@@ -22,7 +22,9 @@ function AppRow({ app, action }: { app: VpnApp; action: ReactNode }) {
       <span className="min-w-0 flex-1 truncate font-medium" title={app.path ?? undefined}>
         {app.name}
       </span>
-      <span className="max-w-[45%] truncate font-mono text-xs text-muted">{app.process}</span>
+      <span className="min-w-0 max-w-[45%] truncate font-mono text-xs text-muted" title={app.process}>
+        {app.process}
+      </span>
       {action}
     </div>
   );

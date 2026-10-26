@@ -1,8 +1,8 @@
 //! Owner: mods. Includes modpack import/export and performance presets.
 
 use lc_types::content::{
-    ContentFilter, ContentSourceKind, ContentVersion, ContentVersionRef, InstalledContent,
-    ResolvePlan, SearchPage, SearchQuery,
+    ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
+    InstalledContent, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{PackFormat, PerfPreset};
 use lc_types::task::{TaskEvent, TaskKind};
@@ -94,6 +94,18 @@ pub async fn content_remove(
     file_name: String,
 ) -> AppResult<()> {
     state.content.remove(instance, &file_name).await
+}
+
+/// Copies local files/folders into the instance (`kind` picks the folder; wrong type → `invalidInput`).
+#[tauri::command]
+#[specta::specta]
+pub async fn content_add_local(
+    state: State<'_, AppState>,
+    instance: InstanceId,
+    kind: ContentKind,
+    paths: Vec<String>,
+) -> AppResult<Vec<InstalledContent>> {
+    state.content.add_local(instance, kind, paths).await
 }
 
 #[tauri::command]

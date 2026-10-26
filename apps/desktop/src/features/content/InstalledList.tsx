@@ -2,14 +2,15 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ContentKind, InstalledContent, Instance } from "../../bindings";
-import { useRemoveContent, useSetContentEnabled } from "../../api/queries";
+import { pickFiles } from "../../api/dialog";
+import { useAddLocalContent, useRemoveContent, useSetContentEnabled } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { ConfirmDialog } from "../../components/ui/Modal";
 import { VirtualList } from "../../components/ui/VirtualList";
 import { TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage } from "../../components/ui/feedback";
-import { displayName, filterInstalled } from "../../lib/content";
+import { LOCAL_EXTS, displayName, filterInstalled, isLocalKind } from "../../lib/content";
 
 const ROW_HEIGHT = 60;
 const LIST_HEIGHT = 480;
@@ -51,6 +52,31 @@ function Row({
   );
 }
 
+/** "Add from computer": multi-file pick → `content_add_local`; errors shown under the list. */
+function useAddLocal(instance: Instance, kind: ContentKind) {
+  const { t } = useTranslation();
+  const add = useAddLocalContent(instance.id);
+  const [pickError, setPickError] = useState<unknown>(null);
+  const pick = async () => {
+    if (!isLocalKind(kind)) return;
+    setPickError(null);
+    add.reset();
+    try {
+      const exts = [...LOCAL_EXTS[kind]];
+      const paths = await pickFiles([{ name: t(`dialog.${exts[0] ?? "zip"}`), extensions: exts }]);
+      if (paths.length > 0) add.mutate({ kind, paths });
+    } catch (e) {
+      setPickError(e);
+    }
+  };
+  const button = isLocalKind(kind) ? (
+    <Button size="sm" icon={<Icon name="upload" />} loading={add.isPending} onClick={() => void pick()}>
+      {t("content.addLocal")}
+    </Button>
+  ) : null;
+  return { button, error: add.error ?? pickError };
+}
+
 /** Installed files of one kind: toggle, remove, filter; windowed for big packs. */
 export function InstalledList({
   instance,
@@ -70,14 +96,21 @@ export function InstalledList({
   const remove = useRemoveContent(instance.id);
   const shown = filterInstalled(items, filter);
   const enabled = items.filter((c) => c.enabled).length;
+  const addLocal = useAddLocal(instance, kind);
 
   if (items.length === 0) {
     return (
-      <EmptyState title={t(`content.emptyKind.${kind}`)}>
-        <Button variant="primary" icon={<Icon name="search" />} onClick={onBrowse}>
-          {t("content.browse")}
-        </Button>
-      </EmptyState>
+      <div className="flex flex-col gap-3">
+        <EmptyState title={t(`content.emptyKind.${kind}`)}>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button variant="primary" icon={<Icon name="search" />} onClick={onBrowse}>
+              {t("content.browse")}
+            </Button>
+            {addLocal.button}
+          </div>
+        </EmptyState>
+        <ErrorMessage error={addLocal.error} />
+      </div>
     );
   }
 
@@ -93,10 +126,14 @@ export function InstalledList({
           onChange={(e) => setFilter(e.target.value)}
         />
         <span className="text-xs text-muted">{t("content.enabledCount", { enabled, total: items.length })}</span>
-        <Button className="ml-auto" size="sm" icon={<Icon name="search" />} onClick={onBrowse}>
-          {t("content.browse")}
-        </Button>
+        <div className="ml-auto flex flex-wrap gap-2">
+          {addLocal.button}
+          <Button size="sm" icon={<Icon name="search" />} onClick={onBrowse}>
+            {t("content.browse")}
+          </Button>
+        </div>
       </div>
+      <ErrorMessage error={addLocal.error} />
       <div className="rounded-xl border border-border bg-surface">
         {shown.length === 0 ? (
           <p className="p-4 text-sm text-muted">{t("content.noMatches")}</p>

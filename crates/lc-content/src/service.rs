@@ -56,6 +56,8 @@ pub(crate) struct DiskFile {
     /// Name on disk (may end with `.disabled`).
     pub name: String,
     pub enabled: bool,
+    /// Unpacked pack folder (not a mod).
+    pub is_dir: bool,
 }
 
 impl DiskFile {
@@ -189,13 +191,16 @@ impl Inner {
                 let Ok(ft) = e.file_type().await else {
                     continue;
                 };
-                if !ft.is_file() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                // Unpacked resource/shader/data packs are folders; hidden
+                // names are temp files of `add_local`.
+                let is_dir = ft.is_dir() && kind != ContentKind::Mod;
+                if !(ft.is_file() || is_dir) || name.starts_with('.') {
                     continue;
                 }
-                let name = e.file_name().to_string_lossy().into_owned();
                 let lower = name.to_ascii_lowercase();
                 let base = base_name(&lower);
-                if !(base.ends_with(".jar") || base.ends_with(".zip")) {
+                if !is_dir && !(base.ends_with(".jar") || base.ends_with(".zip")) {
                     continue;
                 }
                 out.push(DiskFile {
@@ -203,6 +208,7 @@ impl Inner {
                     kind,
                     enabled: !name.ends_with(".disabled"),
                     name,
+                    is_dir,
                 });
             }
         }
@@ -594,7 +600,11 @@ impl ContentService for ContentServices {
         Ok(files
             .into_iter()
             .map(|f| {
-                let e = idx.files.get(&f.key());
+                // Local entries only carry hashes; they have no catalogue ids.
+                let e = idx
+                    .files
+                    .get(&f.key())
+                    .filter(|e| e.source != ContentSourceKind::Local);
                 InstalledContent {
                     file_name: f.base().to_owned(),
                     kind: f.kind,
@@ -639,15 +649,27 @@ impl ContentService for ContentServices {
         let game = self.inner.instances.game_dir(instance);
         let f = self.inner.find_file(&game, file_name).await?;
         let p = game.join(f.dir).join(&f.name);
-        tokio::fs::remove_file(&p)
-            .await
-            .map_err(|e| io_err(&p, e))?;
+        if f.is_dir {
+            tokio::fs::remove_dir_all(&p).await
+        } else {
+            tokio::fs::remove_file(&p).await
+        }
+        .map_err(|e| io_err(&p, e))?;
         let inst_dir = self.inner.instance_dir(instance);
         let mut idx = ContentIndex::load(&inst_dir).await?;
         if idx.files.remove(&f.key()).is_some() {
             idx.save(&inst_dir).await?;
         }
         Ok(())
+    }
+
+    async fn add_local(
+        &self,
+        instance: InstanceId,
+        kind: ContentKind,
+        paths: Vec<String>,
+    ) -> AppResult<Vec<InstalledContent>> {
+        self.inner.add_local(instance, kind, paths).await
     }
 
     async fn update_all(&self, instance: InstanceId, sink: &dyn ProgressSink) -> AppResult<()> {

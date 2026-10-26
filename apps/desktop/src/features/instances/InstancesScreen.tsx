@@ -70,7 +70,7 @@ function InstanceCard({
   const hours = Math.floor(instance.playtimeSec / 3600);
 
   return (
-    <Card className="flex flex-col">
+    <Card className="flex min-w-0 flex-col">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h3 className="truncate font-semibold">

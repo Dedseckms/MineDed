@@ -35,6 +35,8 @@ describe("mock vpn", () => {
     expect(nodes).toHaveLength(MOCK_NODES.length);
     expect(nodes.filter((n) => n.selected)).toHaveLength(1);
 
+    const off = await api.vpnTestLatency();
+    expect(off.status === "error" && off.error.code).toBe("invalidInput");
     const on = unwrap(await api.vpnSetMode("launcherAndGame"));
     expect(on).toMatchObject({ running: true, node: nodes[0]?.name });
     const target = nodes[2]?.name ?? "";
