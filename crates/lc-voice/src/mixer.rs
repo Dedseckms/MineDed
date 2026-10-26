@@ -6,8 +6,15 @@ use std::collections::{HashMap, VecDeque};
 use lc_p2p::proto::VoiceHeader;
 
 use crate::codec::OpusDecoder;
-use crate::dsp::{meter, rms, FRAME};
+use crate::dsp::{dbfs, meter, ramp, rms, soft_limit, FRAME};
 use crate::jitter::{JitterBuffer, Playout};
+
+/// Decoded frames quieter than this may be skipped to drain excess latency.
+const SKIP_QUIET_DB: f32 = -50.0;
+/// Beyond this excess (frames) frames are skipped regardless of level.
+const FORCE_SKIP_EXCESS: usize = 12;
+/// Gain at the end of the 1st, 2nd, 3rd consecutive concealed frame.
+const CONCEAL_GAINS: [f32; 3] = [0.8, 0.45, 0.0];
 
 /// Streams without packets for this many frames are dropped (10 s).
 const IDLE_FRAMES: u32 = 500;
@@ -33,6 +40,10 @@ struct Stream {
     since_rx: u32,
     /// Peak meter value since the last activity snapshot.
     level: f32,
+    /// Playout gain at the end of the previous frame (0 after silence).
+    gain: f32,
+    /// Consecutive concealed frames without FEC.
+    concealed: u32,
 }
 
 /// Activity of one peer for the speaking indicator.
@@ -107,6 +118,8 @@ impl Mixer {
             since_voice: u32::MAX / 2,
             since_rx: 0,
             level: 0.0,
+            gain: 0.0,
+            concealed: 0,
         });
         stream.since_rx = 0;
         stream.jitter.push(header.seq, opus.to_vec());
@@ -139,6 +152,8 @@ impl Mixer {
                 s.since_voice = s.since_voice.saturating_add(1);
             }
             if matches!(playout, Playout::Silence) {
+                s.gain = 0.0;
+                s.concealed = 0;
                 continue;
             }
             // Muted peers are not decoded at all (CPU), only tracked.
@@ -152,12 +167,41 @@ impl Mixer {
                     Err(_) => continue,
                 },
             };
-            match &playout {
-                Playout::Packet(p) => decoder.decode(p, &mut frame),
-                Playout::Lost { fec: Some(next) } => decoder.decode_fec(next, &mut frame),
-                Playout::Lost { fec: None } => decoder.conceal(&mut frame),
+            let target_gain = match &playout {
+                Playout::Packet(p) => {
+                    decoder.decode(p, &mut frame);
+                    s.concealed = 0;
+                    // Drain excess latency (pre-roll burst, clock drift) by
+                    // skipping a near-silent frame; one per mix call.
+                    let excess = s.jitter.excess();
+                    if excess > 0
+                        && (excess > FORCE_SKIP_EXCESS || dbfs(rms(&frame)) < SKIP_QUIET_DB)
+                    {
+                        if let Playout::Packet(p) = s.jitter.pop() {
+                            decoder.decode(&p, &mut frame);
+                        }
+                    }
+                    1.0
+                }
+                Playout::Lost { fec: Some(next) } => {
+                    decoder.decode_fec(next, &mut frame);
+                    s.concealed = 0;
+                    1.0
+                }
+                Playout::Lost { fec: None } => {
+                    decoder.conceal(&mut frame);
+                    s.concealed += 1;
+                    CONCEAL_GAINS
+                        .get(s.concealed as usize - 1)
+                        .copied()
+                        .unwrap_or(0.0)
+                }
                 Playout::Silence => continue,
-            }
+            };
+            // Smooth gain changes: fade-in after silence, fade-out on
+            // underrun, no clicks at spurt edges.
+            ramp(&mut frame, s.gain, target_gain);
+            s.gain = target_gain;
             let vol = self.volumes.get(&key.peer_id).copied().unwrap_or(1.0);
             if matches!(playout, Playout::Packet(_)) {
                 s.level = s.level.max(meter(rms(&frame)));
@@ -176,8 +220,9 @@ impl Mixer {
         }
         let gain = self.output_volume;
         for o in out.iter_mut() {
-            *o = (*o * gain).clamp(-1.0, 1.0);
+            *o *= gain;
         }
+        soft_limit(out);
     }
 
     /// Activity per peer since the previous call (levels are peak-held).
@@ -286,6 +331,74 @@ mod tests {
             mixer.mix(&mut out);
         }
         assert!(!mixer.activity()[0].speaking);
+    }
+
+    fn send(mixer: &mut Mixer, enc: &mut OpusEncoder, seq: u16, pcm: &[f32]) -> Vec<u8> {
+        let pkt = enc.encode(pcm).unwrap().to_vec();
+        let h = VoiceHeader {
+            speaker: 0,
+            seq,
+            timestamp_ms: u32::from(seq) * 20,
+        };
+        let d = h.encode(&pkt);
+        mixer.push_datagram("a", &d);
+        d
+    }
+
+    #[test]
+    fn late_packet_is_concealed_not_silenced() {
+        let mut mixer = Mixer::new();
+        let mut enc = OpusEncoder::new().unwrap();
+        let mut out = [0f32; FRAME];
+        let mut held = Vec::new();
+        let mut levels = Vec::new();
+        for seq in 0..40u16 {
+            if (15..19).contains(&seq) {
+                // Network stall: these arrive together, late (underrun).
+                held.push((seq, enc.encode(&tone(seq as usize)).unwrap().to_vec()));
+            } else {
+                for (s, pkt) in held.drain(..) {
+                    let h = VoiceHeader {
+                        speaker: 0,
+                        seq: s,
+                        timestamp_ms: u32::from(s) * 20,
+                    };
+                    mixer.push_datagram("a", &h.encode(&pkt));
+                }
+                send(&mut mixer, &mut enc, seq, &tone(seq as usize));
+            }
+            mixer.mix(&mut out);
+            levels.push(rms(&out));
+        }
+        let s = mixer.streams.values().next().unwrap();
+        // The stall raised the playout target.
+        assert!(s.jitter.target() > 3);
+        // Concealment instead of hard gaps of digital silence.
+        assert!(levels[4..].iter().all(|l| *l > 5e-4), "{levels:?}");
+    }
+
+    #[test]
+    fn preroll_burst_latency_is_drained() {
+        let mut mixer = Mixer::new();
+        let mut enc = OpusEncoder::new().unwrap();
+        let mut out = [0f32; FRAME];
+        let quiet = vec![0f32; FRAME];
+        // 12 quiet pre-roll frames arrive at once, then speech in real time.
+        for seq in 0..12u16 {
+            send(&mut mixer, &mut enc, seq, &quiet);
+        }
+        // Speech, then the sender's quiet hangover frames.
+        for seq in 12..60u16 {
+            let pcm = if seq < 40 {
+                tone(seq as usize)
+            } else {
+                quiet.clone()
+            };
+            send(&mut mixer, &mut enc, seq, &pcm);
+            mixer.mix(&mut out);
+        }
+        let s = mixer.streams.values().next().unwrap();
+        assert!(s.jitter.excess() <= 1, "excess {}", s.jitter.excess());
     }
 
     #[test]
