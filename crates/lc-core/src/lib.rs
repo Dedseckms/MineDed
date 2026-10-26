@@ -1,5 +1,6 @@
 //! Game core. Owner: core. `contract.rs` is owned by the lead.
 
+mod appimage;
 pub mod contract;
 mod instances;
 mod java;
