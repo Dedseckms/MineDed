@@ -40,6 +40,12 @@ if [ "${QAD:-0}" = 1 ]; then
   FILES+=(-f compose.qad.yaml)
 fi
 
+if [ -n "${HUB_VPN_API_URL:-}" ]; then
+  $SUDO docker network inspect mineded-vpn_default >/dev/null \
+    || { echo "network mineded-vpn_default missing: start /opt/vpn first"; exit 1; }
+  FILES+=(-f compose.vpn.yaml)
+fi
+
 [ -x hub/hub ] || { echo "missing hub/hub binary (run deploy.ps1)"; exit 1; }
 $SUDO docker network inspect mineup-skin_skin_net >/dev/null \
   || { echo "network mineup-skin_skin_net missing: start /opt/skinserver first"; exit 1; }

@@ -40,7 +40,9 @@ with `success:false`. Create user: `POST save` form `object=clients&action=new&d
 config:{vless:{name,uuid,flow:"xtls-rprx-vision"}, hysteria2:{name,password}}}`.
 Disable: `action=edit` with the full object and `enable:false`. Delete: `action=del&data=<id>`
 (a bare id; the wiki's `{"id":N}` form is rejected in v1.6.6). List/usage: `GET clients`.
-The hub container is on another docker network: reach it via a shared network or host gateway (TBD).
+hub reaches it by joining the external network `mineded-vpn_default`
+(`server/relay/compose.vpn.yaml`): `HUB_VPN_API_URL=http://mineded-vpn:2095/<PANEL_PATH>/apiv2`.
+hub keys clients by `remark = mc-<undashed profile uuid>` (the random `name` stays the sub secret).
 
 ## Deploy from scratch
 

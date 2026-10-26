@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use lc_runtime::Paths;
-use lc_types::vpn::VpnMode;
+use lc_types::vpn::{VpnApp, VpnMode};
 use lc_types::{AppError, AppResult, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +27,13 @@ pub(crate) struct Stored {
     /// RFC 3339 of the last successful refresh/import.
     #[serde(default)]
     pub updated: Option<String>,
+    /// Programs routed in `VpnMode::Apps`.
+    #[serde(default)]
+    pub apps: Vec<VpnApp>,
+    /// Mode the user had on before a restart that was not resumed
+    /// automatically (`apps` needs a UAC/pkexec prompt).
+    #[serde(default)]
+    pub resume: Option<VpnMode>,
 }
 
 fn mode_off() -> VpnMode {
@@ -41,6 +48,8 @@ impl Default for Stored {
             mode: VpnMode::Off,
             selected: None,
             updated: None,
+            apps: Vec::new(),
+            resume: None,
         }
     }
 }
@@ -70,6 +79,11 @@ impl Files {
 
     pub fn pid(&self) -> PathBuf {
         self.dir.join("mihomo.pid")
+    }
+
+    /// Created to make the elevated TUN helper stop mihomo and exit.
+    pub fn stop_flag(&self) -> PathBuf {
+        self.dir.join("tun.stop")
     }
 
     pub fn log(&self) -> PathBuf {
@@ -151,6 +165,12 @@ mod tests {
             mode: VpnMode::LauncherAndGame,
             selected: Some("A".into()),
             updated: Some("2026-10-22T00:00:00Z".into()),
+            apps: vec![VpnApp {
+                name: "Telegram".into(),
+                process: "Telegram.exe".into(),
+                path: None,
+            }],
+            resume: Some(VpnMode::Apps),
         };
         f.save_state(&s).unwrap();
         assert!(f.load_state() == s);

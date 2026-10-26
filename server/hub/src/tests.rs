@@ -27,6 +27,11 @@ impl TokenValidator for FakeValidator {
                 },
                 name: token.into(),
             }),
+            // Valid token without a Yggdrasil profile.
+            "noprofile" => Some(Identity {
+                user_id: "token:0123456789abcdef".into(),
+                name: "Player".into(),
+            }),
             _ => None,
         })
     }
@@ -688,3 +693,5 @@ async fn ws_join_leave_x10_and_kick_free_slots() {
     assert_eq!(st, StatusCode::BAD_REQUEST);
     assert_app_error(&v, "invalidInput");
 }
+
+mod vpn_api;

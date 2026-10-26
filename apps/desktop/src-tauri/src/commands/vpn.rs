@@ -1,8 +1,9 @@
 //! Owner: net.
 
+use lc_types::account::AccountKind;
 use lc_types::task::{TaskEvent, TaskKind};
-use lc_types::vpn::{VpnMode, VpnNode, VpnState};
-use lc_types::{AppResult, TaskId};
+use lc_types::vpn::{VpnAccess, VpnApp, VpnMode, VpnNode, VpnState};
+use lc_types::{AccountId, AppError, AppResult, ErrorCode, TaskId};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
@@ -70,4 +71,82 @@ pub async fn vpn_select(state: State<'_, AppState>, node: String) -> AppResult<(
 #[specta::specta]
 pub async fn vpn_test_latency(state: State<'_, AppState>) -> AppResult<Vec<VpnNode>> {
     state.vpn.test_latency().await
+}
+
+fn same_api_root(a: &str, b: &str) -> bool {
+    let norm = |s: &str| s.trim().trim_end_matches('/').to_ascii_lowercase();
+    norm(a) == norm(b)
+}
+
+/// MineDed VPN (hub `/me/vpn`) for an own-server Yggdrasil account.
+/// `provision` creates the key when missing; `null` = no key yet.
+#[tauri::command]
+#[specta::specta]
+pub async fn vpn_mineded_access(
+    state: State<'_, AppState>,
+    account_id: AccountId,
+    provision: bool,
+) -> AppResult<Option<VpnAccess>> {
+    let needs_own = || {
+        AppError::new(
+            ErrorCode::InvalidInput,
+            "MineDed VPN needs an own-server account",
+        )
+        .detail("reason", "needsOwnServerAccount")
+    };
+    let accounts = state.accounts.list().await?;
+    let account = accounts
+        .iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| AppError::new(ErrorCode::NotFound, "account not found"))?;
+    if account.kind != AccountKind::Yggdrasil {
+        return Err(needs_own());
+    }
+    let servers = state.accounts.yggdrasil_servers().await?;
+    let own = account.server.as_deref().is_some_and(|root| {
+        servers
+            .iter()
+            .any(|s| s.official && same_api_root(&s.api_root, root))
+    });
+    if !own {
+        return Err(needs_own());
+    }
+    let auth = state.auth.launch_auth(Some(account_id)).await?;
+    state
+        .vpn
+        .mineded_access(auth.access_token.expose(), provision)
+        .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vpn_apps(state: State<'_, AppState>) -> AppResult<Vec<VpnApp>> {
+    state.vpn.apps().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vpn_set_apps(state: State<'_, AppState>, apps: Vec<VpnApp>) -> AppResult<()> {
+    state.vpn.set_apps(apps).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn vpn_running_apps(state: State<'_, AppState>) -> AppResult<Vec<VpnApp>> {
+    state.vpn.running_apps().await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn api_roots_compare_loosely() {
+        assert!(super::same_api_root(
+            "https://mc.example.ru/authserver/",
+            " https://MC.example.ru/authserver"
+        ));
+        assert!(!super::same_api_root(
+            "https://ely.by/api",
+            "https://mc.example.ru/api"
+        ));
+    }
 }

@@ -169,3 +169,18 @@ mihomo/caddy active, Drasl 200. Тег образа остаётся `mineup/hub
 заголовки безопасности на месте, README.md → 404. hub/updates/Drasl 200, mihomo/caddy active.
 Откат: `sudo docker compose -p mineup-relay stop site`, переименовать `caddy/site.caddy` в
 `site.caddy.off` + validate/reload.
+
+### 2026-10-26 вЂ” hub /me/vpn (server-ops)
+hub (musl, sha256 `be745282вЂ¦2929`) with `/me/vpn` GET/POST: one s-ui client per profile
+(remark `mc-<uuid>`, random name = subscription secret, 256 GiB, inbounds 1+2).
+New `compose.vpn.yaml` (start.sh adds it when `HUB_VPN_API_URL` is set): hub joins the external
+network `mineded-vpn_default` and calls `http://mineded-vpn:2095/<panel>/apiv2`; s-ui ports unchanged
+(127.0.0.1 only). `.env` += `HUB_VPN_API_URL`, `HUB_VPN_API_TOKEN`, `HUB_VPN_SUB_BASE`,
+`HUB_VPN_QUOTA_GB` (from /opt/vpn/.secrets). Backups: `backups/env-vpn-20261026-094048.bak`,
+`backups/hub-prev-20261026-094048`, `backups/start.sh.20261026-094048`.
+Checks: health 200 (local + public, 1.0.7), POST /me/vpn without auth 401; E2E with the Drasl test
+user: GET 404 -> POST 200 (quota 274877906944, enabled, resetAt 2026-10-31T21:00:00Z) -> POST again
+same URL -> subscription 200 (hysteria2 + vless) -> test client deleted in s-ui (GET 404, sub 400),
+token invalidated. All containers healthy.
+Rollback: restore the three backups (`.env`, `hub/hub`, `start.sh`), `./start.sh`
+(without `HUB_VPN_API_URL` the vpn override is not applied and `/me/vpn` returns 503).

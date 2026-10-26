@@ -28,8 +28,40 @@ tags:
     description: Skin library on top of Drasl textures.
   - name: rooms
     description: P2P room registry, tokens and fallback signaling.
+  - name: vpn
+    description: Personal MineDed VPN access (one key per Yggdrasil profile, monthly quota).
 
 paths:
+  /me/vpn:
+    get:
+      tags: [vpn]
+      operationId: getVpnAccess
+      summary: The caller's VPN access and usage
+      responses:
+        "200":
+          description: Access exists
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VpnAccess" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [vpn]
+      operationId: provisionVpnAccess
+      summary: Create the caller's VPN key (idempotent; returns the existing one)
+      description: >-
+        Creates a panel client bound to the profile UUID with the default monthly quota
+        (256 GiB). Rate-limited per profile. 503 when the VPN backend is unavailable.
+      responses:
+        "200":
+          description: Access (existing or new)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VpnAccess" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
   /health:
     get:
       tags: [system]
@@ -313,6 +345,18 @@ components:
         loader: { type: string, enum: [vanilla, fabric, quilt, forge, neoForge] }
         loaderVersion: { type: [string, "null"] }
         modsHash: { type: string }
+    VpnAccess:
+      type: object
+      required: [subscriptionUrl, quotaBytes, usedBytes, enabled]
+      properties:
+        subscriptionUrl:
+          type: string
+          format: uri
+          description: Personal subscription (mihomo YAML); secret, never logged
+        quotaBytes: { type: integer, format: int64, minimum: 0 }
+        usedBytes: { type: integer, format: int64, minimum: 0 }
+        resetAt: { type: [string, "null"], format: date-time, description: Next monthly reset }
+        enabled: { type: boolean, description: false when the quota is used up or the key is disabled }
     Mirrors:
       type: object
       description: Keys - pistonMeta, pistonData, libraries, resources, modrinthApi, modrinthCdn, updates, vpnSubscription

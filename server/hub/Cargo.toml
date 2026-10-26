@@ -21,6 +21,8 @@ http-body-util.workspace = true
 hmac = "0.12.1"
 sha2 = "0.10.9"
 base64 = "0.22.1"
+# s-ui panel API takes form-encoded bodies (vpn.rs).
+form_urlencoded = "1.2.2"
 
 [dev-dependencies]
 tower.workspace = true

@@ -77,7 +77,9 @@ impl AppState {
         );
         let skins = Arc::new(SkinsService::new(&paths, accounts.clone()));
         let loaders = Arc::new(lc_loaders::default_registry(downloader.clone()));
-        let mihomo = Arc::new(MihomoVpn::new(paths.clone(), downloader.clone()));
+        let mihomo = Arc::new(
+            MihomoVpn::new(paths.clone(), downloader.clone()).with_settings(settings.clone()),
+        );
         let room_env = Arc::new(CoreRoomEnv::new(accounts.clone()));
         let p2p = P2pRooms::new(
             P2pConfig::default(),

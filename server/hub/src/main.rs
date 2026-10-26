@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use hub::auth::DraslValidator;
 use hub::rooms::Limits;
+use hub::vpn::VpnConfig;
 use hub::{AppState, Config};
 
 fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -11,6 +12,23 @@ fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
         .ok()
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(default)
+}
+
+fn env_nonempty(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+}
+
+/// VPN is on only when the API URL, token and public subscription base are all set.
+fn vpn_config() -> Option<VpnConfig> {
+    Some(VpnConfig {
+        api_url: env_nonempty("HUB_VPN_API_URL")?,
+        api_token: env_nonempty("HUB_VPN_API_TOKEN")?,
+        sub_base: env_nonempty("HUB_VPN_SUB_BASE")?,
+        quota_bytes: env_parse("HUB_VPN_QUOTA_GB", 256u64).saturating_mul(1 << 30),
+    })
 }
 
 #[tokio::main]
@@ -32,7 +50,9 @@ async fn main() -> std::io::Result<()> {
             max_rooms_per_user: env_parse("HUB_MAX_ROOMS_PER_USER", defaults.max_rooms_per_user),
         },
         trust_proxy: env_parse("HUB_TRUST_PROXY", false),
+        vpn: vpn_config(),
     };
+    eprintln!("vpn: {}", if cfg.vpn.is_some() { "on" } else { "off" });
 
     let state = AppState::new(cfg, Arc::new(DraslValidator::new(&drasl)));
     state.spawn_reaper();

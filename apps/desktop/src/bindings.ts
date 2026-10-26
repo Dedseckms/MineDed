@@ -62,6 +62,21 @@ export const commands = {
 	vpnNodes: () => typedError<VpnNode[], AppError>(__TAURI_INVOKE("vpn_nodes")),
 	vpnSelect: (node: string) => typedError<null, AppError>(__TAURI_INVOKE("vpn_select", { node })),
 	vpnTestLatency: () => typedError<VpnNode[], AppError>(__TAURI_INVOKE("vpn_test_latency")),
+	/**
+	 *  MineDed VPN (hub `/me/vpn`) for an own-server Yggdrasil account.
+	 *  `provision` creates the key when missing; `null` = no key yet.
+	 */
+	vpnMinededAccess: (accountId: AccountId, provision: boolean) => typedError<{
+	quotaBytes: number,
+	usedBytes: number,
+	/**  RFC 3339 of the next monthly reset. */
+	resetAt: string | null,
+	/**  False when the quota is used up or the key is disabled. */
+	enabled: boolean,
+} | null, AppError>(__TAURI_INVOKE("vpn_mineded_access", { accountId, provision })),
+	vpnApps: () => typedError<VpnApp[], AppError>(__TAURI_INVOKE("vpn_apps")),
+	vpnSetApps: (apps: VpnApp[]) => typedError<null, AppError>(__TAURI_INVOKE("vpn_set_apps", { apps })),
+	vpnRunningApps: () => typedError<VpnApp[], AppError>(__TAURI_INVOKE("vpn_running_apps")),
 	roomCreate: (instance: InstanceId, authMode: RoomAuthMode, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create", { instance, authMode, password })),
 	roomJoin: (code: string, instance: string | null, password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_join", { code, instance, password })),
 	roomCreateVoice: (password: string | null) => typedError<RoomState, AppError>(__TAURI_INVOKE("room_create_voice", { password })),
@@ -723,6 +738,26 @@ export type VoiceStatus = {
 
 export type VoiceStatusEvent = VoiceStatus;
 
+/**  Personal MineDed VPN access from hub `/me/vpn`. */
+export type VpnAccess = {
+	quotaBytes: number,
+	usedBytes: number,
+	/**  RFC 3339 of the next monthly reset. */
+	resetAt: string | null,
+	/**  False when the quota is used up or the key is disabled. */
+	enabled: boolean,
+};
+
+/**  A program routed through the VPN in `VpnMode::Apps`. */
+export type VpnApp = {
+	/**  Display name ("Telegram"). */
+	name: string,
+	/**  Executable file name matched by mihomo `PROCESS-NAME` ("Telegram.exe"). */
+	process: string,
+	/**  Full path when picked from disk or a running process. */
+	path: string | null,
+};
+
 export type VpnMode = "off" | 
 /**  mihomo mixed-port; only launcher HTTP goes through it. No admin rights. */
 "launcherOnly" | 
@@ -730,7 +765,13 @@ export type VpnMode = "off" |
  *  Same mixed-port, plus the game's Java is pointed at it via JVM proxy
  *  properties (`-DsocksProxyHost` etc.). No TUN, no admin rights.
  */
-"launcherAndGame";
+"launcherAndGame" | 
+/**
+ *  mihomo TUN: the launcher, the game and the programs from
+ *  `VpnController::apps` go through the VPN, everything else direct.
+ *  Needs admin rights (UAC on Windows, CAP_NET_ADMIN on Linux).
+ */
+"apps";
 
 export type VpnNode = {
 	name: string,
