@@ -9,6 +9,7 @@
     "core:webview:allow-get-all-webviews",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
-    "core:window:allow-set-always-on-top"
+    "core:window:allow-set-always-on-top",
+    "dialog:allow-open"
   ]
 }
