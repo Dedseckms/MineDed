@@ -28,6 +28,11 @@ fn build_state(app: &tauri::AppHandle) -> Result<state::AppState, Box<dyn std::e
         .filter(|d| !d.trim().is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or(data_dir);
+    // The 3D skin preview loads PNGs via the asset protocol; the data root may be a
+    // custom game dir, so allow its skin library and remote-skin cache at runtime.
+    let assets = app.asset_protocol_scope();
+    assets.allow_directory(root.join("skins"), true)?;
+    assets.allow_directory(root.join("cache").join("skins-remote"), true)?;
     let observer = Arc::new(observers::EventObserver::new(app.clone()));
     Ok(state::AppState::real(
         Paths::new(root),
