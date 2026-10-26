@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use lc_types::account::{Account, YggdrasilServer};
-use lc_types::skin::{Cape, Skin, SkinModel};
+use lc_types::skin::{Cape, RemoteSkin, Skin, SkinModel};
 use lc_types::{AccountId, AppResult, SkinId};
 use url::Url;
 
@@ -102,6 +102,12 @@ pub trait SkinService: Send + Sync {
     async fn library(&self) -> AppResult<Vec<Skin>>;
     /// Validates PNG (64x64 / 64x32) and stores it in the library.
     async fn add(&self, png_path: &str, name: &str, model: SkinModel) -> AppResult<Skin>;
+    /// Downloads a skin for preview without adding it. `source` is an http(s)
+    /// URL of a PNG or of a skin page on a known site (ely.by, minecraftskins.com,
+    /// namemc.com: the PNG is resolved from the page), or a player nickname
+    /// (Mojang profile first, then Ely.by). The PNG is validated like `add` and
+    /// cached in a temp dir; `NotFound` when nothing matches.
+    async fn fetch_remote(&self, source: &str) -> AppResult<RemoteSkin>;
     async fn remove(&self, id: SkinId) -> AppResult<()>;
     /// Uploads to the account's server (own Yggdrasil / Mojang) and selects it.
     async fn apply(&self, account: AccountId, skin: SkinId) -> AppResult<()>;

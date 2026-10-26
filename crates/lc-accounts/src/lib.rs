@@ -4,6 +4,7 @@ pub mod authlib;
 pub mod contract;
 mod fsutil;
 pub mod offline;
+mod remote;
 mod service;
 mod skins;
 mod stub;

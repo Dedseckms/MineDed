@@ -57,6 +57,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             accounts::account_set_default,
             skins::skin_library,
             skins::skin_add,
+            skins::skin_fetch_remote,
             skins::skin_remove,
             skins::skin_apply,
             skins::cape_list,

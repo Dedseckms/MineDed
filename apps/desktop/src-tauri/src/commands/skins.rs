@@ -1,6 +1,6 @@
 //! Owner: accounts.
 
-use lc_types::skin::{Cape, Skin, SkinModel};
+use lc_types::skin::{Cape, RemoteSkin, Skin, SkinModel};
 use lc_types::{AccountId, AppResult, SkinId};
 use tauri::State;
 
@@ -21,6 +21,16 @@ pub async fn skin_add(
     model: SkinModel,
 ) -> AppResult<Skin> {
     state.skins.add(&png_path, &name, model).await
+}
+
+/// Downloads a skin by URL or nickname for preview (not added to the library).
+#[tauri::command]
+#[specta::specta]
+pub async fn skin_fetch_remote(
+    state: State<'_, AppState>,
+    source: String,
+) -> AppResult<RemoteSkin> {
+    state.skins.fetch_remote(&source).await
 }
 
 #[tauri::command]
