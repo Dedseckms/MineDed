@@ -3,6 +3,7 @@
 //! `LaunchContributor` (quick play target for guests, authlib for the host).
 
 use async_trait::async_trait;
+use lc_runtime::ProgressSink;
 use lc_types::room::{Peer, RoomAuthMode, RoomState};
 use lc_types::voice::ChatMessage;
 use lc_types::{AppResult, InstanceId};
@@ -34,6 +35,15 @@ pub trait RoomService: Send + Sync {
     /// (Yggdrasil bearer if available, else anonymous like open rooms).
     async fn create_voice(&self, password: Option<String>) -> AppResult<RoomState>;
     async fn leave(&self) -> AppResult<()>;
+    /// Guest of a game room: asks the host for its instance as `.mrpack`
+    /// (exported by the host on request and sent over P2P; Modrinth files as
+    /// links, local mods/configs as overrides). Returns the downloaded file path
+    /// for `PackIo::import`. Game rooms may be joined with `instance: None`
+    /// for this; call `attach_instance` before launching.
+    async fn download_host_pack(&self, sink: &dyn ProgressSink) -> AppResult<String>;
+    /// Guest: binds the joined game room to `instance` (e.g. the imported host
+    /// pack) and adds the server-list entry to it.
+    async fn attach_instance(&self, instance: InstanceId) -> AppResult<RoomState>;
     async fn state(&self) -> AppResult<Option<RoomState>>;
     /// Host only.
     async fn kick(&self, peer_id: &str) -> AppResult<()>;

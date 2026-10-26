@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use lc_runtime::ProgressSink;
 use lc_types::room::{RoomAuthMode, RoomState};
 use lc_types::voice::ChatMessage;
 use lc_types::{AppError, AppResult, InstanceId};
@@ -35,6 +36,14 @@ impl RoomService for StubRooms {
 
     async fn leave(&self) -> AppResult<()> {
         Ok(())
+    }
+
+    async fn download_host_pack(&self, _sink: &dyn ProgressSink) -> AppResult<String> {
+        Err(AppError::not_implemented("RoomService::download_host_pack"))
+    }
+
+    async fn attach_instance(&self, _instance: InstanceId) -> AppResult<RoomState> {
+        Err(AppError::not_implemented("RoomService::attach_instance"))
     }
 
     async fn state(&self) -> AppResult<Option<RoomState>> {
