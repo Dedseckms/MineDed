@@ -70,6 +70,9 @@ pub(crate) fn apply_patch(inst: &mut Instance, patch: InstancePatch) -> AppResul
     if let Some(icon) = patch.icon {
         inst.icon = (!icon.is_empty()).then_some(icon);
     }
+    if let Some(preset) = patch.preset {
+        inst.preset = Some(preset);
+    }
     Ok(())
 }
 

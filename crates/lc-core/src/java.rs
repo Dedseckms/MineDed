@@ -267,10 +267,13 @@ pub(crate) fn current_arch() -> String {
     normalize_arch(std::env::consts::ARCH)
 }
 
-/// Creates a hidden-window command (no console flash on Windows).
+/// Creates a hidden-window command (no console flash on Windows). On Linux
+/// the AppImage runtime environment is scrubbed so Java loads system libs.
 pub(crate) fn command(program: &Path) -> tokio::process::Command {
     #[allow(unused_mut)]
     let mut cmd = tokio::process::Command::new(program);
+    #[cfg(target_os = "linux")]
+    crate::appimage::apply(&mut cmd);
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
