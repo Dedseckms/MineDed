@@ -4,6 +4,7 @@ Domain = "skins.dedseckms.ru"
 BaseURL = "https://skins.dedseckms.ru"
 ListenAddress = "0.0.0.0:25585"
 InstanceName = "MineDed Skins"
+ApplicationName = "MineDed Skins"
 ApplicationOwner = "MineDed"
 StateDirectory = "/var/lib/drasl"
 DefaultAdmins = ["mu_admin"]
