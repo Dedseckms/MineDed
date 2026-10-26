@@ -48,3 +48,57 @@ No secrets here. SSH key lives only on the operator machine (outside the repo).
   `sshd -t && systemctl reload ssh` (only from an open key session; re-enabling passwords is not intended).
 - ufw: `ufw disable`. fail2ban: `systemctl disable --now fail2ban`.
 - Docker/Caddy: `apt-get purge` the packages and remove the repo files listed above.
+
+## Phase 2 — 2026-10-26 (migration of skinserver + relay from the home server)
+
+Owner approved moving the skins (incl. the Drasl texture signing key). Provider: 8 TB traffic,
+10 Gbit. Same compose projects, container names, ports and folders as on the home server
+(`server/skinserver/DEPLOY.md`, `server/relay/DEPLOY.md` describe the stacks).
+
+### What was deployed
+- `/opt/skinserver` (project `mineup-skin`): repo files from main + live `config/config.toml`,
+  `.env`, `.secrets` from the home server (chmod 600). Image `mineup/drasl:4.0.1-hc` built here.
+  Drasl `127.0.0.1:25585`, network `mineup-skin_skin_net` 172.30.42.0/24.
+- Drasl volume `mineup-skin_drasl_state` restored from the home backup
+  `/opt/skinserver/backups/skinserver-20261026-082750.tar.gz` with the procedure in
+  `server/skinserver/DEPLOY.md` (stop, busybox tar into the volume, start). Checks:
+  `signaturePublickey` identical to the live home server, `mu_tester` profile present,
+  signed `textures` property served.
+- `/opt/relay` (project `mineup-relay`): repo files from main, hub musl binary built from main
+  (hub 1.0.7), site files from `site/` (README excluded), live `.env` from the home server with
+  changes: `CADDY_UID=999` (caddy uid on this host; gid 988 same), `QAD=0` until a real cert
+  exists, `GITHUB_REPO=Dedseckms/MineDed` (the home value `Dedseckms/MineUP` now returns
+  GitHub 301 -> mirror state error). Previous `.env`: `/opt/relay/backups/env-20261026.bak`.
+  Ports 127.0.0.1: hub 18080, iroh-relay 13340, updates-web 18090, site 18091. All containers healthy.
+- Host Caddy: `/etc/caddy/Caddyfile` (original kept as `Caddyfile.orig-20261026`) now only
+  `import /opt/skinserver/caddy/*.caddy` and `import /opt/relay/caddy/*.caddy` -> sites
+  `skins.`, `relay.`, `mineded.`, `mineup.` (301 to mineded) `.dedseckms.ru`.
+  Tested first with a temporary `local_certs` global option, then switched to the production
+  config (ACME) and restarted Caddy; ACME will keep failing until DNS points here.
+- ufw: + `7842/udp` (iroh-relay QAD; iroh-relay 1.4.1 has no separate STUN port).
+  Docker publishes only on 127.0.0.1 except QAD (`0.0.0.0:7842/udp` when `QAD=1`).
+- Cron `/etc/cron.d/mineup-skin-backup`: daily 04:17 `backup.sh` (stops drasl ~2 s), log in
+  `/opt/skinserver/backups/backup.log`. Test run OK (`skinserver-20261026-083555.tar.gz`).
+- Smoke test script `/opt/relay/smoke-vps.sh` (curl `--resolve <host>:443:127.0.0.1 -k`):
+  skins `/authlib-injector` 200 + `X-Authlib-Injector-API-Location`, `/web/registration` 200;
+  relay `/api/v1/health` 200 `{"status":"ok","version":"1.0.7"}`, `/api/v1/mirrors` 501
+  (by design), `/ping` 200, `/healthz` 200, `/updates/status.json` 200 (`state: ok`, v1.0.7
+  mirrored); mineded `/` 200, `/README.md` 404; mineup -> 301 mineded with path/query.
+  Room create without a signature -> 400 `invalidInput` (hub validates as expected).
+
+### Cutover (after the owner switches DNS)
+1. DNS A records -> 31.59.192.133 (optional AAAA -> 2a12:bec4:1480:9e::2) for
+   `skins`, `relay`, `mineded`, `mineup` `.dedseckms.ru`.
+2. Final Drasl sync: stop drasl on the home server, take `backup.sh` there, restore here with the
+   same procedure (otherwise registrations/skin changes made after 2026-10-26 08:27 UTC are lost).
+3. `systemctl restart caddy` (skip ACME retry backoff), wait for certs:
+   `ls /var/lib/caddy/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/`.
+4. `/opt/relay/.env`: `QAD=1`, then `cd /opt/relay && SUDO= ./start.sh`; check log
+   `QUIC server listening on 0.0.0.0:7842`.
+5. Public checks: `/opt/relay/check.sh`, Drasl `https://skins.dedseckms.ru/authlib-injector`.
+6. Home server stacks stay up until the owner decides (stopping them needs the owner's "ok").
+
+### Rollback
+- DNS back to the home server (nothing there was changed).
+- Here: `docker compose -p mineup-relay down`, `docker compose -p mineup-skin stop drasl`
+  (volume kept), `cp /etc/caddy/Caddyfile.orig-20261026 /etc/caddy/Caddyfile && systemctl reload caddy`.
