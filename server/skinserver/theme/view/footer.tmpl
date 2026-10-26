@@ -1,0 +1,18 @@
+{{/* MineDed theme override of Drasl 4.0.1 view/footer.tmpl. Closes div.card opened in header.tmpl. */}}
+{{ define "footer" }}
+  </div>
+  {{ $ru := eq .L.GetLanguage "ru" }}
+  <footer class="foot panel">
+    <span>
+      {{ if $ru }}Лаунчер MineDed:{{ else }}MineDed launcher:{{ end }}
+      <a href="https://mineded.dedseckms.ru/">mineded.dedseckms.ru</a>
+    </span>
+    {{ if .App.Config.EnableFooter }}
+    <small class="muted">
+      {{ call .T `Drasl version %s.` .App.Constants.Version }}
+      {{ render (call .T `Licensed as {{ index . 0 }}.`) (render `<a href="{{ index . 0 }}">{{ index . 1 }}</a>` .App.Constants.LicenseURL .App.Constants.License) }}
+      {{ render (call .T `<a href="{{ index . 0 }}">Source code</a>.`) .App.Constants.RepositoryURL }}
+    </small>
+    {{ end }}
+  </footer>
+{{ end }}

@@ -108,6 +108,7 @@ h1, h2, h3 { line-height: 1.2; margin: 0; }
 .top nav a { color: var(--text); text-decoration: none; padding: 8px 12px; border-radius: 8px; font-weight: 500; }
 .top nav a:hover { background: var(--surface-2); }
 .tools { display: flex; gap: 2px; }
+.top .signin { min-height: 38px; padding: 6px 14px; }
 main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; padding: 40px 0 28px; }
 main:focus { outline: none; }
 section { scroll-margin-top: 80px; }
@@ -169,7 +170,7 @@ main > *, .shots > li, .shot, .shot button { min-width: 0; }
 
 @media (max-width: 640px) {
   .top nav { display: none; }
-  .tools { margin-left: auto; }
+  .top .signin { margin-left: auto; }
   main { padding-top: 24px; gap: 22px; }
   .foot { flex-direction: column; align-items: flex-start; }
 }
