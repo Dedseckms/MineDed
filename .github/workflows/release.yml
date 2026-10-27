@@ -75,7 +75,7 @@ jobs:
         with:
           key: release
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 12
       - uses: actions/setup-node@v4
