@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Уязвимость безопасности
+    url: https://github.com/Dedseckms/MineDed/security/advisories/new
+    about: Сообщите приватно, не в публичных issues.
+  - name: Сайт и загрузка
+    url: https://mineded.dedseckms.ru
+    about: Описание, скриншоты и последняя версия лаунчера.

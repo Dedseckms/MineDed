@@ -1,0 +1,48 @@
+name: Ошибка
+description: Что-то работает не так
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Спасибо! Уязвимости сюда не пишите — см. SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Версия лаунчера
+      placeholder: "1.2.1 (Настройки → О программе и обновления)"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Система
+      options: [Windows 11, Windows 10, Linux (AppImage), Linux (.deb), Другое]
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Где ошибка
+      options: [Запуск игры, Моды и сборки, Комнаты / мультиплеер, Голос и чат, Скины и аккаунты, VPN, Установка и обновление, Интерфейс, Другое]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось
+      description: Что вы делали, что ожидали и что получили
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить
+      placeholder: |
+        1. …
+        2. …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Лог
+      description: 'Лог игры: «Играть → Лог игры». Лог лаунчера: %LOCALAPPDATA%\ru.dedseckms.mineup\logs (Windows) или ~/.local/share/ru.dedseckms.mineup/logs (Linux)'
+      render: text
