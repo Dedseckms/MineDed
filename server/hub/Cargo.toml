@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "hub"
 description = "Rooms, signaling, mirrors list and skin library API. Owner: server-ops. API contract: server/openapi/hub.yaml"
 version.workspace = true
@@ -20,7 +20,7 @@ http-body-util.workspace = true
 # peerToken MAC (hub.yaml joinRoom).
 hmac = "0.12.1"
 sha2 = "0.10.9"
-base64 = "0.22.1"
+base64 = "0.23.1"
 # s-ui panel API takes form-encoded bodies (vpn.rs).
 form_urlencoded = "1.2.2"
 

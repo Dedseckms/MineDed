@@ -2657,7 +2657,7 @@ version = "1.2.1"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "form_urlencoded",
  "futures-util",
  "hmac",
@@ -3408,7 +3408,7 @@ version = "1.2.1"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "keyring",
  "lc-http",
@@ -3528,7 +3528,7 @@ version = "1.2.1"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "hex",
  "hmac",
@@ -3600,7 +3600,7 @@ version = "1.2.1"
 dependencies = [
  "async-trait",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "flate2",
  "getrandom 0.3.4",
  "hex",
