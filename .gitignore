@@ -40,3 +40,4 @@ Thumbs.db
 # Search engine verification files (kept only on the server)
 /site/google*.html
 /site/yandex_*.html
+/.telegram.env
