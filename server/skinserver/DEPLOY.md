@@ -124,3 +124,7 @@ sudo docker compose -p mineup-skin start drasl
 - Rollback: restore *.pre-theme1, then docker compose -p mineup-skin up -d --no-build --force-recreate --no-deps drasl.
 - Caddy: requests without Accept-Language get Accept-Language: ru.
 - Signing key unchanged (signaturePublickey identical before/after).
+
+## 2026-10-27 security headers
+- Site block: HSTS, nosniff, X-Frame-Options DENY, Referrer-Policy, -Server + CSP (script-src 'unsafe-inline': Drasl inline module scripts). Backup on server: caddy/*.caddy.bak-20261027-060540. Rollback: restore backup, caddy validate, systemctl reload caddy.
+

@@ -184,3 +184,7 @@ same URL -> subscription 200 (hysteria2 + vless) -> test client deleted in s-ui 
 token invalidated. All containers healthy.
 Rollback: restore the three backups (`.env`, `hub/hub`, `start.sh`), `./start.sh`
 (without `HUB_VPN_API_URL` the vpn override is not applied and `/me/vpn` returns 503).
+
+## 2026-10-27 security headers
+- Site block: HSTS, nosniff, X-Frame-Options DENY, Referrer-Policy, -Server. Backup on server: caddy/*.caddy.bak-20261027-060540. Rollback: restore backup, caddy validate, systemctl reload caddy.
+
