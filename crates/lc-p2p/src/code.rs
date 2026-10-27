@@ -9,6 +9,10 @@ pub const LINK_PREFIX: &str = "mineded://join/";
 /// Accepted link schemes: current and pre-rename.
 const SCHEMES: [&str; 2] = ["mineded:", "mineup:"];
 
+/// Shareable https form (messengers don't make custom schemes clickable); the
+/// site page opens `mineded://join/<code>`.
+pub const SHARE_PREFIX: &str = "https://mineded.dedseckms.ru/join/";
+
 /// Normalises user input into a canonical room code `XXXX-XXXX`.
 ///
 /// Accepts a bare code (any case, with or without the dash, surrounding
@@ -16,7 +20,9 @@ const SCHEMES: [&str; 2] = ["mineded:", "mineup:"];
 /// slash, query or fragment).
 pub fn parse_code(input: &str) -> AppResult<String> {
     let mut s = input.trim();
-    if let Some(rest) = SCHEMES.iter().find_map(|p| strip_prefix_ci(s, p)) {
+    if let Some(rest) = strip_prefix_ci(s, SHARE_PREFIX) {
+        s = rest;
+    } else if let Some(rest) = SCHEMES.iter().find_map(|p| strip_prefix_ci(s, p)) {
         // `scheme://join/<code>`, `scheme:join/<code>` and `scheme:///join/<code>`.
         s = rest.trim_start_matches('/');
         s = strip_prefix_ci(s, "join/").ok_or_else(|| bad_code(input))?;
@@ -34,9 +40,9 @@ pub fn parse_code(input: &str) -> AppResult<String> {
     Ok(format!("{}-{}", &compact[..4], &compact[4..]))
 }
 
-/// `mineded://join/<code>` for a canonical code.
+/// Shareable `https://mineded.dedseckms.ru/join/<code>` link for a canonical code.
 pub fn join_link(code: &str) -> String {
-    format!("{LINK_PREFIX}{code}")
+    format!("{SHARE_PREFIX}{code}")
 }
 
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -92,7 +98,7 @@ mod tests {
     #[test]
     fn link_roundtrip() {
         let link = join_link("ABCD-1234");
-        assert_eq!(link, "mineded://join/ABCD-1234");
+        assert_eq!(link, "https://mineded.dedseckms.ru/join/ABCD-1234");
         assert_eq!(parse_code(&link).unwrap(), "ABCD-1234");
     }
 }

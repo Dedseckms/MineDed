@@ -18,9 +18,10 @@ export function hostPackCandidates(instances: readonly Instance[], sig: Instance
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export const ROOM_LINK_PREFIX = "mineded://join/";
+/** Shareable https link (messengers don't linkify custom schemes); the site opens the deep link. */
+export const ROOM_LINK_PREFIX = "https://mineded.dedseckms.ru/join/";
 /** Pre-rename links stay valid. */
-const ROOM_LINK_PREFIXES = [ROOM_LINK_PREFIX, "mineup://join/"];
+const ROOM_LINK_PREFIXES = [ROOM_LINK_PREFIX, "mineded://join/", "mineup://join/"];
 export const ROOM_PASSWORD_MIN = 4;
 export const ROOM_PASSWORD_MAX = 64;
 export const CHAT_MAX = 500;

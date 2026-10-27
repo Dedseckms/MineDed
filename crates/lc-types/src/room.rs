@@ -79,7 +79,7 @@ pub struct RoomState {
     pub peers: Vec<Peer>,
     /// RFC 3339.
     pub expires_at: String,
-    /// `mineded://join/<code>`.
+    /// Shareable `https://mineded.dedseckms.ru/join/<code>` link.
     pub link: String,
     pub password_protected: bool,
     /// Guest only: local `127.0.0.1:<port>` to add as a server in the game.

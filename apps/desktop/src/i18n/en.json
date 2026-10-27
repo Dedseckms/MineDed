@@ -343,7 +343,7 @@
       "tooMany": "16 links at most"
     },
     "room": {
-      "link": "The link must start with mineded://join/",
+      "link": "Paste a room code or an invite link (https://mineded.dedseckms.ru/join/…)",
       "code": "A room code looks like ABCD-1234",
       "password": "Password must be 4 to 64 characters"
     },
@@ -754,7 +754,7 @@
       "title": "Join by code",
       "intro": "Enter a code or link from a friend — the launcher gives you a local address to connect to.",
       "code": "Code or link",
-      "codeHint": "E.g. ABCD-1234 or mineded://join/ABCD-1234",
+      "codeHint": "E.g. ABCD-1234 or https://mineded.dedseckms.ru/join/ABCD-1234",
       "codePlaceholder": "ABCD-1234",
       "submit": "Join",
       "denied": "Wrong room password."

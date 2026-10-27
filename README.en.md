@@ -60,7 +60,7 @@ The launcher updates itself; updates are signed. The interface is available in R
 
 ## Multiplayer without a server
 
-- Host: **Multiplayer → Open world to friends** (optionally with a password) — the code appears at once; send it or the link `mineded://join/CODE`. Then in game: Esc → "Open to LAN".
+- Host: **Multiplayer → Open world to friends** (optionally with a password) — the code appears at once; send it or the link `https://mineded.dedseckms.ru/join/CODE` (clickable in messengers). Then in game: Esc → "Open to LAN".
 - Guest: **Multiplayer → Join**, enter the code (or click the link). If you don't have the host's modpack, press "Download and play" — it is installed automatically. The `127.0.0.1:port` server appears in the game's server list.
 - The connection is encrypted, direct or via a relay when a direct link is impossible.
 - If the host signed in with "My server", guests must use that server too; an offline host accepts everyone.

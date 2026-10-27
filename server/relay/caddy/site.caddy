@@ -13,6 +13,9 @@ mineded.dedseckms.ru {
 		-Server
 	}
 	# HTML must revalidate; assets are versioned (?v=N) in index.html and may cache 7 days.
+	# Shareable invite links (messengers linkify only https): served by join.html, which opens mineded://.
+	rewrite /join/* /join.html
+	rewrite /invite/* /join.html
 	@html path / /index.html
 	header @html Cache-Control "no-cache"
 	@assets path *.css *.js *.svg *.webp

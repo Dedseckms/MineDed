@@ -320,7 +320,7 @@ async fn direct_pair(password: Option<&str>) -> (Side, Side, Hub, MemoryLookup) 
         .await
         .unwrap();
     assert_eq!(st.role, RoomRole::Host);
-    assert_eq!(st.link, "mineded://join/ABCD-1234");
+    assert_eq!(st.link, "https://mineded.dedseckms.ru/join/ABCD-1234");
     assert_eq!(st.password_protected, password.is_some());
     // Offline host, open room: created anonymously.
     assert!(!hub.lock().unwrap().create_had_bearer);
