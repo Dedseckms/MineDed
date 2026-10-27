@@ -1,0 +1,36 @@
+name: tg-bot
+services:
+  # One-shot: make the state volume writable by the unprivileged `node` user.
+  init-state:
+    image: node:22.20.0-alpine3.22
+    user: root
+    command: ["chown", "node:node", "/home/node/state"]
+    volumes:
+      - state:/home/node/state
+    restart: "no"
+  tg-bot:
+    depends_on:
+      init-state:
+        condition: service_completed_successfully
+    image: node:22.20.0-alpine3.22
+    container_name: mineded-tg-bot
+    restart: unless-stopped
+    user: node
+    command: ["sh", "/app/loop.sh"]
+    env_file: .env # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (0600, server only)
+    environment:
+      REPO: Dedseckms/MineDed
+      INTERVAL_SEC: "600"
+      SEED_TAG: v1.2.1
+      NODE_OPTIONS: --max-old-space-size=32
+    volumes:
+      - ./loop.sh:/app/loop.sh:ro
+      - state:/home/node/state
+    mem_limit: 64m
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "3"
+volumes:
+  state:
