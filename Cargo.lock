@@ -3427,6 +3427,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lc-chat"
+version = "1.2.1"
+dependencies = [
+ "async-trait",
+ "lc-runtime",
+ "lc-types",
+ "tokio",
+]
+
+[[package]]
 name = "lc-content"
 version = "1.2.1"
 dependencies = [

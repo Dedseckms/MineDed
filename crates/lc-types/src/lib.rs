@@ -14,6 +14,7 @@ pub mod java;
 pub mod room;
 pub mod settings;
 pub mod skin;
+pub mod social;
 pub mod system;
 pub mod task;
 pub mod version;
