@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Как установить MineDed</title>
+<meta name="description" content="Установка MineDed на Windows и Linux: SmartScreen, брандмауэр, AppImage и .deb, где лежат данные, обновление и удаление.">
+<link rel="canonical" href="https://mineded.dedseckms.ru/install.html">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=10">
+</head>
+<body>
+<div id="bg" class="bg" aria-hidden="true"></div>
+<main class="doc panel">
+  <p class="small"><a href="./">← MineDed</a> · <a href="./#download">Скачать</a> · <a href="#en">English</a></p>
+  <h1>Как установить MineDed</h1>
+  <p>Скачивайте лаунчер только с этого сайта или со страницы
+    <a href="https://github.com/Dedseckms/MineDed/releases/latest" rel="noopener">Releases на GitHub</a>.
+    Копии из других мест могут быть изменены.</p>
+
+  <h2>Windows 10 / 11</h2>
+  <ol>
+    <li>Скачайте <b>установщик .exe</b> (рекомендуется: права администратора не нужны) или <b>.msi</b>.</li>
+    <li><b>Браузер пишет, что файл скачивают редко?</b> В Chrome / Edge нажмите «⋯» у загрузки → «Сохранить».</li>
+    <li><b>«Windows защитила ваш компьютер»</b> (SmartScreen): нажмите <b>«Подробнее»</b> → <b>«Выполнить в любом случае»</b>.
+      Это предупреждение появляется, потому что у установщика пока нет платной цифровой подписи и мало
+      скачиваний, — вируса в нём нет. Код открыт, установщики собирает GitHub Actions.</li>
+    <li>Пройдите установщик — ярлык появится на рабочем столе и в «Пуске».</li>
+    <li><b>Брандмауэр Windows</b> при первой игре с друзьями спросит про доступ к сети для MineDed и Java —
+      разрешите для <b>частных сетей</b>, иначе друзья не смогут подключиться.</li>
+    <li>Режим VPN «Выбранные программы» спрашивает права администратора — это нормально.</li>
+  </ol>
+
+  <h2>Linux</h2>
+  <p><b>AppImage</b> — работает на любом дистрибутиве и обновляется сам:</p>
+  <p><code>chmod +x MineDed_*_amd64.AppImage &amp;&amp; ./MineDed_*_amd64.AppImage</code></p>
+  <p>Ошибка про FUSE — установите пакет: Ubuntu 22.04 / Debian / Mint — <code>sudo apt install libfuse2</code>;
+    Ubuntu 24.04+ — <code>libfuse2t64</code>; Arch / CachyOS — <code>sudo pacman -S fuse2</code>;
+    Fedora — <code>sudo dnf install fuse-libs</code>.</p>
+  <p><b>.deb</b> (Ubuntu, Debian, Mint): <code>sudo apt install ./MineDed_*_amd64.deb</code> — новые версии ставятся так же.</p>
+  <p><b>Чёрное окно</b> на старых видеокартах: запустите с
+    <code>WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1</code> перед командой.</p>
+
+  <h2>Первый запуск</h2>
+  <ol>
+    <li><b>Аккаунты</b> → оффлайн-аккаунт (просто ник) или «Мой сервер» — вход по инвайту, со скинами.</li>
+    <li><b>Сборки</b> → «Создать»: версия и загрузчик. Java скачается сама.</li>
+    <li><b>Играть.</b> Для слабых ПК — пресет оптимизации в настройках сборки.</li>
+  </ol>
+  <p>Обновления лаунчер предлагает сам при запуске; они подписаны, подменённое обновление не установится.</p>
+
+  <h2>Где лежат данные</h2>
+  <ul>
+    <li>Windows: <code>%APPDATA%\ru.dedseckms.mineup</code>, логи — <code>%LOCALAPPDATA%\ru.dedseckms.mineup\logs</code></li>
+    <li>Linux: <code>~/.local/share/ru.dedseckms.mineup</code> (логи — в папке <code>logs</code>)</li>
+    <li>Лог игры — «Играть» → «Лог игры». Прикладывайте его к сообщению об ошибке.</li>
+  </ul>
+
+  <h2>Удаление</h2>
+  <p>Windows: Параметры → Приложения → MineDed → Удалить; сборки и миры остаются в папке данных.
+    Linux: удалите AppImage или пакет .deb через <code>sudo apt remove</code>.</p>
+
+  <h2>Помощь</h2>
+  <p><a href="https://github.com/Dedseckms/MineDed/issues/new/choose" rel="noopener">Сообщить об ошибке на GitHub</a> ·
+    <a href="https://t.me/minededlaunch" rel="noopener">Telegram-канал</a></p>
+
+  <h2 id="en">English</h2>
+  <p><b>Windows:</b> run the <code>.exe</code> installer (no admin rights) or the <code>.msi</code>. If SmartScreen shows
+    "Windows protected your PC", click <b>More info → Run anyway</b> — the installer isn't code-signed yet; the source is
+    open and builds come from GitHub Actions. Allow MineDed and Java on <b>private networks</b> when the firewall asks.</p>
+  <p><b>Linux:</b> <code>chmod +x MineDed_*_amd64.AppImage</code> and run it (install <code>libfuse2</code> /
+    <code>fuse2</code> if FUSE is missing), or <code>sudo apt install ./MineDed_*_amd64.deb</code>. Black window on old
+    GPUs: start with <code>WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1</code>.</p>
+</main>
+<script src="scenes.js?v=9"></script>
+<script src="page-bg.js?v=9"></script>
+</body>
+</html>

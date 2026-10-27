@@ -51,6 +51,8 @@ Download an installer from [Releases](https://github.com/Dedseckms/MineDed/relea
 
 The launcher updates itself; updates are signed. The interface is available in Russian and English.
 
+**Detailed guide** (SmartScreen, firewall, AppImage and .deb, data folders, uninstall): [docs/INSTALL.md](docs/INSTALL.md#english).
+
 ## Quick start
 
 1. **Accounts** → add an offline account (just a nickname) or "My server" — sign in / register with an invite on the skin server, with skins and capes.
