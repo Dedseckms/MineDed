@@ -11,6 +11,7 @@ members = [
     "crates/lc-vpn",
     "crates/lc-p2p",
     "crates/lc-voice",
+    "crates/lc-chat",
     "apps/desktop/src-tauri",
     "server/hub",
 ]
@@ -33,6 +34,7 @@ lc-accounts = { path = "crates/lc-accounts" }
 lc-vpn = { path = "crates/lc-vpn" }
 lc-p2p = { path = "crates/lc-p2p" }
 lc-voice = { path = "crates/lc-voice" }
+lc-chat = { path = "crates/lc-chat" }
 
 # external (exact versions are pinned in Cargo.lock)
 async-trait = "0.1.92"

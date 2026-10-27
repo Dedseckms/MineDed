@@ -1,0 +1,16 @@
+[package]
+name = "lc-chat"
+description = "Global chat, direct messages, friends, moderation client (hub /chat). Owner: net."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lc-types.workspace = true
+lc-runtime.workspace = true
+async-trait.workspace = true
+
+[lints]
+workspace = true
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

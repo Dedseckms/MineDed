@@ -30,8 +30,230 @@ tags:
     description: P2P room registry, tokens and fallback signaling.
   - name: vpn
     description: Personal MineDed VPN access (one key per Yggdrasil profile, monthly quota).
+  - name: chat
+    description: Global chat, direct messages, friends, privacy, moderation and admin tools (docs/plans/chat.md).
 
 paths:
+  /chat/ws:
+    get:
+      tags: [chat]
+      operationId: chatSocket
+      summary: WebSocket upgrade; server pushes SocialEvent JSON frames, client sends presence/typing
+      responses:
+        "101": { description: Switching protocols }
+        "401": { $ref: "#/components/responses/Error" }
+  /chat/channels:
+    get:
+      tags: [chat]
+      operationId: chatChannels
+      summary: Global chat + the caller's direct chats (SocialChannel[])
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Social" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /chat/channels/{channel}/messages:
+    parameters:
+      - { name: channel, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [chat]
+      operationId: chatHistory
+      summary: History page newest last (SocialHistory); query `before`, `limit` (≤100)
+      parameters:
+        - { name: before, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 100 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [chat]
+      operationId: chatSend
+      summary: Post SocialContent (text, roomInvite, packShare, attachment by id). 422 reason filtered/muted for the public chat
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+      responses:
+        "200": { description: SocialMessage, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /chat/channels/{channel}/read:
+    parameters:
+      - { name: channel, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [chat]
+      operationId: chatMarkRead
+      summary: Body {messageId}
+      responses:
+        "204": { description: OK }
+        "401": { $ref: "#/components/responses/Error" }
+  /chat/files:
+    post:
+      tags: [chat]
+      operationId: chatUpload
+      summary: multipart `file` (≤ 10 MB) → SocialAttachment; images re-encoded to WebP + thumbnail. 507 when uploads are paused (disk ≥ 95 %)
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, properties: { file: { type: string, format: binary } } } } } }
+      responses:
+        "200": { description: SocialAttachment, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "507": { $ref: "#/components/responses/Error" }
+  /chat/files/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [chat]
+      operationId: chatDownload
+      summary: Attachment bytes (`?thumb=1` for the preview); only members of a channel that contains it
+      responses:
+        "200": { description: File }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /chat/messages/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [chat]
+      operationId: chatDelete
+      summary: Author deletes own message; moderators/admins any public message
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/messages/{id}/report:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [chat]
+      operationId: chatReport
+      summary: Body {reason?}
+      responses:
+        "204": { description: Reported }
+        "401": { $ref: "#/components/responses/Error" }
+  /chat/users:
+    get:
+      tags: [chat]
+      operationId: chatSearchUsers
+      summary: Search by name prefix, `?q=` (≥2 chars) → SocialUser[]
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Social" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /chat/users/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [chat]
+      operationId: chatProfile
+      summary: SocialUser (status hidden per privacy)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /chat/users/{uuid}/direct:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [chat]
+      operationId: chatOpenDirect
+      summary: Open or get the direct channel; 403 when privacy or a block forbids it
+      responses:
+        "200": { description: SocialChannel, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/users/{uuid}/block:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    put: { tags: [chat], operationId: chatBlock, summary: Block, responses: { "204": { description: OK }, "401": { $ref: "#/components/responses/Error" } } }
+    delete: { tags: [chat], operationId: chatUnblock, summary: Unblock, responses: { "204": { description: OK }, "401": { $ref: "#/components/responses/Error" } } }
+  /chat/friends:
+    get:
+      tags: [chat]
+      operationId: chatFriends
+      summary: SocialFriend[] (friends and pending requests)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Social" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /chat/friends/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    put:
+      tags: [chat]
+      operationId: chatAddFriend
+      summary: Send or accept a request → SocialFriend; 403 per privacy
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    delete: { tags: [chat], operationId: chatRemoveFriend, summary: Remove/decline/cancel, responses: { "204": { description: OK }, "401": { $ref: "#/components/responses/Error" } } }
+  /chat/privacy:
+    get:
+      tags: [chat]
+      operationId: chatPrivacy
+      summary: SocialPrivacy of the caller
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [chat]
+      operationId: chatSetPrivacy
+      summary: Replace SocialPrivacy
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /chat/mod/reports:
+    get:
+      tags: [chat]
+      operationId: chatReports
+      summary: Moderators/admins - open SocialReport[]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Social" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/mod/reports/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete: { tags: [chat], operationId: chatResolveReport, summary: Resolve, responses: { "204": { description: OK }, "401": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } } }
+  /chat/mod/users/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [chat]
+      operationId: chatModerateUser
+      summary: Body {action mute|ban|unmute|unban, seconds?}; moderators mute ≤ 86400 s, ban is admin only
+      responses:
+        "204": { description: OK }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/admin/roles/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    put:
+      tags: [chat]
+      operationId: chatSetRole
+      summary: Admin (Drasl isAdmin) only - body {role user|moderator}
+      responses:
+        "204": { description: OK }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/admin/server:
+    get:
+      tags: [chat]
+      operationId: chatServerState
+      summary: Admin only - AdminServerState (disk, backup, migration)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/admin/migrate:
+    post:
+      tags: [chat]
+      operationId: chatMigrateStorage
+      summary: Admin only - body {target newDisk|objectStorage}; progress via WS admin events
+      responses:
+        "202": { description: Started }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /me/vpn:
     get:
       tags: [vpn]
@@ -314,6 +536,14 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    Social:
+      description: >-
+        Chat payloads mirror the Rust types in crates/lc-types/src/social.rs (camelCase JSON):
+        SocialChannel, SocialHistory, SocialMessage, SocialContent (tagged by `type`), SocialAttachment,
+        SocialUser, SocialFriend, SocialPrivacy, SocialReport, AdminServerState. Roles: admin = Drasl isAdmin,
+        moderator = assigned in hub. Owner identity is never configured in the repo.
+      type: object
+      additionalProperties: true
     Error:
       type: object
       required: [code, message]
