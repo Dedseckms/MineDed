@@ -46,11 +46,25 @@ function message(s) {
   );
 }
 
-async function send(vars, text) {
-  const res = await fetch(`https://api.telegram.org/bot${vars.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+/** Cover image rendered by docs/changelog/make-cards.ps1, if it was committed. */
+async function cardUrl(version) {
+  const url = `https://raw.githubusercontent.com/Dedseckms/MineDed/main/docs/changelog/${version}.png`;
+  try {
+    return (await fetch(url, { method: "HEAD" })).ok ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+async function send(vars, text, photo) {
+  const method = photo ? "sendPhoto" : "sendMessage";
+  const payload = photo
+    ? { chat_id: vars.TELEGRAM_CHAT_ID, photo, caption: text, parse_mode: "HTML" }
+    : { chat_id: vars.TELEGRAM_CHAT_ID, text, parse_mode: "HTML", disable_web_page_preview: true };
+  const res = await fetch(`https://api.telegram.org/bot${vars.TELEGRAM_BOT_TOKEN}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: vars.TELEGRAM_CHAT_ID, text, parse_mode: "HTML", disable_web_page_preview: true }),
+    body: JSON.stringify(payload),
   });
   const json = await res.json();
   if (!json.ok) throw new Error(`telegram: ${json.description}`);
@@ -69,7 +83,7 @@ for (const s of picked) {
   const text = message(s);
   if (dry) console.log(text + "\n---");
   else {
-    await send(vars, text);
+    await send(vars, text, await cardUrl(s.version));
     console.log(`posted ${s.version}`);
     await new Promise((r) => setTimeout(r, 1500));
   }
