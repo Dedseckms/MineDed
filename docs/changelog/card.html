@@ -29,7 +29,7 @@
 <script src="../../site/scenes.js"></script>
 <script>
   var p = new URLSearchParams(location.hash.slice(1));
-  document.getElementById("ver").textContent = "Обновление " + (p.get("v") || "");
+  document.getElementById("ver").textContent = p.get("v") ? "Обновление " + p.get("v") : "MineDed";
   document.getElementById("ttl").textContent = p.get("t") || "";
   var ids = window.MineupScenes.ids;
   var scene = p.get("s") || ids[0];
