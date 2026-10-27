@@ -26,19 +26,28 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.release_id }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - id: create
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # Release notes = this version's CHANGELOG.md section (fallback: the tag).
+          ver="${TAG#v}"
+          awk -v v="$ver" '/^## /{p=($2==v)} p' CHANGELOG.md | sed '1s/^## [0-9.]* *[^ ]* */## /' > notes.md || true
+          [ -s notes.md ] || echo "MineDed $TAG" > notes.md
+          printf '\nУстановленный лаунчер обновится сам. Сайт: https://mineded.dedseckms.ru\n' >> notes.md
           # Reuse an existing (draft) release for this tag, else create one.
           # Draft releases are not returned by /releases/tags/<tag>, so list them.
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             --jq "[.[] | select(.tag_name == \"$TAG\")][0].id // empty")
           if [ -z "$id" ]; then
             id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
-              -f tag_name="$TAG" -f name="MineDed $TAG" -f body="MineDed $TAG" \
+              -f tag_name="$TAG" -f name="MineDed $TAG" -F body=@notes.md \
               -F draft=true --jq .id)
           fi
           test -n "$id"
