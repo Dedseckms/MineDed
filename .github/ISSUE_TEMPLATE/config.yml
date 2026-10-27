@@ -1,8 +1,14 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Вопрос, идея или поиск, с кем поиграть
+    url: https://github.com/Dedseckms/MineDed/discussions
+    about: Для обсуждений — Discussions. Issues — только для ошибок и конкретных предложений.
+  - name: Инвайт на сервер скинов
+    url: https://t.me/minededlaunch
+    about: Инвайты выдаются через Telegram (не просите их в issues — здесь всё публично).
   - name: Уязвимость безопасности
     url: https://github.com/Dedseckms/MineDed/security/advisories/new
     about: Сообщите приватно, не в публичных issues.
   - name: Сайт и загрузка
     url: https://mineded.dedseckms.ru
-    about: Описание, скриншоты и последняя версия лаунчера.
+    about: Описание, инструкция по установке и последняя версия лаунчера.
