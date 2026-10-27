@@ -82,6 +82,7 @@
       dlSkins: "Skin server account: sign in, skin and cape",
       signIn: "Sign in",
       issues: "Report a bug",
+      privacy: "Privacy policy",
       disclaimer: "Not an official Minecraft product. Not affiliated with Mojang or Microsoft."
     },
     ru: {
@@ -162,6 +163,7 @@
       dlSkins: "Аккаунт на сервере скинов: вход, скин и плащ",
       signIn: "Войти",
       issues: "Сообщить об ошибке",
+      privacy: "Политика конфиденциальности",
       disclaimer: "Не является официальным продуктом Minecraft. Не связан с Mojang или Microsoft."
     }
   };

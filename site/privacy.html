@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Политика конфиденциальности — MineDed</title>
+<meta name="description" content="Какие данные собирает MineDed, зачем и как их удалить.">
+<link rel="canonical" href="https://mineded.dedseckms.ru/privacy.html">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=9">
+<style>
+  .doc { max-width: 820px; margin: 32px auto; padding: clamp(20px, 4vw, 40px); }
+  .doc h1 { font-size: clamp(1.6rem, 4vw, 2.2rem); margin-top: 0; }
+  .doc h2 { font-size: 1.2rem; margin-top: 1.6em; }
+  .doc li { margin: .35em 0; }
+</style>
+</head>
+<body>
+<div id="bg" class="bg" aria-hidden="true"></div>
+<main class="doc panel">
+  <p class="small"><a href="./">← MineDed</a></p>
+  <h1>Политика конфиденциальности</h1>
+  <p class="muted">Обновлено: 27 октября 2026 г. · <a href="#en">English version below</a></p>
+
+  <p>MineDed — бесплатный лаунчер Minecraft с открытым исходным кодом. Мы собираем только то, что нужно для работы
+    функций, ничего не продаём и не показываем рекламу. В лаунчере нет аналитики и телеметрии.</p>
+
+  <h2>Что хранится на вашем компьютере</h2>
+  <ul>
+    <li>Сборки, моды, настройки и журналы лаунчера — в папке данных лаунчера.</li>
+    <li>Токены входа в аккаунт — в защищённом хранилище ОС (Windows Credential Manager / Secret Service).</li>
+  </ul>
+
+  <h2>Что хранится на наших серверах</h2>
+  <ul>
+    <li><b>Аккаунт «Мой сервер»</b> (сервер скинов): ник, хеш пароля (сам пароль не хранится), идентификатор игрока,
+      скины и плащи, использованный инвайт.</li>
+    <li><b>Комнаты для совместной игры:</b> код комнаты и список участников — только пока комната существует.
+      Игровой трафик идёт напрямую между игроками в зашифрованном виде; если прямое соединение невозможно,
+      он проходит через наш ретранслятор в зашифрованном виде, и мы не можем его прочитать.</li>
+    <li><b>MineDed VPN</b> (если вы его включили): объём трафика за месяц — для лимита. Мы не храним, какие сайты
+      и сервисы вы посещаете.</li>
+    <li><b>Чат</b> (когда появится): сообщения, фото и файлы хранятся, пока вы их не удалите; резервная копия
+      хранится на втором сервере.</li>
+    <li><b>Технические журналы</b> веб-серверов (IP-адрес, время, адрес запроса) — для защиты от атак и поиска
+      ошибок, хранятся ограниченное время.</li>
+  </ul>
+  <p>Серверы расположены в Германии.</p>
+
+  <h2>Сторонние сервисы</h2>
+  <p>Лаунчер напрямую обращается к Mojang (файлы игры), Modrinth (моды и сборки), GitHub (обновления лаунчера)
+    и, по вашему запросу, к сайтам скинов. На эти запросы распространяются политики этих сервисов.</p>
+
+  <h2>Ваши права</h2>
+  <p>Вы можете в любой момент удалить свои скины и сообщения, а также попросить удалить аккаунт со всеми данными.
+    Напишите нам приватно через GitHub: <a href="https://github.com/Dedseckms/MineDed/security/advisories/new"
+    rel="noopener">Security → Report a vulnerability</a> с темой «Удаление данных» и укажите ник.</p>
+
+  <h2 id="en">English</h2>
+  <p>MineDed is a free, open-source Minecraft launcher. It contains no analytics or telemetry and shows no ads.
+    Locally it stores your instances, settings, logs and login tokens (in the OS credential store). Our servers
+    (in Germany) store: for own-server accounts — username, password hash, player UUID, skins and capes; for
+    multiplayer rooms — the room code and participants while the room exists (game traffic is end-to-end
+    encrypted, relayed only when a direct connection fails); for MineDed VPN — monthly traffic volume only,
+    no browsing history; for chat (when released) — messages and files until you delete them, with a backup on a
+    second server; web server logs (IP, time, URL) for a limited time. The launcher talks directly to Mojang,
+    Modrinth, GitHub and, on request, skin websites. To delete your account and data, contact us privately via
+    GitHub <a href="https://github.com/Dedseckms/MineDed/security/advisories/new" rel="noopener">Security →
+    Report a vulnerability</a> with the subject "Data deletion".</p>
+</main>
+<script src="scenes.js?v=9"></script>
+<script src="page-bg.js?v=9"></script>
+</body>
+</html>
