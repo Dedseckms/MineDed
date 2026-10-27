@@ -50,6 +50,7 @@ describe("parseJoinInput", () => {
   it("normalises codes and links", () => {
     expect(parseJoinInput("  abcd-1234 ")).toEqual({ ok: true, code: "ABCD-1234" });
     expect(parseJoinInput("mineup://join/abcd-1234")).toEqual({ ok: true, code: "ABCD-1234" });
+    expect(parseJoinInput("mineded://join/abcd-1234")).toEqual({ ok: true, code: "ABCD-1234" });
     expect(parseJoinInput("MINEUP://join/WXYZ-9876/?x=1")).toEqual({ ok: true, code: "WXYZ-9876" });
     expect(parseJoinInput("mineup://join/ab%2Dcd")).toEqual({ ok: true, code: "AB-CD" });
   });

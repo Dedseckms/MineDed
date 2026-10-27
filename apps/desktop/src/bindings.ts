@@ -109,7 +109,7 @@ export const commands = {
 	peers: Peer[],
 	/**  RFC 3339. */
 	expiresAt: string,
-	/**  `mineup://join/<code>`. */
+	/**  `mineded://join/<code>`. */
 	link: string,
 	passwordProtected: boolean,
 	/**  Guest only: local `127.0.0.1:<port>` to add as a server in the game. */
@@ -588,7 +588,7 @@ export type RoomState = {
 	peers: Peer[],
 	/**  RFC 3339. */
 	expiresAt: string,
-	/**  `mineup://join/<code>`. */
+	/**  `mineded://join/<code>`. */
 	link: string,
 	passwordProtected: boolean,
 	/**  Guest only: local `127.0.0.1:<port>` to add as a server in the game. */

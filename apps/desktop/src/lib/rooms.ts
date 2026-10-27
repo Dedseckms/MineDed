@@ -18,7 +18,9 @@ export function hostPackCandidates(instances: readonly Instance[], sig: Instance
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export const ROOM_LINK_PREFIX = "mineup://join/";
+export const ROOM_LINK_PREFIX = "mineded://join/";
+/** Pre-rename links stay valid. */
+const ROOM_LINK_PREFIXES = [ROOM_LINK_PREFIX, "mineup://join/"];
 export const ROOM_PASSWORD_MIN = 4;
 export const ROOM_PASSWORD_MAX = 64;
 export const CHAT_MAX = 500;
@@ -30,15 +32,16 @@ const CODE = /^[A-Z0-9]+(?:-[A-Z0-9]+)*$/;
 export type JoinParse = { ok: true; code: string } | { ok: false; error: ValidationKey };
 
 /**
- * Accepts a room code (`abcd-1234`, any case) or a `mineup://join/<code>` link
+ * Accepts a room code (`abcd-1234`, any case) or a `mineded://join/<code>` (or legacy `mineup://`) link
  * and returns the upper-case code passed to `room_join`.
  */
 export function parseJoinInput(input: string): JoinParse {
   let s = input.trim();
   if (s.length === 0) return { ok: false, error: "validation.required" };
   if (/^[a-z][a-z0-9+.-]*:/i.test(s)) {
-    if (!s.toLowerCase().startsWith(ROOM_LINK_PREFIX)) return { ok: false, error: "validation.room.link" };
-    s = s.slice(ROOM_LINK_PREFIX.length).split(/[/?#]/)[0] ?? "";
+    const prefix = ROOM_LINK_PREFIXES.find((p) => s.toLowerCase().startsWith(p));
+    if (!prefix) return { ok: false, error: "validation.room.link" };
+    s = s.slice(prefix.length).split(/[/?#]/)[0] ?? "";
     try {
       s = decodeURIComponent(s);
     } catch {

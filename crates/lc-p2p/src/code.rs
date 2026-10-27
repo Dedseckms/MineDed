@@ -1,21 +1,23 @@
-//! Room codes (`ABCD-1234`) and `mineup://join/<code>` links.
+//! Room codes (`ABCD-1234`) and `mineded://join/<code>` links (`mineup://`
+//! from before the rename is still accepted).
 
 use lc_types::{AppError, AppResult, ErrorCode};
 
 /// URL scheme registered by the desktop app for deep links.
-pub const LINK_PREFIX: &str = "mineup://join/";
+pub const LINK_PREFIX: &str = "mineded://join/";
+
+/// Accepted link schemes: current and pre-rename.
+const SCHEMES: [&str; 2] = ["mineded:", "mineup:"];
 
 /// Normalises user input into a canonical room code `XXXX-XXXX`.
 ///
 /// Accepts a bare code (any case, with or without the dash, surrounding
-/// whitespace) or a `mineup://join/<code>` link (optionally with a trailing
+/// whitespace) or a `mineded://` (or `mineup://`) join link (optionally with a trailing
 /// slash, query or fragment).
 pub fn parse_code(input: &str) -> AppResult<String> {
     let mut s = input.trim();
-    if let Some(rest) = strip_prefix_ci(s, LINK_PREFIX) {
-        s = rest;
-    } else if let Some(rest) = strip_prefix_ci(s, "mineup:") {
-        // `mineup:join/<code>` and `mineup:///join/<code>` variants.
+    if let Some(rest) = SCHEMES.iter().find_map(|p| strip_prefix_ci(s, p)) {
+        // `scheme://join/<code>`, `scheme:join/<code>` and `scheme:///join/<code>`.
         s = rest.trim_start_matches('/');
         s = strip_prefix_ci(s, "join/").ok_or_else(|| bad_code(input))?;
     }
@@ -32,7 +34,7 @@ pub fn parse_code(input: &str) -> AppResult<String> {
     Ok(format!("{}-{}", &compact[..4], &compact[4..]))
 }
 
-/// `mineup://join/<code>` for a canonical code.
+/// `mineded://join/<code>` for a canonical code.
 pub fn join_link(code: &str) -> String {
     format!("{LINK_PREFIX}{code}")
 }
@@ -62,7 +64,7 @@ mod tests {
             "ABCD 1234",
             "mineup://join/ABCD-1234",
             "MINEUP://JOIN/abcd-1234/",
-            "mineup://join/abcd1234?from=chat",
+            "mineded://join/abcd1234?from=chat",
             "mineup:join/ABCD-1234",
             "mineup:///join/ABCD-1234",
         ] {
@@ -90,7 +92,7 @@ mod tests {
     #[test]
     fn link_roundtrip() {
         let link = join_link("ABCD-1234");
-        assert_eq!(link, "mineup://join/ABCD-1234");
+        assert_eq!(link, "mineded://join/ABCD-1234");
         assert_eq!(parse_code(&link).unwrap(), "ABCD-1234");
     }
 }

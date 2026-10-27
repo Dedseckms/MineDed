@@ -104,7 +104,7 @@ describe("mock rooms", () => {
     const room = unwrap(await api.roomCreate("inst-fabric", "yggdrasil", "secret"));
     expect(room).toMatchObject({ role: "host", authMode: "yggdrasil", passwordProtected: true, localAddr: null, peers: [] });
     expect(room.code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
-    expect(room.link).toBe(`mineup://join/${room.code}`);
+    expect(room.link).toBe(`mineded://join/${room.code}`);
     expect(room.sig).toMatchObject({ mc: "1.21.1", loader: "fabric" });
     expect((await api.roomCreate("inst-fabric", "open", null)).status).toBe("error");
 

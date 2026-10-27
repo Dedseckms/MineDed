@@ -20,7 +20,7 @@ pub trait RoomService: Send + Sync {
         auth_mode: RoomAuthMode,
         password: Option<String>,
     ) -> AppResult<RoomState>;
-    /// `code` is a room code or a `mineup://join/<code>` link. Validates
+    /// `code` is a room code or a `mineded://join/<code>` link. Validates
     /// `InstanceSig` against the local instance, connects to the host and opens
     /// a local TCP port (`RoomState::local_addr`) tunnelled to the host's world.
     /// `instance` is required for game rooms and ignored for voice rooms.
