@@ -13,7 +13,7 @@
 [![Platforms](https://img.shields.io/badge/Windows%20%7C%20Linux-555?style=for-the-badge&logo=linux&logoColor=white)](#install)
 [![License](https://img.shields.io/github/license/Dedseckms/MineDed?style=for-the-badge&color=8957e5)](LICENSE)
 
-### [⬇ Download](https://github.com/Dedseckms/MineDed/releases/latest) · [🌐 Website](https://mineded.dedseckms.ru/) · [🚀 Quick start](#quick-start)
+### [⬇ Download](https://github.com/Dedseckms/MineDed/releases/latest) · [🌐 Website](https://mineded.dedseckms.ru/) · [📣 Telegram](https://t.me/minededlaunch) · [🚀 Quick start](#quick-start)
 
 <img src="site/screenshots/play-en.webp" width="860" alt="Play screen">
 
