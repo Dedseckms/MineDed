@@ -46,7 +46,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-version = "0.1"
+windows-version = "0.100"
 
 [lints]
 workspace = true
