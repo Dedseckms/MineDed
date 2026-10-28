@@ -21,7 +21,7 @@ sha2 = "0.10.9"
 hex = "0.4.3"
 flate2 = "1.1.10"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 percent-encoding = "2.3.2"
 time = { version = "0.3.41", features = ["formatting"] }
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
