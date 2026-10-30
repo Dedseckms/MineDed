@@ -12,6 +12,7 @@ import type {
 } from "../bindings";
 import type { NetMockContext } from "./net";
 import { canModerate, privacyOptions } from "../lib/social";
+import { validateNick } from "../lib/validation";
 
 type Commands = typeof commands;
 const ok = <T>(data: T) => ({ status: "ok" as const, data });
@@ -23,6 +24,9 @@ const denied = () => ({
     details: null,
   },
 });
+/** Launchers "on the wire" in the mock, any account kind. */
+export const MOCK_ONLINE = 12;
+
 export const SOCIAL_PEER: SocialUser = {
   uuid: "22222222222222222222222222222222",
   name: "Alex",
@@ -75,6 +79,7 @@ export function createSocialMocks(
   const send = (channel: string, content: SocialContent) => {
     if (
       !self ||
+      self.role === "guest" ||
       !channels.some((c) => c.id === channel) ||
       (channel !== "global" && blocked.has(SOCIAL_PEER.uuid))
     )
@@ -132,6 +137,35 @@ export function createSocialMocks(
       ctx.bus.emit("socialEvent", { type: "connection", connected: false });
       return ok(null);
     },
+    socialGuestLogin: async (name) => {
+      const nick = name.trim();
+      if (validateNick(nick) !== null)
+        return {
+          status: "error" as const,
+          error: {
+            code: "invalidInput" as const,
+            message: "mock: bad guest name",
+            details: null,
+          },
+        };
+      self = {
+        uuid: crypto.randomUUID().replaceAll("-", ""),
+        name: nick,
+        skinUrl: null,
+        status: "online",
+        role: "guest",
+        isBlocked: false,
+        isFriend: false,
+        canMessage: false,
+        canInvite: true,
+        guest: true,
+      };
+      channels = channels.filter((c) => c.kind === "global");
+      friends = [];
+      ctx.bus.emit("socialEvent", { type: "connection", connected: true });
+      return ok({ ...self });
+    },
+    socialPresence: async () => ok({ online: MOCK_ONLINE }),
     socialSetPresence: async (status) => {
       if (!self) return denied();
       self.status = status;
@@ -164,7 +198,12 @@ export function createSocialMocks(
         ? remove(id)
         : denied(),
     socialOpenDirect: async (uuid) => {
-      if (!self || uuid !== SOCIAL_PEER.uuid || blocked.has(uuid))
+      if (
+        !self ||
+        self.role === "guest" ||
+        uuid !== SOCIAL_PEER.uuid ||
+        blocked.has(uuid)
+      )
         return denied();
       const id = `dm:${[self.uuid, uuid].sort().join(":")}`;
       let channel = channels.find((c) => c.id === id);
@@ -192,7 +231,8 @@ export function createSocialMocks(
       self ? ok(uuid === self.uuid ? { ...self } : peer()) : denied(),
     socialFriends: async () => (self ? ok(structuredClone(friends)) : denied()),
     socialAddFriend: async (uuid) => {
-      if (!self || blocked.has(uuid)) return denied();
+      if (!self || self.role === "guest" || blocked.has(uuid))
+        return denied();
       const existing = friends.find((f) => f.user.uuid === uuid);
       const friend: SocialFriend = {
         user: peer(),

@@ -1003,7 +1003,16 @@
     "storageHint": "The new disk or external storage must be configured on the server first.",
     "showPreview": "Show preview",
     "hidePreview": "Hide preview",
-    "expandPreview": "Expand or collapse preview",
+    "openFullscreen": "Open full screen",
+    "photoViewer": "Photo viewer",
+    "online": "In the launcher now: {{n}}",
+    "guestBadge": "guest",
+    "guestReadOnly": "Chatting is only available with a server account.",
+    "guestLogin": "Enter as a guest",
+    "guestSubmit": "Enter",
+    "guestName": "Nickname",
+    "guestNamePlaceholder": "For example, Steve",
+    "guestHint": "3–16 characters: Latin letters, digits and _. Guests read the public chat but cannot write to it.",
     "sections": {
       "global": "Global chat",
       "direct": "Direct"

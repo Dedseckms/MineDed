@@ -17,6 +17,8 @@ export interface ChatChannelListProps {
   search: string;
   onSearch: (value: string) => void;
   onOpenProfile: (user: SocialUser) => void;
+  /** Guests have no friends and no direct chats: hide the whole section. */
+  showDirect?: boolean;
 }
 
 /** Telegram-style left column: search, sections, unread badges. */
@@ -29,6 +31,7 @@ export function ChatChannelList({
   search,
   onSearch,
   onOpenProfile,
+  showDirect = true,
 }: ChatChannelListProps) {
   const { t } = useTranslation();
   const term = search.trim().toLocaleLowerCase();
@@ -90,18 +93,24 @@ export function ChatChannelList({
             onSelect={onSelect}
           />
         ))}
-        <SectionLabel>{t("social.sections.direct")}</SectionLabel>
-        {directs.length > 0 ? (
-          directs.map((channel) => (
-            <ChannelRow
-              key={channel.id}
-              channel={channel}
-              active={channel.id === selected}
-              onSelect={onSelect}
-            />
-          ))
-        ) : directCount === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted">{t("social.noChats")}</p>
+        {showDirect ? (
+          <>
+            <SectionLabel>{t("social.sections.direct")}</SectionLabel>
+            {directs.length > 0 ? (
+              directs.map((channel) => (
+                <ChannelRow
+                  key={channel.id}
+                  channel={channel}
+                  active={channel.id === selected}
+                  onSelect={onSelect}
+                />
+              ))
+            ) : directCount === 0 ? (
+              <p className="px-3 py-2 text-xs text-muted">
+                {t("social.noChats")}
+              </p>
+            ) : null}
+          </>
         ) : null}
       </div>
     </div>

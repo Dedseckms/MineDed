@@ -18,6 +18,11 @@ export function canContact(user: SocialUser, blocked: boolean): boolean {
   return user.canMessage && !blocked;
 }
 
+/** Offline nickname with a hub guest token: reads the public chat, nothing else. */
+export function isGuest(user: Pick<SocialUser, "role" | "guest">): boolean {
+  return user.guest === true || user.role === "guest";
+}
+
 /** Stable per-player hue, so names and avatars keep their colour across screens. */
 const CHAT_HUES = [8, 28, 48, 88, 148, 178, 205, 232, 268, 310] as const;
 
