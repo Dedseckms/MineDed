@@ -852,3 +852,32 @@ fn trained_dictionary_preserves_old_frames_after_restart() {
         "205"
     );
 }
+
+#[test]
+fn directory_sync_is_claimed_once_a_minute_and_retried_after_failure() {
+    use std::time::{Duration, Instant};
+    let (chat, _temp) = chat();
+    assert!(
+        chat.claim_directory_sync(),
+        "the first request fills the catalogue"
+    );
+    assert!(
+        !chat.claim_directory_sync(),
+        "a second request inside the window skips it"
+    );
+    chat.finish_directory_sync(false);
+    assert!(
+        chat.claim_directory_sync(),
+        "an empty refresh must retry on the next request"
+    );
+    chat.finish_directory_sync(true);
+    assert!(
+        !chat.claim_directory_sync(),
+        "a filled refresh keeps the claim"
+    );
+    *chat.users_synced.lock().unwrap() = Some(Instant::now() - Duration::from_secs(61));
+    assert!(
+        chat.claim_directory_sync(),
+        "the window expires after a minute"
+    );
+}

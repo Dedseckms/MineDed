@@ -47,10 +47,15 @@ pub(super) struct PublicPlayer {
 impl Directory {
     pub fn from_env() -> Self {
         Self {
-            url: std::env::var("HUB_DRASL_ADMIN_URL")
-                .ok()
-                .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
-                .map(|s| s.trim_end_matches('/').into()),
+            url: std::env::var("HUB_DRASL_ADMIN_URL").ok().and_then(|s| {
+                // The client is plain HTTP inside the compose network; a TLS URL
+                // would fail on every request without a single log line.
+                if !s.starts_with("http://") {
+                    eprintln!("hub: HUB_DRASL_ADMIN_URL must be an http:// URL, ignoring it");
+                    return None;
+                }
+                Some(s.trim_end_matches('/').to_owned())
+            }),
             token: std::env::var("HUB_DRASL_ADMIN_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),

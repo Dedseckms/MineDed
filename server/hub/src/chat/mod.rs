@@ -78,19 +78,31 @@ impl Chat {
             last_health: Mutex::new(None),
         })
     }
-    /// True at most once a minute: a full catalogue upsert on every request
-    /// would queue the store behind thousands of writes on a small host.
-    fn directory_sync_due(&self) -> bool {
+    /// Claims the directory refresh: at most once a minute and never twice at
+    /// once. A full catalogue upsert per request would queue the store behind
+    /// thousands of writes on a small host.
+    fn claim_directory_sync(&self) -> bool {
         const TTL: Duration = Duration::from_secs(60);
-        let mut last = match self.users_synced.lock() {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-        if last.is_some_and(|at| at.elapsed() < TTL) {
-            return false;
+        match self.users_synced.lock() {
+            Ok(mut last) => {
+                if last.is_some_and(|at| at.elapsed() < TTL) {
+                    return false;
+                }
+                *last = Some(Instant::now());
+                true
+            }
+            // A poisoned lock must not switch the catalogue off for good.
+            Err(_) => true,
         }
-        *last = Some(Instant::now());
-        true
+    }
+    /// Keeps the claim after a filled refresh, otherwise retries on the next request.
+    fn finish_directory_sync(&self, filled: bool) {
+        if filled {
+            return;
+        }
+        if let Ok(mut last) = self.users_synced.lock() {
+            *last = None;
+        }
     }
     async fn run<T: Send + 'static>(
         self: &Arc<Self>,
@@ -274,9 +286,12 @@ async fn dispatch(
     } else {
         serde_json::from_slice(&bytes).map_err(|_| invalid("invalid JSON body"))?
     };
-    if method == "GET" && path == "users" && chat.directory_sync_due() {
+    if method == "GET" && path == "users" && chat.claim_directory_sync() {
         let players = chat.directory.players().await;
-        chat.run(move|db,_|{for player in players {db.db.execute("INSERT INTO users(uuid,name,skin,privacy) VALUES(?1,?2,?3,?4) ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,skin=excluded.skin",rusqlite::params![player.uuid,player.name,player.skin,serde_json::to_string(&json!({"whoCanMessage":"everyone","whoCanInvite":"everyone","whoSeesStatus":"everyone","whoCanAddFriend":"everyone"}))?])?;}Ok(())}).await?;
+        let filled = !players.is_empty();
+        let synced = chat.run(move|db,_|{for player in players {db.db.execute("INSERT INTO users(uuid,name,skin,privacy) VALUES(?1,?2,?3,?4) ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,skin=excluded.skin",rusqlite::params![player.uuid,player.name,player.skin,serde_json::to_string(&json!({"whoCanMessage":"everyone","whoCanInvite":"everyone","whoSeesStatus":"everyone","whoCanAddFriend":"everyone"}))?])?;}Ok(())}).await;
+        chat.finish_directory_sync(synced.is_ok() && filled);
+        synced?;
     }
     if method == "POST" && path == "admin/migrate" {
         chat.start_migration(me, body).await?;
