@@ -228,6 +228,7 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         .route_layer(middleware::from_fn_with_state(state, authenticate))
 }
 async fn authenticate(State(s): State<AppState>, mut req: Request, next: Next) -> Response {
+    let route = req.uri().path().to_owned();
     let result = async {
         let chat = s.chat.clone().ok_or_else(|| {
             ApiError::new(
@@ -264,7 +265,11 @@ async fn authenticate(State(s): State<AppState>, mut req: Request, next: Next) -
         Ok::<_, ApiError>(next.run(req).await)
     }
     .await;
-    result.unwrap_or_else(IntoResponse::into_response)
+    let response = result.unwrap_or_else(IntoResponse::into_response);
+    if !response.status().is_success() {
+        eprintln!("hub: chat request rejected {} {}", response.status(), route);
+    }
+    response
 }
 async fn dispatch(
     State(s): State<AppState>,
@@ -330,7 +335,17 @@ async fn socket(
             &mut parts, &s,
         )
         .await
-        .map_err(|_| invalid("WebSocket upgrade required"))?;
+        .map_err(|_| {
+            eprintln!(
+                "hub: ws upgrade rejected: version={:?} connection={:?} upgrade={:?} sec={:?} key={}",
+                parts.version,
+                parts.headers.get("connection"),
+                parts.headers.get("upgrade"),
+                parts.headers.get("sec-websocket-version"),
+                parts.headers.contains_key("sec-websocket-key"),
+            );
+            invalid("WebSocket upgrade required")
+        })?;
     let permit = chat
         .sockets
         .clone()
@@ -355,9 +370,11 @@ async fn socket(
         .on_failed_upgrade(move |_| failed_chat.disconnect_presence(&failed_me))
         .on_upgrade(move |socket| async move {
             let _permit = permit;
+            eprintln!("hub: chat ws open");
             let _ = chat.events.send(Notice::Presence(me.clone()));
             socket_loop(socket, s, chat.clone(), me.clone(), token).await;
             chat.disconnect_presence(&me);
+            eprintln!("hub: chat ws closed");
         }))
 }
 async fn send(socket: &mut WebSocket, event: SocialEvent) -> Result<(), ()> {
