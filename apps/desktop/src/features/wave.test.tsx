@@ -109,7 +109,7 @@ describe("deep links and invites", () => {
     renderApp();
     await act(async () => void handleDeepLink("mineup://join/ABCD-1234"));
     const code = (await screen.findByTestId("join-code")) as HTMLInputElement;
-    expect(code.value).toBe("ABCD-1234");
+    await waitFor(() => expect(code.value).toBe("ABCD-1234"));
     expect(useNavStore.getState().pendingJoin).toBeNull();
 
     await act(async () => void handleDeepLink("mineded://invite/inv-5678"));
