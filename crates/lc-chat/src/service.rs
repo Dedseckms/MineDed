@@ -340,6 +340,7 @@ impl ChatClient {
             old.task.abort();
             self.clear_cache(&old.session).await;
         }
+        *self.me.write().await = None;
     }
     /// Builds a session against the configured hub; the heartbeat is armed too.
     async fn start_session(&self, credential: Credential, seed: &str) -> AppResult<Arc<Session>> {
@@ -788,7 +789,6 @@ impl ChatService for ChatClient {
     async fn disconnect(&self) -> AppResult<()> {
         let _guard = self.lifecycle.lock().await;
         self.shutdown_current().await;
-        *self.me.write().await = None;
         stop_heartbeat();
         self.observer
             .on_event(SocialEvent::Connection { connected: false });
