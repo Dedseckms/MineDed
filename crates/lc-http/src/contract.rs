@@ -62,6 +62,12 @@ pub trait Downloader: Send + Sync {
     /// Preconfigured client (user agent, timeouts, proxy) for API calls.
     fn client(&self, route: Route) -> reqwest::Client;
 
+    /// Client for protocol upgrades (WebSocket). HTTP/2 has no
+    /// `Connection`/`Upgrade` headers, so the upgrade handshake needs HTTP/1.1.
+    fn upgrade_client(&self, route: Route) -> reqwest::Client {
+        self.client(route)
+    }
+
     /// Official URL → ordered candidate list (mirrors + original).
     fn mirrors_for(&self, original: &Url, kind: ResourceKind) -> Vec<Url>;
 

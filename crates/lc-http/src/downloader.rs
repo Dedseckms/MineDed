@@ -863,6 +863,27 @@ impl Downloader for HttpDownloader {
     /// Ordering for SHA-1-verified downloads (honours `prefer_mirrors`).
     /// Callers without a hash must keep the original first (CONTRACTS §2);
     /// `fetch_many`/`get_bytes` apply that policy themselves.
+    fn upgrade_client(&self, route: Route) -> reqwest::Client {
+        let proxy = match route {
+            Route::Direct => None,
+            _ => {
+                let target = {
+                    let s = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some(u) = &s.vpn {
+                        Some(u.clone())
+                    } else if let Some(p) = &s.manual {
+                        proxy_target(p).ok().map(|t| t.url)
+                    } else {
+                        s.system.as_ref().map(|p| p.url.clone())
+                    }
+                };
+                target.and_then(|u| reqwest::Proxy::all(u.as_str()).ok())
+            }
+        };
+        build_client_with(&self.cfg, proxy, false, true)
+            .unwrap_or_else(|_| self.unconfigured.clone())
+    }
+
     fn mirrors_for(&self, original: &Url, _kind: ResourceKind) -> Vec<Url> {
         mirrors::candidates(
             original,
@@ -904,12 +925,25 @@ fn build_client(
     proxy: Option<reqwest::Proxy>,
     follow_redirects: bool,
 ) -> AppResult<reqwest::Client> {
+    build_client_with(cfg, proxy, follow_redirects, false)
+}
+
+fn build_client_with(
+    cfg: &DownloaderConfig,
+    proxy: Option<reqwest::Proxy>,
+    follow_redirects: bool,
+    upgrade: bool,
+) -> AppResult<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .user_agent(cfg.user_agent.clone())
         .connect_timeout(cfg.connect_timeout)
         .read_timeout(cfg.read_timeout);
     if !follow_redirects {
         b = b.redirect(reqwest::redirect::Policy::none());
+    }
+    if upgrade {
+        // HTTP/2 drops `Connection`/`Upgrade`; the WebSocket handshake needs HTTP/1.1.
+        b = b.http1_only();
     }
     b = match proxy {
         Some(p) => b.proxy(p),
