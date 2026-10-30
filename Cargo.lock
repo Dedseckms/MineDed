@@ -3548,6 +3548,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "url",
+ "uuid",
 ]
 
 [[package]]
