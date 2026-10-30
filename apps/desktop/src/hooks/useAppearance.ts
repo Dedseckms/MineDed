@@ -47,6 +47,13 @@ export function useMotionPrefs(): MotionPrefs {
   return motionPrefs(data, osReduced);
 }
 
+/** Resolved theme of the running window (custom themes count as dark). */
+export function useResolvedTheme(): ResolvedTheme {
+  const { data } = useSettings();
+  const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
+  return resolveTheme(data?.theme ?? "system", prefersDark);
+}
+
 /** Animation props for a shared preset; instant when motion is reduced. */
 export function useMotionPreset(name: PresetName): MotionPreset {
   return motionPreset(name, useMotionPrefs().reduced);
