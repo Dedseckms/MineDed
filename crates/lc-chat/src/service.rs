@@ -415,27 +415,6 @@ impl ChatClient {
     }
 
     // ------------------------------------------------ session and originals
-    /// Current session from memory; a stored guest token is restored without
-    /// any hub call, so the UI can keep the guest signed in across restarts.
-    /// (The trait counterpart lands with the lead's contract update.)
-    pub async fn session(&self) -> AppResult<Option<SocialUser>> {
-        let _guard = self.lifecycle.lock().await;
-        if let Some(user) = self.me.read().await.clone() {
-            if self.live.read().await.is_some() {
-                return Ok(Some(user));
-            }
-        }
-        let base = hub_base(self.settings.as_ref()).await?;
-        let Some((token, user)) = self.load_guest(&base).await else {
-            return Ok(None);
-        };
-        let session = self
-            .start_session(Credential::Guest(token), &format!("guest:{}", user.uuid))
-            .await?;
-        self.spawn_socket(session).await;
-        *self.me.write().await = Some(user.clone());
-        Ok(Some(user))
-    }
     fn guest_key(base: &Url) -> String {
         format!("chat-guest:{:x}", Sha256::digest(base.as_str().as_bytes()))
     }
@@ -462,13 +441,6 @@ impl ChatClient {
                 .set(&Self::guest_key(base), &Secret::new(json))
                 .await;
         }
-    }
-    /// Original image as a `data:` URL for the full-screen viewer; only
-    /// image types are returned and the size is bounded in Rust.
-    pub async fn attachment_original(&self, id: &str) -> AppResult<String> {
-        let s = self.current_session().await?;
-        let url = endpoint(&s.base, &["files", id])?;
-        image_data_url(&s, self.token(&s).await?, url, self.downloader.as_ref()).await
     }
     /// Avatar of `uuid` fetched from the hub as a `data:` URL.
     pub async fn avatar_preview(&self, uuid: &str) -> AppResult<String> {
@@ -1257,6 +1229,33 @@ impl ChatService for ChatClient {
     }
     async fn audit(&self) -> AppResult<Vec<AuditEntry>> {
         self.api(Method::GET, &["admin", "audit"], None).await
+    }
+    /// Current session from memory; a stored guest token is restored without a
+    /// hub round trip, so a guest stays signed in across launcher restarts.
+    async fn session(&self) -> AppResult<Option<SocialUser>> {
+        let _guard = self.lifecycle.lock().await;
+        if let Some(user) = self.me.read().await.clone() {
+            if self.live.read().await.is_some() {
+                return Ok(Some(user));
+            }
+        }
+        let base = hub_base(self.settings.as_ref()).await?;
+        let Some((token, user)) = self.load_guest(&base).await else {
+            return Ok(None);
+        };
+        let session = self
+            .start_session(Credential::Guest(token), &format!("guest:{}", user.uuid))
+            .await?;
+        self.spawn_socket(session).await;
+        *self.me.write().await = Some(user.clone());
+        Ok(Some(user))
+    }
+    /// Original image as a `data:` URL for the full-screen viewer; only image
+    /// types are returned and the size is bounded in Rust.
+    async fn attachment_original(&self, id: &str) -> AppResult<String> {
+        let s = self.current_session().await?;
+        let url = endpoint(&s.base, &["files", id])?;
+        image_data_url(&s, self.token(&s).await?, url, self.downloader.as_ref()).await
     }
 }
 
