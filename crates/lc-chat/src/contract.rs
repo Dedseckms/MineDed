@@ -5,9 +5,10 @@
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::social::{
-    AdminServerState, ModAction, SocialAudience, SocialChannel, SocialChannelId, SocialContent,
-    SocialEvent, SocialFriend, SocialHistory, SocialMessage, SocialPrivacy, SocialReport,
-    SocialRole, SocialStatus, SocialUser, StorageTarget,
+    AdminPresence, AdminServerState, AuditEntry, ModAction, PresenceSummary, ProfileUpdate,
+    SocialAudience, SocialChannel, SocialChannelId, SocialContent, SocialEvent, SocialFriend,
+    SocialHistory, SocialMessage, SocialPrivacy, SocialReport, SocialRole, SocialStatus,
+    SocialUser, StorageTarget,
 };
 use lc_types::{AccountId, AppResult};
 
@@ -102,6 +103,36 @@ pub trait ChatService: Send + Sync {
     /// via `SocialEvent::Admin`. Data is deleted from the old place only after
     /// the copy is verified.
     async fn migrate_storage(&self, target: StorageTarget) -> AppResult<()>;
+
+    /// Signs an offline account in as a guest: read-only access to the global
+    /// chat. The hub issues and stores the token; direct chats and friendships
+    /// need a full account.
+    async fn guest_login(&self, name: &str) -> AppResult<SocialUser>;
+    /// Own-profile edit; server accounts only. `""` clears a field.
+    async fn update_profile(&self, patch: ProfileUpdate) -> AppResult<SocialUser>;
+    /// Uploads the own avatar (image ≤ 256 KB, re-encoded by the hub).
+    async fn set_avatar(&self, path: &str, sink: &dyn ProgressSink) -> AppResult<SocialUser>;
+    async fn clear_avatar(&self) -> AppResult<SocialUser>;
+    /// Public counter of connected launchers, any account kind.
+    async fn presence(&self) -> AppResult<PresenceSummary>;
+    /// Admin only: connected clients with names.
+    async fn admin_presence(&self) -> AppResult<AdminPresence>;
+    /// Admin only: recent moderation and admin actions.
+    async fn audit(&self) -> AppResult<Vec<AuditEntry>>;
+
+    /// Current chat session (guest or full account) held in memory, without a
+    /// network round trip; `None` when signed out.
+    async fn session(&self) -> AppResult<Option<SocialUser>> {
+        Ok(None)
+    }
+    /// Original attachment bytes as a `data:` URL for the full-screen viewer;
+    /// bounded and decoded natively, never exposed as a public hub URL.
+    async fn attachment_original(&self, id: &str) -> AppResult<String> {
+        let _ = id;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::attachment_original",
+        ))
+    }
 }
 
 /// Default privacy for new users: everyone may message and invite, everyone

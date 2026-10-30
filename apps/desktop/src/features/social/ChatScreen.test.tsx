@@ -28,11 +28,15 @@ vi.mock("../../api/client", async (orig) => {
 
 const { createMockBus } = await import("../../mocks/bus");
 const { createMockCommands } = await import("../../mocks");
-const { SOCIAL_PEER } = await import("../../mocks/social");
+const { MOCK_ONLINE, SOCIAL_PEER } = await import("../../mocks/social");
 const { unwrap } = await import("../../api/client");
 const { useSocialStore } = await import("../../stores/socialStore");
 const { ChatScreen } = await import("./ChatScreen");
 const i18n = (await import("../../i18n")).default;
+
+// happy-dom has no Web Animations: motion falls back to instant presets.
+for (const proto of [Element.prototype, HTMLElement.prototype])
+  Reflect.deleteProperty(proto, "animate");
 
 /** Desktop window: the chat list and the conversation are both visible. */
 function media(query: string) {
@@ -82,7 +86,7 @@ describe("chat access", () => {
     expect(screen.getByText(i18n.t("social.login"))).toBeTruthy();
     expect(screen.queryByLabelText(i18n.t("social.message"))).toBeNull();
   });
-  it("hides administration from regular players", async () => {
+  it("hides administration from regular players and moderators", async () => {
     useSocialStore.getState().set({ self: SOCIAL_PEER, connected: true });
     mount();
     expect(
@@ -91,19 +95,29 @@ describe("chat access", () => {
     expect(
       screen.getByRole("button", { name: i18n.t("social.tabs.privacy") }),
     ).toBeTruthy();
-  });
-  it("shows moderation for moderators", async () => {
+    cleanup();
     useSocialStore
       .getState()
       .set({ self: { ...SOCIAL_PEER, role: "moderator" }, connected: true });
+    mount();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.tabs.admin") }),
+    ).toBeNull();
+  });
+  it("opens the admin panel for administrators", async () => {
+    useSocialStore
+      .getState()
+      .set({ self: { ...SOCIAL_PEER, role: "admin" }, connected: true });
     mount();
     fireEvent.click(
       screen.getByRole("button", { name: i18n.t("social.tabs.admin") }),
     );
     await waitFor(() =>
-      expect(screen.getByText(i18n.t("social.reports"))).toBeTruthy(),
+      expect(screen.getByText(i18n.t("social.admin.title"))).toBeTruthy(),
     );
-    expect(screen.queryByText(i18n.t("social.server"))).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: i18n.t("social.admin.tabs.journal") }),
+    ).toBeTruthy();
   });
 });
 
@@ -196,5 +210,143 @@ describe("telegram layout", () => {
     expect(container.querySelectorAll('[data-own="false"]')).toHaveLength(3);
     // Two groups by the same author: the name appears once per group.
     expect(screen.getAllByText(SOCIAL_PEER.name)).toHaveLength(2);
+  });
+});
+
+describe("launcher presence", () => {
+  it("shows how many launchers are connected", async () => {
+    await connect();
+    mount();
+    expect(
+      await screen.findByTitle(
+        i18n.t("social.online", { n: MOCK_ONLINE }),
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe("guest access", () => {
+  /** Connects as a server account, then switches the session to its guest view. */
+  async function loginGuest() {
+    const user = await connect();
+    useSocialStore
+      .getState()
+      .set({ self: { ...user, role: "guest", guest: true } });
+  }
+
+  it("marks the badge and keeps the public chat read-only", async () => {
+    await loginGuest();
+    mount();
+    expect(await screen.findByText(i18n.t("social.guestBadge"))).toBeTruthy();
+    expect(screen.getByText(i18n.t("social.guestReadOnly"))).toBeTruthy();
+    expect(screen.queryByLabelText(i18n.t("social.message"))).toBeNull();
+    expect(screen.queryByText(i18n.t("social.sections.direct"))).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.tabs.friends") }),
+    ).toBeNull();
+  });
+
+  it("has no write or friend buttons in a player profile", async () => {
+    await loginGuest();
+    mount();
+    const search = await screen.findByLabelText(i18n.t("social.search"));
+    fireEvent.change(search, { target: { value: "ale" } });
+    await waitFor(() =>
+      expect(screen.getAllByText(SOCIAL_PEER.name).length).toBeGreaterThan(0),
+    );
+    fireEvent.click(screen.getAllByText(SOCIAL_PEER.name)[0]!);
+    await waitFor(() =>
+      expect(screen.getByText(i18n.t("social.profile.title"))).toBeTruthy(),
+    );
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.write") }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.addFriend") }),
+    ).toBeNull();
+  });
+
+  it("logs in with a validated nickname from the account screen", async () => {
+    mount();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.guestLogin") }),
+    );
+    const field = await screen.findByLabelText(i18n.t("social.guestName"));
+    fireEvent.change(field, { target: { value: "ab" } });
+    expect(await screen.findByText(i18n.t("validation.nick.length"))).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: i18n.t("social.guestSubmit"),
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    fireEvent.change(field, { target: { value: "Steve" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.guestSubmit") }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText(i18n.t("social.guestReadOnly"))).toBeTruthy(),
+    );
+    expect(useSocialStore.getState().self?.guest).toBe(true);
+  });
+});
+
+describe("photo viewer", () => {
+  it("opens a full-screen photo from an image bubble", async () => {
+    const message: SocialMessage = {
+      id: "1",
+      channel: "global",
+      author: SOCIAL_PEER,
+      content: {
+        type: "attachment",
+        caption: null,
+        attachment: {
+          id: "a1",
+          fileName: "shot.png",
+          mime: "image/png",
+          size: 2048,
+          url: "",
+          thumbUrl: null,
+          width: null,
+          height: null,
+        },
+      },
+      createdAt: new Date().toISOString(),
+      editedAt: null,
+      deleted: false,
+    };
+    h.api = createMockCommands(
+      {
+        socialHistory: async () => ({
+          status: "ok",
+          data: { messages: [message], before: null },
+        }),
+        socialAttachmentPreview: async () => ({
+          status: "ok",
+          data: "data:image/webp;base64,AAAA",
+        }),
+      },
+      { bus: createMockBus(), tickMs: 5 },
+    );
+    await connect();
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: i18n.t("social.showPreview"),
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: i18n.t("social.openFullscreen"),
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: i18n.t("social.photoViewer") }),
+    ).toBeTruthy();
+    expect(screen.getByRole("img", { name: "shot.png" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: i18n.t("common.save") }),
+    ).toBeTruthy();
   });
 });

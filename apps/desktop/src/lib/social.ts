@@ -9,6 +9,10 @@ export const MAX_CHAT_FILE = 10 * 1024 * 1024;
 export function canModerate(role: SocialRole): boolean {
   return role === "moderator" || role === "admin";
 }
+/** The administration section (users, server tools, audit) is admin-only. */
+export function isAdmin(role: SocialRole): boolean {
+  return role === "admin";
+}
 export function privacyOptions(field: keyof SocialPrivacy): SocialAudience[] {
   if (field === "whoCanInvite") return ["everyone", "friends"];
   if (field === "whoCanAddFriend") return ["everyone", "nobody"];
@@ -16,6 +20,11 @@ export function privacyOptions(field: keyof SocialPrivacy): SocialAudience[] {
 }
 export function canContact(user: SocialUser, blocked: boolean): boolean {
   return user.canMessage && !blocked;
+}
+
+/** Offline nickname with a hub guest token: reads the public chat, nothing else. */
+export function isGuest(user: Pick<SocialUser, "role" | "guest">): boolean {
+  return user.guest === true || user.role === "guest";
 }
 
 /** Stable per-player hue, so names and avatars keep their colour across screens. */

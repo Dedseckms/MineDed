@@ -33,13 +33,31 @@ fn pair(a: &str, b: &str) -> (String, String) {
         (b.into(), a.into())
     }
 }
-fn privacy_default() -> SocialPrivacy {
+pub(super) fn privacy_default() -> SocialPrivacy {
     SocialPrivacy {
         who_can_message: SocialAudience::Everyone,
         who_can_invite: SocialAudience::Everyone,
         who_sees_status: SocialAudience::Everyone,
         who_can_add_friend: SocialAudience::Everyone,
     }
+}
+/// Fixed accent palette (ids only, no colours); the UI mirrors the same list.
+pub(crate) const ACCENTS: [&str; 8] = [
+    "green", "teal", "sky", "violet", "pink", "red", "amber", "slate",
+];
+/// Adds a column to an existing table; schema v1 databases are upgraded in place.
+fn ensure_column(db: &Connection, table: &str, column: &str, ddl: &str) -> Result<(), ApiError> {
+    let present = {
+        let mut stmt = db.prepare(&format!("PRAGMA table_info({table})"))?;
+        let names = stmt
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        names.iter().any(|name| name == column)
+    };
+    if !present {
+        db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ddl}"))?;
+    }
+    Ok(())
 }
 fn allowed(a: SocialAudience, friends: bool) -> bool {
     a == SocialAudience::Everyone || (a == SocialAudience::Friends && friends)
@@ -65,7 +83,17 @@ CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,owner TEXT NOT NULL,m
 CREATE TABLE IF NOT EXISTS message_files(message INTEGER NOT NULL REFERENCES messages(id),file TEXT NOT NULL REFERENCES attachments(id),PRIMARY KEY(message,file));
 CREATE INDEX IF NOT EXISTS attachment_messages ON message_files(file,message);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BLOB NOT NULL);")?;
+CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS guest_tokens(token BLOB PRIMARY KEY,uuid TEXT NOT NULL,created TEXT NOT NULL,expires INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS guest_tokens_user ON guest_tokens(uuid);
+CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,at TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,target TEXT,note TEXT);
+CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
+        // Schema v2: guest accounts, profile fields and the avatar blob.
+        ensure_column(&db, "users", "guest", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_column(&db, "users", "display_name", "TEXT")?;
+        ensure_column(&db, "users", "bio", "TEXT")?;
+        ensure_column(&db, "users", "accent", "TEXT")?;
+        ensure_column(&db, "users", "avatar", "TEXT")?;
         let files: Option<String> = db
             .query_row("SELECT value FROM settings WHERE key='files'", [], |r| {
                 r.get(0)
@@ -127,37 +155,79 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
         Ok(self.db.query_row("SELECT EXISTS(SELECT 1 FROM blocks WHERE (owner=?1 AND peer=?2) OR (owner=?2 AND peer=?1))", params![a,b], |r| r.get(0))?)
     }
     pub fn role(&self, id: &str) -> Result<SocialRole, ApiError> {
-        let (admin, moderator): (bool, bool) = self.db.query_row(
-            "SELECT admin,moderator FROM users WHERE uuid=?1",
+        let (admin, moderator, guest): (bool, bool, bool) = self.db.query_row(
+            "SELECT admin,moderator,guest FROM users WHERE uuid=?1",
             [id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         Ok(if admin {
             SocialRole::Admin
         } else if moderator {
             SocialRole::Moderator
+        } else if guest {
+            SocialRole::Guest
         } else {
             SocialRole::User
         })
     }
-    pub fn user(&self, viewer: &str, id: &str, chat: &Chat) -> Result<SocialUser, ApiError> {
-        let (name, skin): (String, Option<String>) = self
+    /// Guests are unverified offline nicks with hub-issued tokens: read-only access.
+    pub fn is_guest(&self, id: &str) -> Result<bool, ApiError> {
+        Ok(self
             .db
-            .query_row("SELECT name,skin FROM users WHERE uuid=?1", [id], |r| {
-                Ok((r.get(0)?, r.get(1)?))
+            .query_row("SELECT guest FROM users WHERE uuid=?1", [id], |r| {
+                r.get::<_, bool>(0)
             })
             .optional()?
+            .unwrap_or(false))
+    }
+    /// Display label for the admin presence list; `None` when the profile is unknown.
+    pub(super) fn label(&self, id: &str) -> Result<Option<(String, bool)>, ApiError> {
+        Ok(self
+            .db
+            .query_row("SELECT name,guest FROM users WHERE uuid=?1", [id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
+            })
+            .optional()?)
+    }
+    pub fn user(&self, viewer: &str, id: &str, chat: &Chat) -> Result<SocialUser, ApiError> {
+        let (name, skin, guest, display_name, bio, accent): (
+            String,
+            Option<String>,
+            bool,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = self
+            .db
+            .query_row(
+                "SELECT name,skin,guest,display_name,bio,accent FROM users WHERE uuid=?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .optional()?
             .ok_or_else(|| ApiError::not_found("player not found"))?;
+        let viewer_guest = self.is_guest(viewer)?;
         let friend = self.friends_with(viewer, id)?;
         let blocked = self.blocked(viewer, id)?;
         let p = self.privacy(id)?;
+        // Direct chats and friend requests need two full accounts.
+        let social = viewer != id && !blocked && !guest && !viewer_guest;
         let status = if viewer == id || (!blocked && allowed(p.who_sees_status, friend)) {
             Some(
                 chat.presence
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .get(id)
-                    .map(|v| v.1)
+                    .map(|v| v.status)
                     .unwrap_or(SocialStatus::Offline),
             )
         } else {
@@ -175,11 +245,55 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
                 params![viewer, id],
                 |r| r.get(0),
             )?,
-            can_message: viewer != id && !blocked && allowed(p.who_can_message, friend),
-            can_invite: viewer != id
-                && !blocked
-                && (p.who_can_invite == SocialAudience::Everyone || friend),
+            can_message: social && allowed(p.who_can_message, friend),
+            can_invite: social && (p.who_can_invite == SocialAudience::Everyone || friend),
+            guest,
+            display_name,
+            bio,
+            accent,
         })
+    }
+    /// Guests may only read the global chat: every writer path goes through here.
+    fn forbid_guest(&self, id: &str) -> Result<(), ApiError> {
+        if self.is_guest(id)? {
+            return Err(super::guest_read_only());
+        }
+        Ok(())
+    }
+    /// Applies an own-profile patch. An empty string clears a field.
+    pub fn update_profile(
+        &self,
+        me: &str,
+        patch: ProfileUpdate,
+        chat: &Chat,
+    ) -> Result<SocialUser, ApiError> {
+        if let Some(raw) = patch.display_name {
+            let value = profile_text(&raw, 24, "display name")?;
+            self.db.execute(
+                "UPDATE users SET display_name=?1 WHERE uuid=?2",
+                params![value, me],
+            )?;
+        }
+        if let Some(raw) = patch.bio {
+            let value = profile_text(&raw, 120, "bio")?;
+            self.db
+                .execute("UPDATE users SET bio=?1 WHERE uuid=?2", params![value, me])?;
+        }
+        if let Some(raw) = patch.accent {
+            let raw = raw.trim();
+            let value = if raw.is_empty() {
+                None
+            } else if ACCENTS.contains(&raw) {
+                Some(raw)
+            } else {
+                return Err(invalid("unknown accent"));
+            };
+            self.db.execute(
+                "UPDATE users SET accent=?1 WHERE uuid=?2",
+                params![value, me],
+            )?;
+        }
+        self.user(me, me, chat)
     }
     pub fn member(&self, viewer: &str, channel: &str) -> Result<Option<String>, ApiError> {
         if channel == "global" {
@@ -342,6 +456,10 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
         mut content: SocialContent,
         chat: &Chat,
     ) -> Result<SocialMessage, ApiError> {
+        // Guests have no identity to moderate on: read-only everywhere, not just global.
+        if self.is_guest(viewer)? {
+            return Err(super::guest_read_only());
+        }
         self.can_send(
             viewer,
             channel,
@@ -472,9 +590,13 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
             ("GET", ["me"]) => Ok(serde_json::to_value(self.user(me, me, chat)?)?),
             ("GET", ["channels"]) => {
                 let mut stmt=self.db.prepare("SELECT c.id FROM channels c LEFT JOIN messages m ON m.channel=c.id WHERE c.id='global' OR c.a=?1 OR c.b=?1 GROUP BY c.id ORDER BY (c.id='global') DESC,max(m.id) DESC")?;
-                let ids = stmt
+                let mut ids = stmt
                     .query_map([me], |r| r.get::<_, String>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
+                // Guests never join direct chats, even if a stale row references them.
+                if self.is_guest(me)? {
+                    ids.retain(|id| id == "global");
+                }
                 Ok(serde_json::to_value(
                     ids.iter()
                         .map(|id| self.channel(me, id, chat))
@@ -525,8 +647,12 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
                 self.db.execute("INSERT INTO reads(user,channel,last) VALUES(?1,?2,?3) ON CONFLICT(user,channel) DO UPDATE SET last=max(last,excluded.last)",params![me,c,id])?;
                 Ok(Value::Null)
             }
-            ("GET", ["privacy"]) => Ok(serde_json::to_value(self.privacy(me)?)?),
+            ("GET", ["privacy"]) => {
+                self.forbid_guest(me)?;
+                Ok(serde_json::to_value(self.privacy(me)?)?)
+            }
             ("PUT", ["privacy"]) => {
+                self.forbid_guest(me)?;
                 let mut p: SocialPrivacy =
                     serde_json::from_value(body).map_err(|_| invalid("invalid privacy"))?;
                 if p.who_can_invite == SocialAudience::Nobody {
@@ -557,7 +683,17 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
                 )?)
             }
             ("GET", ["users", id]) => Ok(serde_json::to_value(self.user(me, &uuid(id)?, chat)?)?),
+            ("GET", ["profile", id]) => {
+                Ok(serde_json::to_value(self.user(me, &uuid(id)?, chat)?)?)
+            }
+            ("PATCH", ["profile"]) => {
+                self.forbid_guest(me)?;
+                let patch: ProfileUpdate =
+                    serde_json::from_value(body).map_err(|_| invalid("invalid profile update"))?;
+                Ok(serde_json::to_value(self.update_profile(me, patch, chat)?)?)
+            }
             ("POST", ["users", id, "direct"]) => {
+                self.forbid_guest(me)?;
                 let id = uuid(id)?;
                 if !self.user(me, &id, chat)?.can_message {
                     return Err(denied());
@@ -593,6 +729,7 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
                 Ok(Value::Null)
             }
             ("GET", ["friends"]) => {
+                self.forbid_guest(me)?;
                 let mut stmt = self.db.prepare(
                     "SELECT CASE WHEN a=?1 THEN b ELSE a END FROM friends WHERE a=?1 OR b=?1",
                 )?;
@@ -606,6 +743,7 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
                 )?)
             }
             ("PUT" | "DELETE", ["friends", id]) => {
+                self.forbid_guest(me)?;
                 let id = uuid(id)?;
                 let (a, b) = pair(me, &id);
                 if method == "PUT" {
@@ -642,17 +780,22 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
             ("DELETE", ["messages", id]) => {
                 let id = message_id(&json!(id))?;
                 let m = self.message(me, id, chat)?;
-                if m.author.uuid != me
-                    && !(m.channel == "global" && self.role(me)? != SocialRole::User)
-                {
+                let role = self.role(me)?;
+                let moderator = m.channel == "global"
+                    && matches!(role, SocialRole::Moderator | SocialRole::Admin);
+                if m.author.uuid != me && !moderator {
                     return Err(denied());
                 }
                 self.db
                     .execute("UPDATE messages SET deleted=1 WHERE id=?1", [id])?;
+                if m.author.uuid != me {
+                    self.audit(me, "delete", Some(&id.to_string()), Some(&m.channel))?;
+                }
                 let _ = chat.events.send(super::Notice::Message(id, true));
                 Ok(Value::Null)
             }
             ("POST", ["messages", id, "report"]) => {
+                self.forbid_guest(me)?;
                 let id = message_id(&json!(id))?;
                 let m = self.message(me, id, chat)?;
                 if m.channel != "global" {
@@ -680,13 +823,21 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
                             return Err(invalid("invalid role"));
                         }
                         self.user(me, &id, chat)?;
+                        if self.is_guest(&id)? {
+                            return Err(invalid("guest accounts cannot hold roles"));
+                        }
                         self.db.execute(
                             "UPDATE users SET moderator=?1 WHERE uuid=?2",
                             params![role == "moderator", id],
                         )?;
+                        self.audit(me, "role", Some(&id), Some(role))?;
                         Ok(Value::Null)
                     }
                     ("GET", ["admin", "server"]) => Ok(serde_json::to_value(self.health(chat)?)?),
+                    ("GET", ["admin", "presence"]) => Ok(serde_json::to_value(
+                        super::presence::admin_presence(chat, self)?,
+                    )?),
+                    ("GET", ["admin", "audit"]) => Ok(serde_json::to_value(self.audit_page()?)?),
                     _ => Err(ApiError::not_found("no such route")),
                 }
             }
@@ -720,7 +871,7 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
         chat: &Chat,
     ) -> Result<Value, ApiError> {
         let role = self.role(me)?;
-        if role == SocialRole::User {
+        if !matches!(role, SocialRole::Moderator | SocialRole::Admin) {
             return Err(denied());
         }
         match (method, path) {
@@ -776,16 +927,19 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
                             return Err(denied());
                         }
                         self.db.execute("INSERT INTO moderation(user,mute) VALUES(?1,?2) ON CONFLICT(user) DO UPDATE SET mute=excluded.mute",params![id,now()+seconds])?;
+                        self.audit(me, action, Some(&id), Some(&seconds.to_string()))?;
                     }
                     "unmute" => {
                         self.db
-                            .execute("UPDATE moderation SET mute=0 WHERE user=?1", [id])?;
+                            .execute("UPDATE moderation SET mute=0 WHERE user=?1", [&id])?;
+                        self.audit(me, action, Some(&id), None)?;
                     }
                     "ban" | "unban" => {
                         if role != SocialRole::Admin {
                             return Err(denied());
                         }
                         self.db.execute("INSERT INTO moderation(user,ban) VALUES(?1,?2) ON CONFLICT(user) DO UPDATE SET ban=excluded.ban",params![id,action=="ban"])?;
+                        self.audit(me, action, Some(&id), None)?;
                     }
                     _ => return Err(invalid("invalid moderation action")),
                 }
@@ -806,6 +960,14 @@ pub(super) fn validate_text(text: &str, max: usize) -> Result<(), ApiError> {
         return Err(invalid("invalid text"));
     }
     Ok(())
+}
+/// Trims a profile field and rejects control characters. Empty means "clear".
+fn profile_text(raw: &str, max: usize, what: &str) -> Result<Option<String>, ApiError> {
+    let text = raw.trim();
+    if text.chars().count() > max || text.chars().any(char::is_control) {
+        return Err(invalid(&format!("invalid {what}")));
+    }
+    Ok((!text.is_empty()).then(|| text.to_owned()))
 }
 fn message_id(v: &Value) -> Result<i64, ApiError> {
     v.as_str()

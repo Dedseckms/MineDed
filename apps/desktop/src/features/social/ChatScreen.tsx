@@ -25,14 +25,20 @@ import { Modal } from "../../components/ui/Modal";
 import { VirtualList } from "../../components/ui/VirtualList";
 import { Badge, ErrorMessage } from "../../components/ui/feedback";
 import { Select } from "../../components/ui/form";
-import { useMediaQuery, useMotionPrefs } from "../../hooks/useAppearance";
+import { useMediaQuery } from "../../hooks/useAppearance";
 import { applySocialEvent } from "../../hooks/useSocialSync";
-import { canContact, canModerate, privacyOptions } from "../../lib/social";
+import {
+  canModerate,
+  isAdmin,
+  isGuest,
+  privacyOptions,
+} from "../../lib/social";
+import { canEditProfile } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
 import { useSocialStore } from "../../stores/socialStore";
 import { useTaskStore } from "../../stores/taskStore";
-import { Skin3D, SkinFlat } from "../skins/SkinPreview";
 import { TaskProgress } from "../tasks/TaskProgress";
+import { AdminPanel } from "./admin/AdminPanel";
 import { ChatAvatar } from "./ChatAvatar";
 import {
   type ChatMessageActions,
@@ -44,7 +50,10 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./ChatTimeline";
 import { type TimelineRow, buildTimeline, chronological } from "./chat";
 import { SharePack } from "./PackShare";
-import { SocialAdmin } from "./SocialAdmin";
+import { GuestLoginDialog } from "./GuestLoginDialog";
+import { OnlineBadge } from "./OnlineBadge";
+import { ProfileCard } from "./ProfileCard";
+import { ProfileEditor } from "./ProfileEditor";
 
 const privacyFields: (keyof SocialPrivacy)[] = [
   "whoCanMessage",
@@ -72,8 +81,10 @@ export function ChatScreen() {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [profile, setProfile] = useState<SocialUser | null>(null);
+  const [editor, setEditor] = useState(false);
   const [tab, setTab] = useState("chat");
   const [pane, setPane] = useState<"list" | "chat">("list");
+  const [guestLogin, setGuestLogin] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
   const task = useTaskStore((s) => (taskId ? s.tasks[taskId] : undefined));
   const room = useRoomState();
@@ -91,6 +102,7 @@ export function ChatScreen() {
   }, [search]);
   useEffect(() => {
     setProfile(null);
+    setEditor(false);
     setQuery("");
     setSearch("");
     setText("");
@@ -185,11 +197,24 @@ export function ChatScreen() {
         <h2 className="text-xl font-semibold">{t("social.title")}</h2>
         <p>{t("social.login")}</p>
         <ErrorMessage error={session.error} />
-        <Button onClick={() => useNavStore.getState().go("accounts")}>
-          {t("nav.accounts")}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => useNavStore.getState().go("accounts")}>
+            {t("nav.accounts")}
+          </Button>
+          <Button variant="secondary" onClick={() => setGuestLogin(true)}>
+            {t("social.guestLogin")}
+          </Button>
+        </div>
+        <GuestLoginDialog
+          open={guestLogin}
+          onClose={() => setGuestLogin(false)}
+          onLogin={(user) =>
+            session.set({ self: user, connected: true, error: null })
+          }
+        />
       </div>
     );
+  const guest = isGuest(self);
   const selected = channels.data?.find((c) => c.id === session.selected);
   const directChat = selected?.kind === "direct";
   const peer = directChat ? (selected?.peer ?? null) : null;
@@ -262,15 +287,26 @@ export function ChatScreen() {
     <div className="flex h-[calc(100dvh-6.5rem)] min-h-[30rem] flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="mr-auto text-xl font-semibold">{t("social.title")}</h2>
+        <OnlineBadge enabled={session.connected} />
+        {guest ? <Badge tone="info">{t("social.guestBadge")}</Badge> : null}
         <Badge tone={session.connected ? "accent" : "warning"}>
           {t(session.connected ? "social.connected" : "social.reconnecting")}
         </Badge>
+        {canEditProfile(self) ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Icon name="user" />}
+            onClick={() => setEditor(true)}
+          >
+            {t("social.profile.self")}
+          </Button>
+        ) : null}
         <div className="flex gap-1">
           {[
             "chat",
-            "friends",
-            "privacy",
-            ...(canModerate(self.role) ? ["admin"] : []),
+            ...(isGuest(self) ? [] : ["friends", "privacy"]),
+            ...(isAdmin(self.role) ? ["admin"] : []),
           ].map((name) => (
             <Button
               key={name}
@@ -305,7 +341,11 @@ export function ChatScreen() {
               }`}
             >
               <ChatChannelList
-                channels={channels.data ?? []}
+                channels={
+                  guest
+                    ? (channels.data ?? []).filter((c) => c.kind === "global")
+                    : channels.data ?? []
+                }
                 selected={session.selected}
                 onSelect={pickChannel}
                 users={query ? (users.data ?? []) : []}
@@ -313,6 +353,7 @@ export function ChatScreen() {
                 search={search}
                 onSearch={setSearch}
                 onOpenProfile={openProfile}
+                showDirect={!guest}
               />
             </aside>
             <section
@@ -350,8 +391,8 @@ export function ChatScreen() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      aria-label={t("social.profile")}
-                      title={t("social.profile")}
+                      aria-label={t("social.profile.title")}
+                      title={t("social.profile.title")}
                       onClick={() => {
                         if (peer) openProfile(peer);
                       }}
@@ -396,46 +437,55 @@ export function ChatScreen() {
                   empty={t(history.isPending ? "common.loading" : "social.empty")}
                 />
               </div>
-              <ChatComposer
-                value={text}
-                onChange={setText}
-                onSend={() => {
-                  const value = text.trim();
-                  if (value) send({ type: "text", text: value });
-                }}
-                onAttach={() =>
-                  run(async () => {
-                    const path = await pickFile();
-                    if (path)
-                      await transfer((ch) =>
-                        api.socialSendFile(
-                          session.selected,
-                          path,
-                          text.trim() || null,
-                          ch,
-                        ),
-                      );
-                  })
-                }
-                disabled={action.isPending || !session.connected}
-                hint={t(
-                  directChat ? "social.directHint" : "social.rules",
-                )}
-                tools={
-                  directChat && selected ? (
-                    <SharePack
-                      key={selected.id}
-                      channel={selected.id}
-                      disabled={
-                        action.isPending ||
-                        !session.connected ||
-                        !selected.peer?.canInvite ||
-                        selected.peer?.isBlocked === true
-                      }
-                    />
-                  ) : null
-                }
-              />
+              {guest ? (
+                <p
+                  role="status"
+                  className="shrink-0 border-t border-border bg-panel px-3 py-3 text-center text-sm text-muted"
+                >
+                  {t("social.guestReadOnly")}
+                </p>
+              ) : (
+                <ChatComposer
+                  value={text}
+                  onChange={setText}
+                  onSend={() => {
+                    const value = text.trim();
+                    if (value) send({ type: "text", text: value });
+                  }}
+                  onAttach={() =>
+                    run(async () => {
+                      const path = await pickFile();
+                      if (path)
+                        await transfer((ch) =>
+                          api.socialSendFile(
+                            session.selected,
+                            path,
+                            text.trim() || null,
+                            ch,
+                          ),
+                        );
+                    })
+                  }
+                  disabled={action.isPending || !session.connected}
+                  hint={t(
+                    directChat ? "social.directHint" : "social.rules",
+                  )}
+                  tools={
+                    directChat && selected ? (
+                      <SharePack
+                        key={selected.id}
+                        channel={selected.id}
+                        disabled={
+                          action.isPending ||
+                          !session.connected ||
+                          !selected.peer?.canInvite ||
+                          selected.peer?.isBlocked === true
+                        }
+                      />
+                    ) : null
+                  }
+                />
+              )}
             </section>
           </div>
         </div>
@@ -520,20 +570,28 @@ export function ChatScreen() {
           </div>
         </div>
       ) : null}
-      {tab === "admin" && canModerate(self.role) ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <SocialAdmin self={self} />
+      {tab === "admin" && isAdmin(self.role) ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <AdminPanel self={self} />
         </div>
       ) : null}
       {profile ? (
         <Profile
           user={profile}
+          self={self}
           close={() => setProfile(null)}
           direct={direct}
           run={run}
           invite={() => invite(profile)}
           canInvite={!!room.data && profile.canInvite}
+          edit={() => {
+            setProfile(null);
+            setEditor(true);
+          }}
         />
+      ) : null}
+      {editor ? (
+        <ProfileEditor self={self} onClose={() => setEditor(false)} />
       ) : null}
     </div>
   );
@@ -541,18 +599,22 @@ export function ChatScreen() {
 
 function Profile({
   user: initialUser,
+  self,
   close,
   direct,
   run,
   invite,
   canInvite,
+  edit,
 }: {
   user: SocialUser;
+  self: SocialUser;
   close: () => void;
   direct: (user: SocialUser) => void;
   run: (fn: () => Promise<unknown>) => void;
   invite: () => void;
   canInvite: boolean;
+  edit: () => void;
 }) {
   const { t } = useTranslation();
   const refreshed = useQuery({
@@ -562,69 +624,30 @@ function Profile({
   const user = refreshed.data ?? initialUser;
   const locallyBlocked = useSocialStore((s) => s.blocked.includes(user.uuid));
   const blocked = user.isBlocked === true || locallyBlocked;
-  const { light, reduced } = useMotionPrefs();
   return (
-    <Modal open onClose={close} title={t("social.profile")}>
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold">{user.name}</h3>
-          <Button size="sm" variant="ghost" onClick={close}>
-            {t("common.close")}
-          </Button>
-        </div>
-        {user.skinUrl ? (
-          light ? (
-            <SkinFlat url={user.skinUrl} model="classic" className="h-32" />
-          ) : (
-            <Skin3D
-              url={user.skinUrl}
-              model="classic"
-              capeUrl={null}
-              animate={!reduced}
-              className="h-48"
-            />
-          )
-        ) : null}
-        <p>{t(`social.status.${user.status ?? "hidden"}`)}</p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            disabled={!canContact(user, blocked)}
-            onClick={() => direct(user)}
-          >
-            {t("social.write")}
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={!canInvite || blocked}
-            onClick={invite}
-          >
-            {t("social.invite")}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() =>
-              run(async () => {
-                if (user.isFriend)
-                  unwrap(await api.socialRemoveFriend(user.uuid));
-                else unwrap(await api.socialAddFriend(user.uuid));
-              })
-            }
-          >
-            {t(user.isFriend ? "social.removeFriend" : "social.addFriend")}
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() =>
-              run(async () => {
-                unwrap(await api.socialSetBlocked(user.uuid, !blocked));
-                useSocialStore.getState().block(user.uuid, !blocked);
-              })
-            }
-          >
-            {t(blocked ? "social.unblock" : "social.block")}
-          </Button>
-        </div>
-      </div>
+    <Modal open onClose={close} title={t("social.profile.title")}>
+      <ProfileCard
+        user={user}
+        self={self}
+        blocked={blocked}
+        canInvite={canInvite}
+        onEdit={edit}
+        onWrite={() => direct(user)}
+        onInvite={invite}
+        onToggleFriend={() =>
+          run(async () => {
+            if (user.isFriend) unwrap(await api.socialRemoveFriend(user.uuid));
+            else unwrap(await api.socialAddFriend(user.uuid));
+          })
+        }
+        onToggleBlock={() =>
+          run(async () => {
+            unwrap(await api.socialSetBlocked(user.uuid, !blocked));
+            useSocialStore.getState().block(user.uuid, !blocked);
+          })
+        }
+        guest={isGuest(self)}
+      />
     </Modal>
   );
 }

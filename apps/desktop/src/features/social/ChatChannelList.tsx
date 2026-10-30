@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { SocialChannel, SocialUser } from "../../bindings";
 import { Icon } from "../../components/ui/Icon";
 import { Badge } from "../../components/ui/feedback";
+import { displayNameOf } from "../../lib/socialProfile";
 import { ChatAvatar } from "./ChatAvatar";
 import { clockLabel, previewOf } from "./chat";
 
@@ -17,6 +18,8 @@ export interface ChatChannelListProps {
   search: string;
   onSearch: (value: string) => void;
   onOpenProfile: (user: SocialUser) => void;
+  /** Guests have no friends and no direct chats: hide the whole section. */
+  showDirect?: boolean;
 }
 
 /** Telegram-style left column: search, sections, unread badges. */
@@ -29,6 +32,7 @@ export function ChatChannelList({
   search,
   onSearch,
   onOpenProfile,
+  showDirect = true,
 }: ChatChannelListProps) {
   const { t } = useTranslation();
   const term = search.trim().toLocaleLowerCase();
@@ -72,7 +76,7 @@ export function ChatChannelList({
               >
                 <ChatAvatar user={user} size="sm" />
                 <span className="min-w-0 flex-1 truncate text-sm">
-                  {user.name}
+                  {displayNameOf(user)}
                 </span>
                 <span className="shrink-0 text-[11px] text-muted">
                   {t(`social.status.${user.status ?? "hidden"}`)}
@@ -90,18 +94,24 @@ export function ChatChannelList({
             onSelect={onSelect}
           />
         ))}
-        <SectionLabel>{t("social.sections.direct")}</SectionLabel>
-        {directs.length > 0 ? (
-          directs.map((channel) => (
-            <ChannelRow
-              key={channel.id}
-              channel={channel}
-              active={channel.id === selected}
-              onSelect={onSelect}
-            />
-          ))
-        ) : directCount === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted">{t("social.noChats")}</p>
+        {showDirect ? (
+          <>
+            <SectionLabel>{t("social.sections.direct")}</SectionLabel>
+            {directs.length > 0 ? (
+              directs.map((channel) => (
+                <ChannelRow
+                  key={channel.id}
+                  channel={channel}
+                  active={channel.id === selected}
+                  onSelect={onSelect}
+                />
+              ))
+            ) : directCount === 0 ? (
+              <p className="px-3 py-2 text-xs text-muted">
+                {t("social.noChats")}
+              </p>
+            ) : null}
+          </>
         ) : null}
       </div>
     </div>
@@ -121,7 +131,7 @@ function titleOf(
   t: (key: string) => string,
 ): string {
   if (channel.kind === "global") return t("social.global");
-  return channel.peer?.name ?? t("social.directChat");
+  return channel.peer ? displayNameOf(channel.peer) : t("social.directChat");
 }
 
 function ChannelRow({

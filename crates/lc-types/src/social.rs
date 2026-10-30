@@ -30,6 +30,9 @@ pub struct SocialChannel {
 #[serde(rename_all = "camelCase")]
 pub enum SocialRole {
     User,
+    /// Offline account with a hub guest token: may read the global chat only.
+    /// Direct chats and friendships require a full account.
+    Guest,
     /// Chat moderation only (assigned by an admin).
     Moderator,
     /// Drasl administrator: everything, including roles and server tools.
@@ -63,6 +66,70 @@ pub struct SocialUser {
     /// The caller may open a direct chat with this player.
     pub can_message: bool,
     pub can_invite: bool,
+    /// Guest identity of an offline account (hub-issued token, unverified name).
+    #[serde(default)]
+    pub guest: bool,
+    /// Chosen display name; `None` falls back to `name`.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Short self-description (≤ 120 characters).
+    #[serde(default)]
+    pub bio: Option<String>,
+    /// Accent id from the fixed palette, used for the name and profile header.
+    #[serde(default)]
+    pub accent: Option<String>,
+}
+
+/// Own-profile edit. `None` keeps a field, `Some("")` clears it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileUpdate {
+    #[specta(optional)]
+    pub display_name: Option<String>,
+    #[specta(optional)]
+    pub bio: Option<String>,
+    #[specta(optional)]
+    pub accent: Option<String>,
+}
+
+/// Public presence counter: launchers currently connected, any account kind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PresenceSummary {
+    pub online: u32,
+}
+
+/// One connected launcher as seen by an admin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PresenceClient {
+    /// Authenticated name, or `anonymous` for clients that only beat.
+    pub label: String,
+    /// `guest`, `yggdrasil` or `anonymous`.
+    pub kind: String,
+    pub since: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminPresence {
+    pub online: u32,
+    pub clients: Vec<PresenceClient>,
+}
+
+/// Admin action journal entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    pub id: String,
+    /// RFC 3339 timestamp.
+    pub at: String,
+    /// Actor name (admin or moderator).
+    pub actor: String,
+    /// Action id, e.g. `role`, `mute`, `ban`, `delete`, `profileReset`.
+    pub action: String,
+    pub target: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]

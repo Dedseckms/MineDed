@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::social::{
-    AdminServerState, ModAction, SocialChannel, SocialChannelId, SocialContent, SocialFriend,
-    SocialHistory, SocialMessage, SocialPrivacy, SocialReport, SocialRole, SocialStatus,
-    SocialUser, StorageTarget,
+    AdminPresence, AdminServerState, AuditEntry, ModAction, PresenceSummary, ProfileUpdate,
+    SocialChannel, SocialChannelId, SocialContent, SocialFriend, SocialHistory, SocialMessage,
+    SocialPrivacy, SocialReport, SocialRole, SocialStatus, SocialUser, StorageTarget,
 };
 use lc_types::{AccountId, AppError, AppResult};
 
@@ -127,6 +127,27 @@ impl ChatService for StubChat {
     }
     async fn migrate_storage(&self, _target: StorageTarget) -> AppResult<()> {
         ni("ChatService::migrate_storage")
+    }
+    async fn guest_login(&self, _name: &str) -> AppResult<SocialUser> {
+        ni("ChatService::guest_login")
+    }
+    async fn update_profile(&self, _patch: ProfileUpdate) -> AppResult<SocialUser> {
+        ni("ChatService::update_profile")
+    }
+    async fn set_avatar(&self, _path: &str, _sink: &dyn ProgressSink) -> AppResult<SocialUser> {
+        ni("ChatService::set_avatar")
+    }
+    async fn clear_avatar(&self) -> AppResult<SocialUser> {
+        ni("ChatService::clear_avatar")
+    }
+    async fn presence(&self) -> AppResult<PresenceSummary> {
+        Ok(PresenceSummary::default())
+    }
+    async fn admin_presence(&self) -> AppResult<AdminPresence> {
+        Ok(AdminPresence::default())
+    }
+    async fn audit(&self) -> AppResult<Vec<AuditEntry>> {
+        Ok(Vec::new())
     }
 }
 
