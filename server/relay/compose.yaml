@@ -36,6 +36,8 @@ services:
       HUB_DRASL_ADMIN_TOKEN: ${HUB_DRASL_ADMIN_TOKEN:-}
       HUB_CHAT_NEW_DISK_DIR: ${HUB_CHAT_NEW_DISK_DIR:-}
       HUB_CHAT_OBJECT_STORAGE_DIR: ${HUB_CHAT_OBJECT_STORAGE_DIR:-}
+      # Optional catalogue broker credential; empty keeps it disabled.
+      CURSEFORGE_API_KEY: ${CURSEFORGE_API_KEY:-}
     volumes:
       - hub_chat:/data/chat
     ports:

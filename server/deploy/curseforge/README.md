@@ -9,8 +9,9 @@ the VPS, in the service's protected environment file. Never put it in the launch
 Git, command arguments, logs, support reports, or examples. See `broker.env.example`.
 
 Before an approved rollout, back up `/opt/relay` service configuration privately on
-the VPS, retain the previous hub binary/image, and add the environment variable to
-the hub container environment. Avoid commands that print resolved environment values
+the VPS, retain the previous hub binary/image, and set the credential in
+`/opt/relay/.env` (mode 600) together with the `CURSEFORGE_API_KEY` passthrough in the
+`hub` service of `/opt/relay/compose.yaml`. Avoid commands that print resolved environment values
 (including unredacted `docker compose config` or inspect output). Restart only the
 project hub service. Do not restart Docker, mihomo, or unrelated services, and do not
 change firewall, DNS, routes, systemd, or network configuration.
