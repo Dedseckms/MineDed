@@ -1,15 +1,24 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex, OnceLock,
+    },
+    time::Duration,
+};
 
 use crate::{ChatService, SocialObserver};
 use async_trait::async_trait;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use lc_accounts::{AccountService, AuthProvider};
+use lc_accounts::{AccountService, AuthProvider, KeyringTokenStore, TokenStore};
 use lc_http::{Downloader, Route};
 use lc_runtime::{CancelToken, Paths, ProgressSink, SettingsStore};
-use lc_types::{account::AccountKind, social::*, AccountId, AppError, AppResult, ErrorCode};
+use lc_types::{
+    account::AccountKind, social::*, AccountId, AppError, AppResult, ErrorCode, Secret,
+};
 use reqwest::{Method, Response};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -29,6 +38,11 @@ use url::Url;
 
 const MAX_FILE: usize = 10 * 1024 * 1024;
 const MAX_JSON: usize = 4 * 1024 * 1024;
+const MAX_AVATAR: u64 = 256 * 1024;
+const MAX_DISPLAY_NAME: usize = 24;
+const MAX_BIO: usize = 120;
+const MAX_ACCENT: usize = 16;
+const BEAT_INTERVAL: Duration = Duration::from_secs(60);
 
 fn thumbnail_data_url(bytes: &[u8]) -> AppResult<String> {
     if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
@@ -63,13 +77,41 @@ fn expired() -> AppError {
 fn cancelled() -> AppError {
     AppError::new(ErrorCode::Cancelled, "Chat operation cancelled")
 }
+/// Guests are read-only in the hub; the client refuses locally instead of
+/// sending a request the server would reject anyway.
+fn guest_read_only() -> AppError {
+    AppError::new(
+        ErrorCode::PermissionDenied,
+        "Guests can read the global chat only",
+    )
+    .detail("reason", "guestReadOnly")
+}
+
+/// How a session authenticates: a Yggdrasil account or a hub guest token.
+#[derive(Clone)]
+enum Credential {
+    Account(AccountId),
+    /// Kept in memory for the lifetime of the session only (never in the keyring).
+    Guest(Secret),
+}
 
 struct Session {
-    account: AccountId,
+    credential: Credential,
     base: Url,
     cancel: CancelToken,
     cache: PathBuf,
     presence: watch::Sender<SocialStatus>,
+}
+impl Session {
+    fn is_guest(&self) -> bool {
+        matches!(self.credential, Credential::Guest(_))
+    }
+    fn account(&self) -> Option<AccountId> {
+        match self.credential {
+            Credential::Account(id) => Some(id),
+            Credential::Guest(_) => None,
+        }
+    }
 }
 struct Live {
     session: Arc<Session>,
@@ -82,6 +124,132 @@ impl Drop for Live {
     }
 }
 
+/// Process-wide presence heartbeat: started once, cancelled by `disconnect`.
+struct Heartbeat {
+    cancel: CancelToken,
+    task: JoinHandle<()>,
+}
+impl Drop for Heartbeat {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.task.abort();
+    }
+}
+static HEARTBEAT_CLAIMED: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static HEARTBEAT_LOOPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static HEARTBEAT: OnceLock<StdMutex<Option<Heartbeat>>> = OnceLock::new();
+
+fn heartbeat_slot() -> &'static StdMutex<Option<Heartbeat>> {
+    HEARTBEAT.get_or_init(|| StdMutex::new(None))
+}
+
+/// Starts the heartbeat if `claimed` was free and a runtime is available.
+/// The caller owns the returned task; dropping it cancels the loop.
+fn spawn_heartbeat(
+    claimed: &AtomicBool,
+    accounts: Arc<dyn AccountService>,
+    settings: Arc<dyn SettingsStore>,
+    downloader: Arc<dyn Downloader>,
+) -> Option<Heartbeat> {
+    if tokio::runtime::Handle::try_current().is_err() || claimed.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+    let cancel = CancelToken::new();
+    let task = tokio::spawn(heartbeat_loop(
+        accounts,
+        settings,
+        downloader,
+        cancel.clone(),
+    ));
+    Some(Heartbeat { cancel, task })
+}
+
+/// Keeps the one process-wide heartbeat alive; later calls are no-ops.
+fn start_heartbeat(
+    accounts: Arc<dyn AccountService>,
+    settings: Arc<dyn SettingsStore>,
+    downloader: Arc<dyn Downloader>,
+) {
+    let Some(heartbeat) = spawn_heartbeat(&HEARTBEAT_CLAIMED, accounts, settings, downloader)
+    else {
+        return;
+    };
+    #[cfg(test)]
+    HEARTBEAT_LOOPS.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut slot) = heartbeat_slot().lock() {
+        *slot = Some(heartbeat);
+    }
+}
+
+fn stop_heartbeat() {
+    if let Ok(mut slot) = heartbeat_slot().lock() {
+        *slot = None;
+    }
+}
+
+async fn heartbeat_loop(
+    accounts: Arc<dyn AccountService>,
+    settings: Arc<dyn SettingsStore>,
+    downloader: Arc<dyn Downloader>,
+    cancel: CancelToken,
+) {
+    let client_id = uuid::Uuid::new_v4().to_string();
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = tokio::time::sleep(BEAT_INTERVAL) => {}
+        }
+        // Best effort: a missing counter must never disturb the chat.
+        let _ = beat(
+            accounts.as_ref(),
+            settings.as_ref(),
+            downloader.as_ref(),
+            &client_id,
+            &cancel,
+        )
+        .await;
+    }
+}
+
+async fn beat(
+    accounts: &dyn AccountService,
+    settings: &dyn SettingsStore,
+    downloader: &dyn Downloader,
+    client_id: &str,
+    cancel: &CancelToken,
+) -> AppResult<()> {
+    let base = hub_base(settings).await?;
+    let kind = active_kind(accounts).await;
+    let request = downloader
+        .client(Route::Auto)
+        .post(root_endpoint(&base, &["presence", "beat"])?)
+        .json(&json!({ "clientId": client_id, "kind": kind }))
+        .send();
+    let response = tokio::select! {
+        _ = cancel.cancelled() => return Err(cancelled()),
+        r = request => r.map_err(|_| network())?,
+    };
+    checked(response, cancel).await?;
+    Ok(())
+}
+
+/// Kind reported to the presence counter for the currently active account.
+async fn active_kind(accounts: &dyn AccountService) -> &'static str {
+    let Ok(list) = accounts.list().await else {
+        return "anonymous";
+    };
+    let active = list
+        .iter()
+        .find(|a| a.is_default && a.valid)
+        .or_else(|| list.iter().find(|a| a.valid));
+    match active.map(|a| a.kind) {
+        Some(AccountKind::Offline) => "offline",
+        Some(AccountKind::Yggdrasil) => "yggdrasil",
+        None => "anonymous",
+    }
+}
+
 /// Authenticated hub client. One account owns each connection and cache namespace.
 pub struct ChatClient {
     accounts: Arc<dyn AccountService>,
@@ -91,6 +259,10 @@ pub struct ChatClient {
     settings: Arc<dyn SettingsStore>,
     observer: Arc<dyn SocialObserver>,
     live: RwLock<Option<Live>>,
+    /// Identity of the current session (returned by `session()`).
+    me: RwLock<Option<SocialUser>>,
+    /// Lazily opened keyring store for the persisted guest token.
+    tokens: OnceLock<Arc<dyn TokenStore>>,
     lifecycle: Mutex<()>,
 }
 impl ChatClient {
@@ -103,6 +275,7 @@ impl ChatClient {
         settings: Arc<dyn SettingsStore>,
         observer: Arc<dyn SocialObserver>,
     ) -> Self {
+        start_heartbeat(accounts.clone(), settings.clone(), downloader.clone());
         Self {
             accounts,
             auth,
@@ -111,10 +284,22 @@ impl ChatClient {
             settings,
             observer,
             live: RwLock::new(None),
+            me: RwLock::new(None),
+            tokens: OnceLock::new(),
             lifecycle: Mutex::new(()),
         }
     }
-    async fn session(&self) -> AppResult<Arc<Session>> {
+    /// Overrides the keyring store (tests and alternative secure storage).
+    pub fn with_token_store(self, tokens: Arc<dyn TokenStore>) -> Self {
+        let _ = self.tokens.set(tokens);
+        self
+    }
+    fn token_store(&self) -> Arc<dyn TokenStore> {
+        self.tokens
+            .get_or_init(|| Arc::new(KeyringTokenStore::new(&self.paths)))
+            .clone()
+    }
+    async fn current_session(&self) -> AppResult<Arc<Session>> {
         let session = self
             .live
             .read()
@@ -125,15 +310,71 @@ impl ChatClient {
         if session.cancel.is_cancelled() {
             return Err(expired());
         }
-        if !own_account(self.accounts.as_ref(), session.account).await? {
-            session.cancel.cancel();
-            self.clear_cache(&session).await;
-            return Err(expired());
+        if let Some(account) = session.account() {
+            if !own_account(self.accounts.as_ref(), account).await? {
+                session.cancel.cancel();
+                self.clear_cache(&session).await;
+                return Err(expired());
+            }
         }
         Ok(session)
     }
+    /// Session that may use everything except the guest read-only surface.
+    async fn full_session(&self) -> AppResult<Arc<Session>> {
+        let session = self.current_session().await?;
+        if session.is_guest() {
+            return Err(guest_read_only());
+        }
+        Ok(session)
+    }
+    async fn token(&self, session: &Session) -> AppResult<Secret> {
+        token_for(session, self.auth.as_ref()).await
+    }
     async fn clear_cache(&self, s: &Session) {
         let _ = tokio::fs::remove_dir_all(&s.cache).await;
+    }
+    /// Tears down the current session (if any), its socket and cached history.
+    async fn shutdown_current(&self) {
+        if let Some(old) = self.live.write().await.take() {
+            old.session.cancel.cancel();
+            old.task.abort();
+            self.clear_cache(&old.session).await;
+        }
+    }
+    /// Builds a session against the configured hub; the heartbeat is armed too.
+    async fn start_session(&self, credential: Credential, seed: &str) -> AppResult<Arc<Session>> {
+        start_heartbeat(
+            self.accounts.clone(),
+            self.settings.clone(),
+            self.downloader.clone(),
+        );
+        let base = hub_base(self.settings.as_ref()).await?;
+        let cache = self
+            .paths
+            .cache()
+            .join("chat")
+            .join(format!(
+                "{:x}",
+                Sha256::digest(format!("{base}:{seed}").as_bytes())
+            ))
+            .join(AccountId::new().to_string());
+        Ok(Arc::new(Session {
+            credential,
+            base,
+            cancel: CancelToken::new(),
+            cache,
+            presence: watch::channel(SocialStatus::Online).0,
+        }))
+    }
+    async fn spawn_socket(&self, session: Arc<Session>) {
+        let task = tokio::spawn(socket(
+            session.clone(),
+            self.accounts.clone(),
+            self.auth.clone(),
+            self.downloader.clone(),
+            self.observer.clone(),
+        ));
+        *self.live.write().await = Some(Live { session, task });
     }
     async fn request(
         &self,
@@ -145,7 +386,7 @@ impl ChatClient {
         if s.cancel.is_cancelled() {
             return Err(cancelled());
         }
-        let token = self.auth.launch_auth(Some(s.account)).await?.access_token;
+        let token = self.token(s).await?;
         let mut req = self
             .downloader
             .client(Route::Auto)
@@ -163,15 +404,179 @@ impl ChatClient {
         segments: &[&str],
         body: Option<Value>,
     ) -> AppResult<T> {
-        let s = self.session().await?;
+        let s = self.current_session().await?;
         let r = self.request(&s, method, segments, body).await?;
         decode(r, &s.cancel).await
     }
     async fn empty(&self, method: Method, segments: &[&str], body: Option<Value>) -> AppResult<()> {
-        let s = self.session().await?;
+        let s = self.current_session().await?;
         self.request(&s, method, segments, body).await?;
         Ok(())
     }
+
+    // ------------------------------------------------ session and originals
+    /// Current session from memory; a stored guest token is restored without
+    /// any hub call, so the UI can keep the guest signed in across restarts.
+    /// (The trait counterpart lands with the lead's contract update.)
+    pub async fn session(&self) -> AppResult<Option<SocialUser>> {
+        let _guard = self.lifecycle.lock().await;
+        if let Some(user) = self.me.read().await.clone() {
+            if self.live.read().await.is_some() {
+                return Ok(Some(user));
+            }
+        }
+        let base = hub_base(self.settings.as_ref()).await?;
+        let Some((token, user)) = self.load_guest(&base).await else {
+            return Ok(None);
+        };
+        let session = self
+            .start_session(Credential::Guest(token), &format!("guest:{}", user.uuid))
+            .await?;
+        self.spawn_socket(session).await;
+        *self.me.write().await = Some(user.clone());
+        Ok(Some(user))
+    }
+    fn guest_key(base: &Url) -> String {
+        format!("chat-guest:{:x}", Sha256::digest(base.as_str().as_bytes()))
+    }
+    async fn load_guest(&self, base: &Url) -> Option<(Secret, SocialUser)> {
+        let key = Self::guest_key(base);
+        let store = self.token_store();
+        let raw = store.get(&key).await.ok().flatten()?;
+        match serde_json::from_str::<StoredGuest>(raw.expose()) {
+            Ok(stored) => Some((Secret::new(stored.token), stored.user)),
+            Err(_) => {
+                let _ = store.delete(&key).await;
+                None
+            }
+        }
+    }
+    async fn store_guest(&self, base: &Url, token: &Secret, user: &SocialUser) {
+        let stored = StoredGuest {
+            token: token.expose().to_owned(),
+            user: user.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&stored) {
+            let _ = self
+                .token_store()
+                .set(&Self::guest_key(base), &Secret::new(json))
+                .await;
+        }
+    }
+    /// Original image as a `data:` URL for the full-screen viewer; only
+    /// image types are returned and the size is bounded in Rust.
+    pub async fn attachment_original(&self, id: &str) -> AppResult<String> {
+        let s = self.current_session().await?;
+        let url = endpoint(&s.base, &["files", id])?;
+        image_data_url(&s, self.token(&s).await?, url, self.downloader.as_ref()).await
+    }
+    /// Avatar of `uuid` fetched from the hub as a `data:` URL.
+    pub async fn avatar_preview(&self, uuid: &str) -> AppResult<String> {
+        let s = self.current_session().await?;
+        let url = endpoint(&s.base, &["avatar", uuid])?;
+        image_data_url(&s, self.token(&s).await?, url, self.downloader.as_ref()).await
+    }
+}
+
+/// Fetches an image and encodes it for the UI; never returns a public URL.
+async fn image_data_url(
+    s: &Session,
+    token: Secret,
+    url: Url,
+    downloader: &dyn Downloader,
+) -> AppResult<String> {
+    let response = tokio::select! {
+        _ = s.cancel.cancelled() => return Err(cancelled()),
+        r = downloader.client(Route::Auto).get(url).bearer_auth(token.expose()).send() => r.map_err(|_| network())?,
+    };
+    let response = checked(response, &s.cancel).await?;
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+    if !["image/png", "image/jpeg", "image/webp", "image/gif"].contains(&mime.as_str()) {
+        return Err(invalid("attachmentType"));
+    }
+    let bytes = bounded(response, MAX_FILE, &s.cancel).await?;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// Guest token + public profile persisted in the OS keyring.
+#[derive(Serialize, Deserialize)]
+struct StoredGuest {
+    token: String,
+    user: SocialUser,
+}
+
+async fn token_for(s: &Session, auth: &dyn AuthProvider) -> AppResult<Secret> {
+    match &s.credential {
+        Credential::Account(id) => Ok(auth.launch_auth(Some(*id)).await?.access_token),
+        Credential::Guest(token) => Ok(token.clone()),
+    }
+}
+
+/// Hub API root from settings, defaulting to the project server.
+async fn hub_base(settings: &dyn SettingsStore) -> AppResult<Url> {
+    let settings = settings.get().await?;
+    let raw = if settings.hub_url.trim().is_empty() {
+        lc_types::settings::DEFAULT_HUB_URL
+    } else {
+        settings.hub_url.trim()
+    };
+    let base = Url::parse(raw).map_err(|_| invalid("hubUrl"))?;
+    if (base.scheme() != "https"
+        && !(base.scheme() == "http"
+            && base.host_str().is_some_and(|h| {
+                h == "localhost"
+                    || h.parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            })))
+        || !base.username().is_empty()
+        || base.password().is_some()
+        || base.query().is_some()
+        || base.fragment().is_some()
+    {
+        return Err(invalid("hubUrl"));
+    }
+    Ok(base)
+}
+
+/// `^[A-Za-z0-9_]{3,16}$`: the hub applies the same rule.
+fn valid_guest_name(name: &str) -> bool {
+    (3..=16).contains(&name.chars().count())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Checked locally so obviously invalid edits never reach the hub.
+fn validate_profile(patch: &ProfileUpdate) -> AppResult<()> {
+    if let Some(name) = &patch.display_name {
+        if name.chars().count() > MAX_DISPLAY_NAME || name.chars().any(char::is_control) {
+            return Err(invalid("displayName"));
+        }
+    }
+    if let Some(bio) = &patch.bio {
+        if bio.chars().count() > MAX_BIO || bio.chars().any(|c| c.is_control() && c != '\n') {
+            return Err(invalid("bio"));
+        }
+    }
+    if let Some(accent) = &patch.accent {
+        // Accent ids are short lowercase slugs from the shared palette.
+        if accent.len() > MAX_ACCENT
+            || !accent
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(invalid("accent"));
+        }
+    }
+    Ok(())
 }
 
 async fn own_account(accounts: &dyn AccountService, id: AccountId) -> AppResult<bool> {
@@ -190,12 +595,12 @@ async fn own_account(accounts: &dyn AccountService, id: AccountId) -> AppResult<
         server.official && Url::parse(&server.api_root).is_ok_and(|url| url == account_server)
     }))
 }
-fn endpoint(base: &Url, segments: &[&str]) -> AppResult<Url> {
+/// Path under the hub API root (`/api/v1`), without the `/chat` prefix.
+fn root_endpoint(base: &Url, segments: &[&str]) -> AppResult<Url> {
     let mut url = base.clone();
     {
         let mut path = url.path_segments_mut().map_err(|_| invalid("hubUrl"))?;
         path.pop_if_empty();
-        path.push("chat");
         for segment in segments {
             if segment.is_empty() || *segment == "." || *segment == ".." {
                 return Err(invalid("pathSegment"));
@@ -204,6 +609,12 @@ fn endpoint(base: &Url, segments: &[&str]) -> AppResult<Url> {
         }
     }
     Ok(url)
+}
+fn endpoint(base: &Url, segments: &[&str]) -> AppResult<Url> {
+    let mut prefixed = Vec::with_capacity(segments.len() + 1);
+    prefixed.push("chat");
+    prefixed.extend_from_slice(segments);
+    root_endpoint(base, &prefixed)
 }
 async fn bounded(mut response: Response, max: usize, cancel: &CancelToken) -> AppResult<Vec<u8>> {
     if response.content_length().is_some_and(|n| n > max as u64) {
@@ -238,7 +649,16 @@ async fn checked(response: Response, cancel: &CancelToken) -> AppResult<Response
     if let Ok(bytes) = bounded(response, 16384, cancel).await {
         if let Ok(server) = serde_json::from_slice::<AppError>(&bytes) {
             if let Some(reason) = server.details.as_ref().and_then(|d| d.get("reason")) {
-                if ["filtered", "muted", "attachmentsPaused"].contains(&reason.as_str()) {
+                if [
+                    "filtered",
+                    "muted",
+                    "attachmentsPaused",
+                    "guestReadOnly",
+                    "profileInvalid",
+                    "avatarRejected",
+                ]
+                .contains(&reason.as_str())
+                {
                     error = error.detail("reason", reason);
                 }
             }
@@ -295,11 +715,13 @@ async fn socket_once(
     downloader: &dyn Downloader,
     observer: &dyn SocialObserver,
 ) -> AppResult<()> {
-    if !own_account(accounts, s.account).await? {
-        s.cancel.cancel();
-        return Err(expired());
+    if let Some(account) = s.account() {
+        if !own_account(accounts, account).await? {
+            s.cancel.cancel();
+            return Err(expired());
+        }
     }
-    let token = auth.launch_auth(Some(s.account)).await?.access_token;
+    let token = token_for(s, auth).await?;
     let key = generate_key();
     let handshake = downloader
         .upgrade_client(Route::Auto)
@@ -356,7 +778,9 @@ async fn socket_once(
             },
             _ = heartbeat.tick() => {
                 if last_received.elapsed() > Duration::from_secs(60) { return Err(network()); }
-                if !own_account(accounts, s.account).await? { s.cancel.cancel(); return Err(expired()); }
+                if let Some(account) = s.account() {
+                    if !own_account(accounts, account).await? { s.cancel.cancel(); return Err(expired()); }
+                }
                 tokio::time::timeout(Duration::from_secs(10), ws.send(Message::Ping(Vec::new().into()))).await.map_err(|_| network())?.map_err(|_| network())?;
             },
             frame = tokio::time::timeout(Duration::from_secs(60), ws.next()) => {
@@ -376,76 +800,30 @@ async fn socket_once(
 impl ChatService for ChatClient {
     async fn connect(&self, account: AccountId) -> AppResult<SocialUser> {
         let _guard = self.lifecycle.lock().await;
-        if let Some(old) = self.live.write().await.take() {
-            old.session.cancel.cancel();
-            self.clear_cache(&old.session).await;
-            drop(old);
-        }
+        self.shutdown_current().await;
         if !own_account(self.accounts.as_ref(), account).await? {
             return Err(invalid("needsOwnServerAccount"));
         }
-        let settings = self.settings.get().await?;
-        let raw = if settings.hub_url.trim().is_empty() {
-            lc_types::settings::DEFAULT_HUB_URL
-        } else {
-            settings.hub_url.trim()
-        };
-        let base = Url::parse(raw).map_err(|_| invalid("hubUrl"))?;
-        if (base.scheme() != "https"
-            && !(base.scheme() == "http"
-                && base.host_str().is_some_and(|h| {
-                    h == "localhost"
-                        || h.parse::<std::net::IpAddr>()
-                            .is_ok_and(|ip| ip.is_loopback())
-                })))
-            || !base.username().is_empty()
-            || base.password().is_some()
-            || base.query().is_some()
-            || base.fragment().is_some()
-        {
-            return Err(invalid("hubUrl"));
-        }
-        let cache = self
-            .paths
-            .cache()
-            .join("chat")
-            .join(format!(
-                "{:x}",
-                Sha256::digest(format!("{}:{account}", base).as_bytes())
-            ))
-            .join(AccountId::new().to_string());
-        let session = Arc::new(Session {
-            account,
-            base,
-            cancel: CancelToken::new(),
-            cache,
-            presence: watch::channel(SocialStatus::Online).0,
-        });
+        let session = self
+            .start_session(Credential::Account(account), &account.to_string())
+            .await?;
         let response = self.request(&session, Method::GET, &["me"], None).await?;
-        let user = decode(response, &session.cancel).await?;
-        let task = tokio::spawn(socket(
-            session.clone(),
-            self.accounts.clone(),
-            self.auth.clone(),
-            self.downloader.clone(),
-            self.observer.clone(),
-        ));
-        *self.live.write().await = Some(Live { session, task });
+        let user: SocialUser = decode(response, &session.cancel).await?;
+        self.spawn_socket(session).await;
+        *self.me.write().await = Some(user.clone());
         Ok(user)
     }
     async fn disconnect(&self) -> AppResult<()> {
         let _guard = self.lifecycle.lock().await;
-        if let Some(old) = self.live.write().await.take() {
-            old.session.cancel.cancel();
-            old.task.abort();
-            self.clear_cache(&old.session).await;
-        }
+        self.shutdown_current().await;
+        *self.me.write().await = None;
+        stop_heartbeat();
         self.observer
             .on_event(SocialEvent::Connection { connected: false });
         Ok(())
     }
     async fn set_presence(&self, status: SocialStatus) -> AppResult<()> {
-        let s = self.session().await?;
+        let s = self.current_session().await?;
         s.presence.send_replace(status);
         Ok(())
     }
@@ -457,7 +835,7 @@ impl ChatService for ChatClient {
         channel: &SocialChannelId,
         before: Option<String>,
     ) -> AppResult<SocialHistory> {
-        let s = self.session().await?;
+        let s = self.current_session().await?;
         let mut url = endpoint(&s.base, &["channels", channel, "messages"])?;
         {
             let mut query = url.query_pairs_mut();
@@ -469,7 +847,7 @@ impl ChatService for ChatClient {
         if s.cancel.is_cancelled() {
             return Err(cancelled());
         }
-        let token = self.auth.launch_auth(Some(s.account)).await?.access_token;
+        let token = self.token(&s).await?;
         let key = format!(
             "{:x}.json",
             Sha256::digest(
@@ -520,6 +898,7 @@ impl ChatService for ChatClient {
         channel: &SocialChannelId,
         content: SocialContent,
     ) -> AppResult<SocialMessage> {
+        self.full_session().await?;
         if matches!(content, SocialContent::PackShare { .. }) && channel == "global" {
             return Err(invalid("directOnly"));
         }
@@ -538,7 +917,7 @@ impl ChatService for ChatClient {
         sink: &dyn ProgressSink,
     ) -> AppResult<SocialMessage> {
         sink.check_cancelled()?;
-        let s = self.session().await?;
+        let s = self.full_session().await?;
         let mut file = tokio::fs::File::open(path).await?;
         let size = file.metadata().await?.len();
         if size > MAX_FILE as u64 {
@@ -566,7 +945,7 @@ impl ChatService for ChatClient {
         if s.cancel.is_cancelled() {
             return Err(cancelled());
         }
-        let token = self.auth.launch_auth(Some(s.account)).await?.access_token;
+        let token = self.token(&s).await?;
         sink.check_cancelled()?;
         sink.progress(0, Some(size), "chat.upload");
         let request = self
@@ -602,7 +981,7 @@ impl ChatService for ChatClient {
         sink: &dyn ProgressSink,
     ) -> AppResult<()> {
         sink.check_cancelled()?;
-        let s = self.session().await?;
+        let s = self.current_session().await?;
         let segments = ["files", attachment_id];
         let response = tokio::select! { _ = sink.cancel_token().cancelled() => return Err(cancelled()), r = self.request(&s, Method::GET, &segments, None) => r? };
         let total = response.content_length();
@@ -637,10 +1016,10 @@ impl ChatService for ChatClient {
         result
     }
     async fn attachment_preview(&self, attachment_id: &str) -> AppResult<String> {
-        let s = self.session().await?;
+        let s = self.current_session().await?;
         let mut url = endpoint(&s.base, &["files", attachment_id])?;
         url.query_pairs_mut().append_pair("thumb", "1");
-        let token = self.auth.launch_auth(Some(s.account)).await?.access_token;
+        let token = self.token(&s).await?;
         let response = tokio::select! {
             _ = s.cancel.cancelled() => return Err(cancelled()),
             r = self.downloader.client(Route::Auto).get(url).bearer_auth(token.expose()).send() => r.map_err(|_| network())?
@@ -658,6 +1037,7 @@ impl ChatService for ChatClient {
         thumbnail_data_url(&bytes)
     }
     async fn open_direct(&self, uuid: &str) -> AppResult<SocialChannel> {
+        self.full_session().await?;
         self.api(Method::POST, &["users", uuid, "direct"], None)
             .await
     }
@@ -665,13 +1045,13 @@ impl ChatService for ChatClient {
         if query.trim().chars().count() < 2 {
             return Err(invalid("queryTooShort"));
         }
-        let s = self.session().await?;
+        let s = self.current_session().await?;
         let mut url = endpoint(&s.base, &["users"])?;
         url.query_pairs_mut().append_pair("q", query);
         if s.cancel.is_cancelled() {
             return Err(cancelled());
         }
-        let token = self.auth.launch_auth(Some(s.account)).await?.access_token;
+        let token = self.token(&s).await?;
         let response = tokio::select! { _ = s.cancel.cancelled() => return Err(cancelled()), r = self.downloader.client(Route::Auto).get(url).bearer_auth(token.expose()).send() => r.map_err(|_| network())? };
         decode(checked(response, &s.cancel).await?, &s.cancel).await
     }
@@ -679,15 +1059,19 @@ impl ChatService for ChatClient {
         self.api(Method::GET, &["users", uuid], None).await
     }
     async fn friends(&self) -> AppResult<Vec<SocialFriend>> {
+        self.full_session().await?;
         self.api(Method::GET, &["friends"], None).await
     }
     async fn add_friend(&self, uuid: &str) -> AppResult<SocialFriend> {
+        self.full_session().await?;
         self.api(Method::PUT, &["friends", uuid], None).await
     }
     async fn remove_friend(&self, uuid: &str) -> AppResult<()> {
+        self.full_session().await?;
         self.empty(Method::DELETE, &["friends", uuid], None).await
     }
     async fn set_blocked(&self, uuid: &str, blocked: bool) -> AppResult<()> {
+        self.full_session().await?;
         self.empty(
             if blocked { Method::PUT } else { Method::DELETE },
             &["users", uuid, "block"],
@@ -696,9 +1080,11 @@ impl ChatService for ChatClient {
         .await
     }
     async fn privacy(&self) -> AppResult<SocialPrivacy> {
+        self.full_session().await?;
         self.api(Method::GET, &["privacy"], None).await
     }
     async fn set_privacy(&self, privacy: SocialPrivacy) -> AppResult<SocialPrivacy> {
+        self.full_session().await?;
         self.api(Method::PUT, &["privacy"], Some(value(privacy)?))
             .await
     }
@@ -755,28 +1141,130 @@ impl ChatService for ChatClient {
         )
         .await
     }
-    // Filled in by net per docs/plans/chat-1.4.md; the hub endpoints are new.
-    async fn guest_login(&self, _name: &str) -> AppResult<SocialUser> {
-        Err(AppError::not_implemented("ChatService::guest_login"))
+    async fn guest_login(&self, name: &str) -> AppResult<SocialUser> {
+        if !valid_guest_name(name) {
+            return Err(invalid("guestName"));
+        }
+        let _guard = self.lifecycle.lock().await;
+        self.shutdown_current().await;
+        let base = hub_base(self.settings.as_ref()).await?;
+        let cancel = CancelToken::new();
+        let request = self
+            .downloader
+            .client(Route::Auto)
+            .post(endpoint(&base, &["guest"])?)
+            .json(&json!({ "name": name }))
+            .send();
+        let response = tokio::select! {
+            _ = cancel.cancelled() => return Err(cancelled()),
+            r = request => r.map_err(|_| network())?,
+        };
+        let login: GuestLogin = decode(checked(response, &cancel).await?, &cancel).await?;
+        let token = Secret::new(login.token);
+        self.store_guest(&base, &token, &login.user).await;
+        let session = self
+            .start_session(
+                Credential::Guest(token),
+                &format!("guest:{}", login.user.uuid),
+            )
+            .await?;
+        self.spawn_socket(session).await;
+        *self.me.write().await = Some(login.user.clone());
+        Ok(login.user)
     }
-    async fn update_profile(&self, _patch: ProfileUpdate) -> AppResult<SocialUser> {
-        Err(AppError::not_implemented("ChatService::update_profile"))
+    async fn update_profile(&self, patch: ProfileUpdate) -> AppResult<SocialUser> {
+        validate_profile(&patch)?;
+        let s = self.full_session().await?;
+        let response = self
+            .request(&s, Method::PATCH, &["profile"], Some(value(patch)?))
+            .await?;
+        decode(response, &s.cancel).await
     }
-    async fn set_avatar(&self, _path: &str, _sink: &dyn ProgressSink) -> AppResult<SocialUser> {
-        Err(AppError::not_implemented("ChatService::set_avatar"))
+    async fn set_avatar(&self, path: &str, sink: &dyn ProgressSink) -> AppResult<SocialUser> {
+        sink.check_cancelled()?;
+        let s = self.full_session().await?;
+        let mut file = tokio::fs::File::open(path).await?;
+        let size = file.metadata().await?.len();
+        if size == 0 {
+            return Err(invalid("avatarEmpty"));
+        }
+        if size > MAX_AVATAR {
+            return Err(invalid("avatarTooLarge"));
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            let n = tokio::select! { _ = sink.cancel_token().cancelled() => return Err(cancelled()), _ = s.cancel.cancelled() => return Err(cancelled()), n = file.read(&mut buf) => n? };
+            if n == 0 {
+                break;
+            }
+            if bytes.len() + n > MAX_AVATAR as usize {
+                return Err(invalid("avatarTooLarge"));
+            }
+            bytes.extend_from_slice(&buf[..n]);
+            sink.progress(bytes.len() as u64, Some(size), "chat.readFile");
+        }
+        drop(file);
+        if bytes.is_empty() {
+            return Err(invalid("avatarEmpty"));
+        }
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| invalid("fileName"))?
+            .to_owned();
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(name)
+            .mime_str("application/octet-stream")
+            .map_err(|_| invalid("avatar"))?;
+        let token = self.token(&s).await?;
+        sink.check_cancelled()?;
+        sink.progress(0, Some(size), "chat.upload");
+        let request = self
+            .downloader
+            .client(Route::Auto)
+            .put(endpoint(&s.base, &["avatar"])?)
+            .bearer_auth(token.expose())
+            .multipart(reqwest::multipart::Form::new().part("file", part));
+        let response = tokio::select! { _ = sink.cancel_token().cancelled() => return Err(cancelled()), _ = s.cancel.cancelled() => return Err(cancelled()), r = request.send() => r.map_err(|_| network())? };
+        let user: SocialUser = tokio::select! { _ = sink.cancel_token().cancelled() => return Err(cancelled()), r = async { decode(checked(response, &s.cancel).await?, &s.cancel).await } => r? };
+        sink.check_cancelled()?;
+        sink.progress(size, Some(size), "chat.upload");
+        Ok(user)
     }
     async fn clear_avatar(&self) -> AppResult<SocialUser> {
-        Err(AppError::not_implemented("ChatService::clear_avatar"))
+        let s = self.full_session().await?;
+        let response = self.request(&s, Method::DELETE, &["avatar"], None).await?;
+        decode(response, &s.cancel).await
     }
     async fn presence(&self) -> AppResult<PresenceSummary> {
-        Ok(PresenceSummary::default())
+        // Public endpoint: no session or account is required.
+        let base = hub_base(self.settings.as_ref()).await?;
+        let cancel = CancelToken::new();
+        let request = self
+            .downloader
+            .client(Route::Auto)
+            .get(root_endpoint(&base, &["presence"])?)
+            .send();
+        let response = tokio::select! {
+            _ = cancel.cancelled() => return Err(cancelled()),
+            r = request => r.map_err(|_| network())?,
+        };
+        decode(checked(response, &cancel).await?, &cancel).await
     }
     async fn admin_presence(&self) -> AppResult<AdminPresence> {
-        Err(AppError::not_implemented("ChatService::admin_presence"))
+        self.api(Method::GET, &["admin", "presence"], None).await
     }
     async fn audit(&self) -> AppResult<Vec<AuditEntry>> {
-        Err(AppError::not_implemented("ChatService::audit"))
+        self.api(Method::GET, &["admin", "audit"], None).await
     }
+}
+
+/// Response of `POST /chat/guest`; the token stays in memory for this session.
+#[derive(Deserialize)]
+struct GuestLogin {
+    token: String,
+    user: SocialUser,
 }
 
 #[cfg(test)]
