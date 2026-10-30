@@ -12,7 +12,8 @@
 | `VersionService`, `JavaManager`, `InstanceService`, `GameLauncher`, `GameObserver`, `SystemProbe` | `crates/lc-core/src/contract.rs` | src-tauri |
 | `LoaderInstaller`, `InstallCtx`, `LoaderRegistry` | `crates/lc-loaders/src/contract.rs` | core, src-tauri |
 | `ContentSource`, `ContentService`, `PackIo`, `PresetService` | `crates/lc-content/src/contract.rs` | src-tauri |
-| `AuthProvider`, `LaunchAuth`, `AccountService`, `TokenStore`, `SkinService`, `Secret` | `crates/lc-accounts/src/contract.rs` | core, src-tauri |
+| `AuthProvider`, `LaunchAuth`, `AccountService`, `TokenStore`, `SkinService` | `crates/lc-accounts/src/contract.rs` | core, src-tauri |
+| `Secret` | `crates/lc-types/src/secret.rs` | все крейты |
 | `RoomService`, `DatagramTransport`, `RoomObserver` | `crates/lc-p2p/src/contract.rs` | src-tauri, voice |
 | P2P wire protocol (`ALPN`, `ControlMsg`, `StreamOpen`, `VoiceHeader`) | `crates/lc-p2p/src/proto.rs` | net, voice |
 | `VoiceEngine`, `VoiceObserver` | `crates/lc-voice/src/contract.rs` | src-tauri |
