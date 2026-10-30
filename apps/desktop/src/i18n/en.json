@@ -1050,7 +1050,8 @@
     "sharePackConfirm": "Share selected instance",
     "packHostOnline": "The host must keep the launcher and room online during transfer. The pack imports as a new instance.",
     "downloadPack": "Download modpack",
-    "packImported": "Modpack imported"
+    "packImported": "Modpack imported",
+    "unreadBadge": "Unread messages: {{n}}"
   },
   "chat": {
     "upload": "Uploading file",

@@ -18,5 +18,7 @@ export default defineConfig({
   test: {
     // Let tests read styles.css via `?raw` (theme / light-mode rules).
     css: { include: [/styles\.css/] },
+    // Many workers starve React `findBy*` waits on 16 GB machines and flake CI.
+    maxWorkers: 4,
   },
 });

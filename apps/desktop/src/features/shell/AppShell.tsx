@@ -122,7 +122,7 @@ function Sidebar() {
                   {(s === "multiplayer" ? unread : s === "chat" ? socialUnread : 0) > 0 && !active ? (
                     <span className="absolute -top-1.5 left-3 lg:static">
                       <Badge tone="accent">
-                        <span aria-label={t("rooms.chat.unread", { n: s === "chat" ? socialUnread : unread })}>{s === "chat" ? socialUnread : unread}</span>
+                        <span aria-label={t(s === "chat" ? "social.unreadBadge" : "rooms.chat.unread", { n: s === "chat" ? socialUnread : unread })}>{s === "chat" ? socialUnread : unread}</span>
                       </Badge>
                     </span>
                   ) : null}
