@@ -10,6 +10,7 @@ import type {
 import { Button } from "../../components/ui/Button";
 import { useResolvedTheme } from "../../hooks/useAppearance";
 import { userColor } from "../../lib/social";
+import { accentColor, displayNameOf } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { ChatAvatar } from "./ChatAvatar";
@@ -62,10 +63,14 @@ export function MessageGroupView({
           <button
             type="button"
             className="cursor-pointer px-1 pb-0.5 text-xs font-semibold hover:underline"
-            style={{ color: userColor(group.author.uuid, theme) }}
+            style={{
+              color:
+                accentColor(group.author.accent, theme) ??
+                userColor(group.author.uuid, theme),
+            }}
             onClick={() => actions.onOpenProfile(group.author)}
           >
-            {group.author.name}
+            {displayNameOf(group.author)}
           </button>
         ) : null}
         {group.messages.map((message, index) => (

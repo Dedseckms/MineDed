@@ -1,5 +1,7 @@
 import type {
   AdminServerState,
+  AuditEntry,
+  PresenceClient,
   SocialChannel,
   SocialContent,
   SocialFriend,
@@ -12,9 +14,14 @@ import type {
 } from "../bindings";
 import type { NetMockContext } from "./net";
 import { canModerate, privacyOptions } from "../lib/social";
+import { ACCENTS, MAX_BIO, MAX_DISPLAY_NAME } from "../lib/socialProfile";
 
 type Commands = typeof commands;
 const ok = <T>(data: T) => ({ status: "ok" as const, data });
+const invalid = (message: string) => ({
+  status: "error" as const,
+  error: { code: "invalidInput" as const, message, details: null },
+});
 const denied = () => ({
   status: "error" as const,
   error: {
@@ -33,6 +40,9 @@ export const SOCIAL_PEER: SocialUser = {
   isFriend: false,
   canMessage: true,
   canInvite: true,
+  displayName: null,
+  bio: null,
+  accent: null,
 };
 
 /** Stateful social service. `role` is injectable for authorization tests only. */
@@ -72,6 +82,57 @@ export function createSocialMocks(
     canMessage: !blocked.has(SOCIAL_PEER.uuid),
     canInvite: !blocked.has(SOCIAL_PEER.uuid),
   });
+  let audit: AuditEntry[] = [
+    {
+      id: "audit-1",
+      at: new Date(Date.now() - 3_600_000).toISOString(),
+      actor: "Admin",
+      action: "mute",
+      target: SOCIAL_PEER.name,
+      note: "1 h",
+    },
+    {
+      id: "audit-2",
+      at: new Date(Date.now() - 7_200_000).toISOString(),
+      actor: "Admin",
+      action: "role",
+      target: SOCIAL_PEER.name,
+      note: "moderator",
+    },
+    {
+      id: "audit-3",
+      at: new Date(Date.now() - 86_400_000).toISOString(),
+      actor: "Moderator",
+      action: "delete",
+      target: "global",
+      note: null,
+    },
+  ];
+  /** Journal entry for the next admin action; called only after the checks. */
+  const log = (action: string, target: string | null, note: string | null = null) => {
+    if (!self) return;
+    audit = [
+      {
+        id: `audit-${++seq}`,
+        at: new Date().toISOString(),
+        actor: self.name,
+        action,
+        target,
+        note,
+      },
+      ...audit,
+    ];
+  };
+  const targetName = (uuid: string) =>
+    uuid === SOCIAL_PEER.uuid ? SOCIAL_PEER.name : uuid;
+  const clients = (): PresenceClient[] => {
+    const since = new Date(Date.now() - 900_000).toISOString();
+    return [
+      { label: self?.name ?? "anonymous", kind: "yggdrasil", since },
+      { label: "Guest", kind: "guest", since },
+      { label: "anonymous", kind: "anonymous", since },
+    ];
+  };
   const send = (channel: string, content: SocialContent) => {
     if (
       !self ||
@@ -123,6 +184,9 @@ export function createSocialMocks(
         isFriend: false,
         canMessage: true,
         canInvite: true,
+        displayName: null,
+        bio: null,
+        accent: null,
       };
       ctx.bus.emit("socialEvent", { type: "connection", connected: true });
       return ok({ ...self });
@@ -242,29 +306,45 @@ export function createSocialMocks(
       self && canModerate(self.role) ? ok(structuredClone(reports)) : denied(),
     socialResolveReport: async (id) => {
       if (!self || !canModerate(self.role)) return denied();
+      const report = reports.find((r) => r.id === id);
       reports = reports.filter((r) => r.id !== id);
+      log("resolve", report ? report.message.author.name : null);
       return ok(null);
     },
-    socialModerateDelete: async (id) =>
-      self &&
-      canModerate(self.role) &&
-      messages.find((m) => m.id === id)?.channel === "global"
-        ? remove(id)
-        : denied(),
-    socialModerateUser: async (_uuid, action, seconds) =>
-      !self ||
-      !canModerate(self.role) ||
-      (self.role !== "admin" &&
-        (action === "ban" ||
-          action === "unban" ||
-          (action === "mute" && (seconds === null || seconds > 86400))))
-        ? denied()
-        : ok(null),
-    socialSetRole: async () => (self?.role === "admin" ? ok(null) : denied()),
+    socialModerateDelete: async (id) => {
+      const message = messages.find((m) => m.id === id);
+      if (
+        !self ||
+        !canModerate(self.role) ||
+        message?.channel !== "global"
+      )
+        return denied();
+      log("delete", message.author.name);
+      return remove(id);
+    },
+    socialModerateUser: async (uuid, action, seconds) => {
+      if (
+        !self ||
+        !canModerate(self.role) ||
+        (self.role !== "admin" &&
+          (action === "ban" ||
+            action === "unban" ||
+            (action === "mute" && (seconds === null || seconds > 86400))))
+      )
+        return denied();
+      log(action, targetName(uuid), seconds === null ? null : `${seconds} s`);
+      return ok(null);
+    },
+    socialSetRole: async (uuid, role) => {
+      if (self?.role !== "admin") return denied();
+      log("role", targetName(uuid), role);
+      return ok(null);
+    },
     socialServerState: async () =>
       self?.role === "admin" ? ok({ ...server }) : denied(),
-    socialMigrateStorage: async () => {
+    socialMigrateStorage: async (target) => {
       if (self?.role !== "admin") return denied();
+      log("migrate", target, null);
       server.migrationProgress = 0;
       ctx.bus.emit("socialEvent", { type: "admin", state: { ...server } });
       return ok(null);
@@ -310,5 +390,63 @@ export function createSocialMocks(
           )
         : denied(),
     socialAttachmentPreview: async () => denied(),
+    socialGuestLogin: async (name) => {
+      if (name.trim().length < 3) return invalid("mock: short guest name");
+      self = {
+        ...SOCIAL_PEER,
+        uuid: "33333333333333333333333333333333",
+        name: name.trim(),
+        role: "guest",
+        guest: true,
+        isFriend: false,
+        canMessage: false,
+        canInvite: false,
+      };
+      ctx.bus.emit("socialEvent", { type: "connection", connected: true });
+      return ok({ ...self });
+    },
+    socialProfileUpdate: async (patch) => {
+      if (!self || self.role === "guest" || self.guest) return denied();
+      const next: SocialUser = { ...self };
+      if (patch.displayName != null) {
+        const name = patch.displayName.trim();
+        if (name.length > MAX_DISPLAY_NAME)
+          return invalid("mock: display name is too long");
+        next.displayName = name === "" ? null : name;
+      }
+      if (patch.bio != null) {
+        if (patch.bio.length > MAX_BIO) return invalid("mock: bio is too long");
+        next.bio = patch.bio === "" ? null : patch.bio;
+      }
+      if (patch.accent != null) {
+        if (patch.accent !== "" && !ACCENTS.some((a) => a.id === patch.accent))
+          return invalid("mock: unknown accent");
+        next.accent = patch.accent === "" ? null : patch.accent;
+      }
+      self = next;
+      return ok({ ...self });
+    },
+    socialAvatarSet: async (path, ch) => {
+      if (!self || self.role === "guest" || self.guest) return denied();
+      if (!/\.(png|jpe?g|webp)$/i.test(path)) return invalid("mock: not an image");
+      return ok(
+        ctx.runTask(
+          "chatTransfer",
+          "tasks.chatAvatar",
+          ch,
+          [{ stage: "chat.upload", total: 256 * 1024 }],
+          () => null,
+        ),
+      );
+    },
+    socialAvatarClear: async () =>
+      self && self.role !== "guest" ? ok({ ...self }) : denied(),
+    socialPresence: async () => ok({ online: 12 }),
+    socialAdminPresence: async () =>
+      self?.role === "admin"
+        ? ok({ online: clients().length, clients: clients() })
+        : denied(),
+    socialAdminAudit: async () =>
+      self?.role === "admin" ? ok(structuredClone(audit)) : denied(),
   };
 }

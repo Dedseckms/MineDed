@@ -82,7 +82,7 @@ describe("chat access", () => {
     expect(screen.getByText(i18n.t("social.login"))).toBeTruthy();
     expect(screen.queryByLabelText(i18n.t("social.message"))).toBeNull();
   });
-  it("hides administration from regular players", async () => {
+  it("hides administration from regular players and moderators", async () => {
     useSocialStore.getState().set({ self: SOCIAL_PEER, connected: true });
     mount();
     expect(
@@ -91,19 +91,29 @@ describe("chat access", () => {
     expect(
       screen.getByRole("button", { name: i18n.t("social.tabs.privacy") }),
     ).toBeTruthy();
-  });
-  it("shows moderation for moderators", async () => {
+    cleanup();
     useSocialStore
       .getState()
       .set({ self: { ...SOCIAL_PEER, role: "moderator" }, connected: true });
+    mount();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.tabs.admin") }),
+    ).toBeNull();
+  });
+  it("opens the admin panel for administrators", async () => {
+    useSocialStore
+      .getState()
+      .set({ self: { ...SOCIAL_PEER, role: "admin" }, connected: true });
     mount();
     fireEvent.click(
       screen.getByRole("button", { name: i18n.t("social.tabs.admin") }),
     );
     await waitFor(() =>
-      expect(screen.getByText(i18n.t("social.reports"))).toBeTruthy(),
+      expect(screen.getByText(i18n.t("social.admin.title"))).toBeTruthy(),
     );
-    expect(screen.queryByText(i18n.t("social.server"))).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: i18n.t("social.admin.tabs.journal") }),
+    ).toBeTruthy();
   });
 });
 

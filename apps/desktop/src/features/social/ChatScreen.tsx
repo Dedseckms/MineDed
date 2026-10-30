@@ -25,14 +25,15 @@ import { Modal } from "../../components/ui/Modal";
 import { VirtualList } from "../../components/ui/VirtualList";
 import { Badge, ErrorMessage } from "../../components/ui/feedback";
 import { Select } from "../../components/ui/form";
-import { useMediaQuery, useMotionPrefs } from "../../hooks/useAppearance";
+import { useMediaQuery } from "../../hooks/useAppearance";
 import { applySocialEvent } from "../../hooks/useSocialSync";
-import { canContact, canModerate, privacyOptions } from "../../lib/social";
+import { canModerate, isAdmin, privacyOptions } from "../../lib/social";
+import { canEditProfile } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
 import { useSocialStore } from "../../stores/socialStore";
 import { useTaskStore } from "../../stores/taskStore";
-import { Skin3D, SkinFlat } from "../skins/SkinPreview";
 import { TaskProgress } from "../tasks/TaskProgress";
+import { AdminPanel } from "./admin/AdminPanel";
 import { ChatAvatar } from "./ChatAvatar";
 import {
   type ChatMessageActions,
@@ -44,7 +45,8 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./ChatTimeline";
 import { type TimelineRow, buildTimeline, chronological } from "./chat";
 import { SharePack } from "./PackShare";
-import { SocialAdmin } from "./SocialAdmin";
+import { ProfileCard } from "./ProfileCard";
+import { ProfileEditor } from "./ProfileEditor";
 
 const privacyFields: (keyof SocialPrivacy)[] = [
   "whoCanMessage",
@@ -72,6 +74,7 @@ export function ChatScreen() {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [profile, setProfile] = useState<SocialUser | null>(null);
+  const [editor, setEditor] = useState(false);
   const [tab, setTab] = useState("chat");
   const [pane, setPane] = useState<"list" | "chat">("list");
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -91,6 +94,7 @@ export function ChatScreen() {
   }, [search]);
   useEffect(() => {
     setProfile(null);
+    setEditor(false);
     setQuery("");
     setSearch("");
     setText("");
@@ -265,12 +269,22 @@ export function ChatScreen() {
         <Badge tone={session.connected ? "accent" : "warning"}>
           {t(session.connected ? "social.connected" : "social.reconnecting")}
         </Badge>
+        {canEditProfile(self) ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Icon name="user" />}
+            onClick={() => setEditor(true)}
+          >
+            {t("social.profile.self")}
+          </Button>
+        ) : null}
         <div className="flex gap-1">
           {[
             "chat",
             "friends",
             "privacy",
-            ...(canModerate(self.role) ? ["admin"] : []),
+            ...(isAdmin(self.role) ? ["admin"] : []),
           ].map((name) => (
             <Button
               key={name}
@@ -350,8 +364,8 @@ export function ChatScreen() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      aria-label={t("social.profile")}
-                      title={t("social.profile")}
+                      aria-label={t("social.profile.title")}
+                      title={t("social.profile.title")}
                       onClick={() => {
                         if (peer) openProfile(peer);
                       }}
@@ -520,20 +534,28 @@ export function ChatScreen() {
           </div>
         </div>
       ) : null}
-      {tab === "admin" && canModerate(self.role) ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <SocialAdmin self={self} />
+      {tab === "admin" && isAdmin(self.role) ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <AdminPanel self={self} />
         </div>
       ) : null}
       {profile ? (
         <Profile
           user={profile}
+          self={self}
           close={() => setProfile(null)}
           direct={direct}
           run={run}
           invite={() => invite(profile)}
           canInvite={!!room.data && profile.canInvite}
+          edit={() => {
+            setProfile(null);
+            setEditor(true);
+          }}
         />
+      ) : null}
+      {editor ? (
+        <ProfileEditor self={self} onClose={() => setEditor(false)} />
       ) : null}
     </div>
   );
@@ -541,18 +563,22 @@ export function ChatScreen() {
 
 function Profile({
   user: initialUser,
+  self,
   close,
   direct,
   run,
   invite,
   canInvite,
+  edit,
 }: {
   user: SocialUser;
+  self: SocialUser;
   close: () => void;
   direct: (user: SocialUser) => void;
   run: (fn: () => Promise<unknown>) => void;
   invite: () => void;
   canInvite: boolean;
+  edit: () => void;
 }) {
   const { t } = useTranslation();
   const refreshed = useQuery({
@@ -562,69 +588,29 @@ function Profile({
   const user = refreshed.data ?? initialUser;
   const locallyBlocked = useSocialStore((s) => s.blocked.includes(user.uuid));
   const blocked = user.isBlocked === true || locallyBlocked;
-  const { light, reduced } = useMotionPrefs();
   return (
-    <Modal open onClose={close} title={t("social.profile")}>
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold">{user.name}</h3>
-          <Button size="sm" variant="ghost" onClick={close}>
-            {t("common.close")}
-          </Button>
-        </div>
-        {user.skinUrl ? (
-          light ? (
-            <SkinFlat url={user.skinUrl} model="classic" className="h-32" />
-          ) : (
-            <Skin3D
-              url={user.skinUrl}
-              model="classic"
-              capeUrl={null}
-              animate={!reduced}
-              className="h-48"
-            />
-          )
-        ) : null}
-        <p>{t(`social.status.${user.status ?? "hidden"}`)}</p>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            disabled={!canContact(user, blocked)}
-            onClick={() => direct(user)}
-          >
-            {t("social.write")}
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={!canInvite || blocked}
-            onClick={invite}
-          >
-            {t("social.invite")}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() =>
-              run(async () => {
-                if (user.isFriend)
-                  unwrap(await api.socialRemoveFriend(user.uuid));
-                else unwrap(await api.socialAddFriend(user.uuid));
-              })
-            }
-          >
-            {t(user.isFriend ? "social.removeFriend" : "social.addFriend")}
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() =>
-              run(async () => {
-                unwrap(await api.socialSetBlocked(user.uuid, !blocked));
-                useSocialStore.getState().block(user.uuid, !blocked);
-              })
-            }
-          >
-            {t(blocked ? "social.unblock" : "social.block")}
-          </Button>
-        </div>
-      </div>
+    <Modal open onClose={close} title={t("social.profile.title")}>
+      <ProfileCard
+        user={user}
+        self={self}
+        blocked={blocked}
+        canInvite={canInvite}
+        onEdit={edit}
+        onWrite={() => direct(user)}
+        onInvite={invite}
+        onToggleFriend={() =>
+          run(async () => {
+            if (user.isFriend) unwrap(await api.socialRemoveFriend(user.uuid));
+            else unwrap(await api.socialAddFriend(user.uuid));
+          })
+        }
+        onToggleBlock={() =>
+          run(async () => {
+            unwrap(await api.socialSetBlocked(user.uuid, !blocked));
+            useSocialStore.getState().block(user.uuid, !blocked);
+          })
+        }
+      />
     </Modal>
   );
 }
