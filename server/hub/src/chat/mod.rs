@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, OwnedSemaphorePermit, Semaphore};
 
 /// Durable state. Open once during startup; an unavailable database fails startup.
@@ -39,6 +39,8 @@ pub struct Chat {
     directory: drasl::Directory,
     root: PathBuf,
     migration: Mutex<Option<f32>>,
+    /// Last full refresh of the public player directory.
+    users_synced: Mutex<Option<Instant>>,
     disk_warning: std::sync::atomic::AtomicU64,
     last_health: Mutex<Option<AdminServerState>>,
 }
@@ -71,9 +73,24 @@ impl Chat {
             directory: drasl::Directory::from_env(),
             root,
             migration: Mutex::new(None),
+            users_synced: Mutex::new(None),
             disk_warning: std::sync::atomic::AtomicU64::new(0),
             last_health: Mutex::new(None),
         })
+    }
+    /// True at most once a minute: a full catalogue upsert on every request
+    /// would queue the store behind thousands of writes on a small host.
+    fn directory_sync_due(&self) -> bool {
+        const TTL: Duration = Duration::from_secs(60);
+        let mut last = match self.users_synced.lock() {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if last.is_some_and(|at| at.elapsed() < TTL) {
+            return false;
+        }
+        *last = Some(Instant::now());
+        true
     }
     async fn run<T: Send + 'static>(
         self: &Arc<Self>,
@@ -257,7 +274,7 @@ async fn dispatch(
     } else {
         serde_json::from_slice(&bytes).map_err(|_| invalid("invalid JSON body"))?
     };
-    if method == "GET" && path == "users" {
+    if method == "GET" && path == "users" && chat.directory_sync_due() {
         let players = chat.directory.players().await;
         chat.run(move|db,_|{for player in players {db.db.execute("INSERT INTO users(uuid,name,skin,privacy) VALUES(?1,?2,?3,?4) ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,skin=excluded.skin",rusqlite::params![player.uuid,player.name,player.skin,serde_json::to_string(&json!({"whoCanMessage":"everyone","whoCanInvite":"everyone","whoSeesStatus":"everyone","whoCanAddFriend":"everyone"}))?])?;}Ok(())}).await?;
     }

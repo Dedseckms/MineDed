@@ -49,7 +49,7 @@ impl Directory {
         Self {
             url: std::env::var("HUB_DRASL_ADMIN_URL")
                 .ok()
-                .filter(|s| s.starts_with("http://"))
+                .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
                 .map(|s| s.trim_end_matches('/').into()),
             token: std::env::var("HUB_DRASL_ADMIN_TOKEN")
                 .ok()
