@@ -454,11 +454,16 @@ impl TokenValidator for Fake {
     }
 }
 struct Fake;
-fn app() -> (Router, Temp) {
+fn app_with_chat() -> (Router, Arc<Chat>, Temp) {
     let temp = Temp::new();
     let state = AppState::new(crate::Config::default(), Arc::new(Fake))
         .with_chat(Chat::open(&temp.0).unwrap());
-    (crate::router(state), temp)
+    let chat = state.chat.clone().unwrap();
+    (crate::router(state), chat, temp)
+}
+fn app() -> (Router, Temp) {
+    let (app, _, temp) = app_with_chat();
+    (app, temp)
 }
 async fn request(
     app: &Router,
@@ -467,22 +472,30 @@ async fn request(
     token: bool,
     body: Value,
 ) -> (StatusCode, Value) {
-    let mut req = Request::builder()
-        .method(method)
-        .uri(format!("/api/v1/chat/{path}"));
-    if token {
-        req = req.header("authorization", "Bearer good");
-    }
-    let response = app
-        .clone()
-        .oneshot(
-            req.body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    request_abs(
+        app,
+        method,
+        &format!("/api/v1/chat/{path}"),
+        token.then_some("Bearer good"),
+        body,
+    )
+    .await
+}
+async fn request_abs(
+    app: &Router,
+    method: &str,
+    path: &str,
+    authorization: Option<&str>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let (status, bytes) = request_bytes(
+        app,
+        method,
+        path,
+        authorization,
+        Body::from(serde_json::to_vec(&body).unwrap()),
+    )
+    .await;
     (
         status,
         if bytes.is_empty() {
@@ -491,6 +504,22 @@ async fn request(
             serde_json::from_slice(&bytes).unwrap()
         },
     )
+}
+async fn request_bytes(
+    app: &Router,
+    method: &str,
+    path: &str,
+    authorization: Option<&str>,
+    body: Body,
+) -> (StatusCode, Vec<u8>) {
+    let mut req = Request::builder().method(method).uri(path);
+    if let Some(value) = authorization {
+        req = req.header("authorization", value);
+    }
+    let response = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, bytes.to_vec())
 }
 #[tokio::test]
 async fn auth_errors_use_app_error_on_every_surface() {
@@ -911,4 +940,636 @@ async fn reqwest_handshake_upgrades_like_the_launcher_client() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::SWITCHING_PROTOCOLS);
     server.abort();
+}
+
+fn reason(error: &ApiError) -> String {
+    error
+        .details
+        .as_ref()
+        .and_then(|d| d.get("reason"))
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn guest_token_is_hashed_and_authenticates_read_only() {
+    let (app, chat, temp) = app_with_chat();
+    let (status, issued) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/chat/guest",
+        None,
+        json!({"name":"Nick_1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = issued["token"].as_str().unwrap().to_owned();
+    assert!(token.len() >= 64, "32+ random bytes");
+    assert_eq!(issued["user"]["role"], "guest");
+    assert_eq!(issued["user"]["guest"], true);
+    assert_eq!(issued["user"]["name"], "Nick_1");
+    assert!(issued["expiresAt"].as_str().unwrap().ends_with('Z'));
+    // The plaintext token is returned once and never stored.
+    let hashed: Vec<Vec<u8>> = {
+        let guard = chat.store.lock().unwrap();
+        let mut stmt = guard.db.prepare("SELECT token FROM guest_tokens").unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(hashed.len(), 1);
+    assert_eq!(hashed[0].len(), 32);
+    assert_ne!(hashed[0], token.as_bytes());
+    let (status, me) = request_abs(
+        &app,
+        "GET",
+        "/api/v1/chat/me",
+        Some(&format!("Bearer {token}")),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["uuid"], issued["user"]["uuid"]);
+    assert_eq!(me["role"], "guest");
+    let (status, error) = request_abs(
+        &app,
+        "GET",
+        "/api/v1/chat/me",
+        Some("Bearer not-a-token"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(error["code"], "authExpired");
+    // Re-login with the same nick keeps the profile, a new token works too.
+    let (status, again) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/chat/guest",
+        None,
+        json!({"name":"nick_1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["user"]["uuid"], issued["user"]["uuid"]);
+    assert_ne!(again["token"], issued["token"]);
+    drop(temp);
+}
+
+#[tokio::test]
+async fn guest_login_validates_the_nickname() {
+    let (app, _chat, _temp) = app_with_chat();
+    let (status, _) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/chat/guest",
+        None,
+        json!({"name":"Nick_1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Per-IP limits are shared, so the invalid names get their own app.
+    let (app, _chat, _temp) = app_with_chat();
+    for name in ["", "ab", "has space", "semi;colon", &"x".repeat(17)] {
+        let (status, error) = request_abs(
+            &app,
+            "POST",
+            "/api/v1/chat/guest",
+            None,
+            json!({"name":name}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
+        assert_eq!(error["code"], "invalidInput");
+    }
+}
+
+#[test]
+fn guest_reads_global_but_cannot_write_anywhere() {
+    let (chat, _temp) = chat();
+    let mut db = chat.store.lock().unwrap();
+    seed(&db);
+    let guest = db.guest_login("GuestNick", &chat).unwrap().user.uuid;
+    let a = identity(1).user_id;
+    let message = db.send(&a, "global", text("hello all"), &chat).unwrap();
+    // Reading the global chat works, both history and the channel list.
+    let history = db.history(&guest, "global", None, 50, &chat).unwrap();
+    assert_eq!(history.messages.len(), 1);
+    let channels = db
+        .handle(
+            &guest,
+            "GET",
+            &["channels"],
+            &Value::Null,
+            Value::Null,
+            &chat,
+        )
+        .unwrap();
+    assert_eq!(
+        channels
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("global")]
+    );
+    // Writing to the global chat is refused with the documented reason.
+    let a_id = a.as_str();
+    let message_id = message.id.as_str();
+    for (method, path, body) in [
+        (
+            "POST",
+            vec!["channels", "global", "messages"],
+            json!({"type":"text","text":"hi"}),
+        ),
+        ("POST", vec!["users", a_id, "direct"], Value::Null),
+        ("GET", vec!["friends"], Value::Null),
+        ("PUT", vec!["friends", a_id], Value::Null),
+        ("GET", vec!["privacy"], Value::Null),
+        ("PUT", vec!["privacy"], json!({"whoCanMessage":"nobody"})),
+        ("PATCH", vec!["profile"], json!({"displayName":"Guest"})),
+        ("POST", vec!["messages", message_id, "report"], Value::Null),
+    ] {
+        let error = db
+            .handle(&guest, method, &path, &Value::Null, body, &chat)
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::FORBIDDEN, "{method} {path:?}");
+        assert_eq!(error.code, "permissionDenied");
+        assert_eq!(reason(&error), "guestReadOnly", "{method} {path:?}");
+    }
+    // Direct audience sees the guest as unverified and cannot message it.
+    let view = db.user(&a, &guest, &chat).unwrap();
+    assert!(view.guest);
+    assert_eq!(view.role, SocialRole::Guest);
+    assert!(!view.can_message && !view.can_invite);
+    // A chat ban revokes the guest token.
+    db.db
+        .execute("INSERT INTO moderation(user,ban) VALUES(?1,1)", [&guest])
+        .unwrap();
+    assert_eq!(db.role(&guest).unwrap(), SocialRole::Guest);
+}
+
+#[tokio::test]
+async fn guest_avatar_and_ban_revocation() {
+    let (chat, _temp) = chat();
+    let issued = chat.guest_login("GuestNick").await.unwrap();
+    let guest = issued.user.uuid.clone();
+    let error = chat.clear_avatar(guest.clone()).await.unwrap_err();
+    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    assert_eq!(reason(&error), "guestReadOnly");
+    let error = chat
+        .set_avatar(guest.clone(), b"not an image".to_vec())
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::FORBIDDEN);
+    assert!(chat.guest_identity(&issued.token).await.unwrap().is_some());
+    chat.store
+        .lock()
+        .unwrap()
+        .db
+        .execute("INSERT INTO moderation(user,ban) VALUES(?1,1)", [&guest])
+        .unwrap();
+    let error = chat.guest_identity(&issued.token).await.unwrap_err();
+    assert_eq!(error.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn presence_counts_unique_clients_and_expires() {
+    let (chat, _temp) = chat();
+    let a = uuid::Uuid::new_v4().simple().to_string();
+    let b = uuid::Uuid::new_v4().simple().to_string();
+    let c = uuid::Uuid::new_v4().simple().to_string();
+    assert_eq!(chat.online().online, 0);
+    chat.beat(&a, "yggdrasil").unwrap();
+    assert_eq!(chat.online().online, 1);
+    // A repeated beat extends the entry instead of adding one.
+    chat.beat(&a, "offline").unwrap();
+    assert_eq!(chat.online().online, 1);
+    chat.beat(&b, "anonymous").unwrap();
+    assert_eq!(chat.online().online, 2);
+    assert_eq!(
+        chat.beat(&b, "bogus").unwrap_err().status,
+        StatusCode::BAD_REQUEST
+    );
+    // Two missed heartbeats drop a client.
+    let future = Instant::now() + presence::PRESENCE_TTL + Duration::from_secs(1);
+    chat.beat_at(&c, presence::Kind::Anonymous, future).unwrap();
+    assert_eq!(chat.online_at(future).online, 1);
+    assert_eq!(chat.online().online, 2 + 1);
+}
+
+#[tokio::test]
+async fn presence_endpoints_are_public_and_count_once() {
+    let (app, _chat, _temp) = app_with_chat();
+    let client = uuid::Uuid::new_v4().to_string();
+    for _ in 0..2 {
+        let (status, body) = request_abs(
+            &app,
+            "POST",
+            "/api/v1/presence/beat",
+            None,
+            json!({"clientId":client,"kind":"yggdrasil"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(body, Value::Null);
+    }
+    let (status, summary) = request_abs(&app, "GET", "/api/v1/presence", None, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(summary, json!({"online":1}));
+    let (status, _) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/presence/beat",
+        None,
+        json!({"clientId":uuid::Uuid::new_v4().to_string(),"kind":"anonymous"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, summary) = request_abs(&app, "GET", "/api/v1/presence", None, Value::Null).await;
+    assert_eq!(summary["online"], 2);
+    for body in [json!({"clientId":"not-a-uuid"}), json!({})] {
+        let (status, error) = request_abs(&app, "POST", "/api/v1/presence/beat", None, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["code"], "invalidInput");
+    }
+}
+
+#[test]
+fn profile_patch_validates_fields_and_is_visible_to_others() {
+    let (chat, _temp) = chat();
+    let mut db = chat.store.lock().unwrap();
+    seed(&db);
+    let a = identity(1).user_id;
+    let b = identity(2).user_id;
+    for body in [
+        json!({"displayName":"x".repeat(25)}),
+        json!({"bio":"x".repeat(121)}),
+        json!({"accent":"rainbow"}),
+        json!({"bio":"line\nbreak"}),
+    ] {
+        let error = db
+            .handle(&a, "PATCH", &["profile"], &Value::Null, body.clone(), &chat)
+            .unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST, "{body}");
+    }
+    let user = db
+        .handle(
+            &a,
+            "PATCH",
+            &["profile"],
+            &Value::Null,
+            json!({"displayName":"  Ded  ","bio":"hello","accent":"teal"}),
+            &chat,
+        )
+        .unwrap();
+    assert_eq!(user["displayName"], "Ded");
+    assert_eq!(user["bio"], "hello");
+    assert_eq!(user["accent"], "teal");
+    // Everyone sees the profile in `SocialUser`.
+    let seen = db
+        .handle(
+            &b,
+            "GET",
+            &["profile", a.as_str()],
+            &Value::Null,
+            Value::Null,
+            &chat,
+        )
+        .unwrap();
+    assert_eq!(seen["displayName"], "Ded");
+    assert_eq!(seen["accent"], "teal");
+    assert_eq!(
+        db.user(&b, &a, &chat).unwrap().bio.as_deref(),
+        Some("hello")
+    );
+    // An empty string clears a field; untouched fields stay.
+    let user = db
+        .handle(
+            &a,
+            "PATCH",
+            &["profile"],
+            &Value::Null,
+            json!({"displayName":"","accent":""}),
+            &chat,
+        )
+        .unwrap();
+    assert!(user["displayName"].is_null());
+    assert!(user["accent"].is_null());
+    assert_eq!(user["bio"], "hello");
+    assert_eq!(
+        db.handle(
+            &b,
+            "GET",
+            &["profile", "not-a-uuid"],
+            &Value::Null,
+            Value::Null,
+            &chat
+        )
+        .unwrap_err()
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn admin_audit_records_roles_moderation_and_deletions() {
+    let (chat, _temp) = chat();
+    let mut db = chat.store.lock().unwrap();
+    seed(&db);
+    let admin = identity(1).user_id;
+    let target = identity(2).user_id;
+    db.db
+        .execute("UPDATE users SET admin=1 WHERE uuid=?1", [&admin])
+        .unwrap();
+    assert_eq!(
+        db.handle(
+            &admin,
+            "GET",
+            &["admin", "audit"],
+            &Value::Null,
+            Value::Null,
+            &chat
+        )
+        .unwrap(),
+        json!([])
+    );
+    assert_eq!(
+        db.handle(
+            &target,
+            "GET",
+            &["admin", "audit"],
+            &Value::Null,
+            Value::Null,
+            &chat
+        )
+        .unwrap_err()
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    db.handle(
+        &admin,
+        "PUT",
+        &["admin", "roles", &target],
+        &Value::Null,
+        json!({"role":"moderator"}),
+        &chat,
+    )
+    .unwrap();
+    db.handle(
+        &admin,
+        "POST",
+        &["mod", "users", &target],
+        &Value::Null,
+        json!({"action":"mute","seconds":600}),
+        &chat,
+    )
+    .unwrap();
+    db.handle(
+        &admin,
+        "POST",
+        &["mod", "users", &target],
+        &Value::Null,
+        json!({"action":"ban"}),
+        &chat,
+    )
+    .unwrap();
+    let spam = db
+        .send(&admin, "global", text("look at my link"), &chat)
+        .unwrap();
+    db.handle(
+        &target,
+        "DELETE",
+        &["messages", &spam.id],
+        &Value::Null,
+        Value::Null,
+        &chat,
+    )
+    .unwrap();
+    let audit = db
+        .handle(
+            &admin,
+            "GET",
+            &["admin", "audit"],
+            &Value::Null,
+            Value::Null,
+            &chat,
+        )
+        .unwrap();
+    let entries: Vec<AuditEntry> = serde_json::from_value(audit).unwrap();
+    let actions: Vec<&str> = entries.iter().map(|e| e.action.as_str()).collect();
+    assert_eq!(
+        actions,
+        vec!["delete", "ban", "mute", "role"],
+        "newest first"
+    );
+    assert!(entries
+        .iter()
+        .all(|e| e.actor == "Player1" || e.actor == "Player2"));
+    assert_eq!(entries[0].actor, "Player2", "the moderator deleted");
+    assert_eq!(entries[3].actor, "Player1", "the admin changed the role");
+    assert_eq!(entries[3].target.as_deref(), Some(target.as_str()));
+    assert_eq!(entries[3].note.as_deref(), Some("moderator"));
+    assert_eq!(entries[2].note.as_deref(), Some("600"));
+    assert_eq!(entries[0].target.as_deref(), Some(spam.id.as_str()));
+    assert!(entries.iter().all(|e| e.at.ends_with('Z')));
+}
+
+#[tokio::test]
+async fn avatar_is_reencoded_resized_and_size_bounded() {
+    let noisy = |side: u32| {
+        let mut buffer = Vec::with_capacity((side * side * 3) as usize);
+        for i in 0..side * side {
+            buffer.push((i.wrapping_mul(2_654_435_761) >> 13) as u8);
+            buffer.push((i.wrapping_mul(40_503) >> 7) as u8);
+            buffer.push((i.wrapping_mul(22_695_477) >> 11) as u8);
+        }
+        let image = image::RgbImage::from_raw(side, side, buffer).unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        png.into_inner()
+    };
+    let png = noisy(240);
+    assert!(png.len() > 16 * 1024, "the route limit must be raised");
+    let webp = files::avatar(&png).unwrap();
+    let decoded = image::load_from_memory(&webp).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (256, 256));
+    assert!(webp.len() <= MAX_AVATAR);
+    assert!(files::avatar(b"not an image").is_err());
+
+    let (app, chat, _temp) = app_with_chat();
+    let (status, bytes) = request_bytes(
+        &app,
+        "PUT",
+        "/api/v1/chat/avatar",
+        Some("Bearer good"),
+        Body::from(png.clone()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let user: SocialUser = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(user.uuid, identity(1).user_id);
+    let stored: Option<String> = chat
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .query_row(
+            "SELECT avatar FROM users WHERE uuid=?1",
+            [&user.uuid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(stored.is_some());
+    // Too large: refused before any decoding.
+    let (status, error) = request_bytes(
+        &app,
+        "PUT",
+        "/api/v1/chat/avatar",
+        Some("Bearer good"),
+        Body::from(vec![0u8; MAX_AVATAR + 1]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&error).unwrap()["code"],
+        "invalidInput"
+    );
+    // Clearing removes the blob pointer.
+    let (status, bytes) = request_bytes(
+        &app,
+        "DELETE",
+        "/api/v1/chat/avatar",
+        Some("Bearer good"),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cleared: SocialUser = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(cleared.uuid, user.uuid);
+    let stored: Option<String> = chat
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .query_row(
+            "SELECT avatar FROM users WHERE uuid=?1",
+            [&user.uuid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(stored.is_none());
+    // Unauthenticated uploads are rejected before any image work.
+    let (status, _) =
+        request_bytes(&app, "PUT", "/api/v1/chat/avatar", None, Body::from(png)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn avatar_download_serves_the_stored_webp_to_other_players() {
+    let (app, chat, _temp) = app_with_chat();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(64, 64)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let owner = identity(1).user_id;
+    let (status, _) = request_bytes(
+        &app,
+        "PUT",
+        "/api/v1/chat/avatar",
+        Some("Bearer good"),
+        Body::from(png.into_inner()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // No avatar yet: 404 instead of an empty body.
+    let (status, error) = request_abs(
+        &app,
+        "GET",
+        &format!("/api/v1/chat/avatar/{}", identity(2).user_id),
+        Some("Bearer other"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["code"], "notFound");
+    // Another authenticated player reads the same bytes.
+    let (status, bytes) = request_bytes(
+        &app,
+        "GET",
+        &format!("/api/v1/chat/avatar/{owner}"),
+        Some("Bearer other"),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(bytes.starts_with(b"RIFF"), "WebP container");
+    let stored: String = chat
+        .store
+        .lock()
+        .unwrap()
+        .db
+        .query_row("SELECT avatar FROM users WHERE uuid=?1", [&owner], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let path = chat.store.lock().unwrap().files.join(stored);
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    // Unauthenticated requests never leak bytes.
+    let (status, _) = request_bytes(
+        &app,
+        "GET",
+        &format!("/api/v1/chat/avatar/{owner}"),
+        None,
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_presence_lists_beats_and_named_sockets() {
+    let (app, chat, _temp) = app_with_chat();
+    let (status, _) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/presence/beat",
+        None,
+        json!({"clientId":uuid::Uuid::new_v4().to_string(),"kind":"offline"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    {
+        let db = chat.store.lock().unwrap();
+        db.identify(&identity(1), true, None).unwrap();
+    }
+    let (status, error) = request_abs(
+        &app,
+        "GET",
+        "/api/v1/chat/admin/presence",
+        Some("Bearer good"),
+        Value::Null,
+    )
+    .await;
+    // `good` is not an admin for the hub: the Drasl directory is not configured.
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["code"], "permissionDenied");
+    let listing = {
+        let db = chat.store.lock().unwrap();
+        presence::admin_presence(&chat, &db).unwrap()
+    };
+    assert_eq!(listing.online, 1);
+    assert_eq!(listing.clients.len(), 1);
+    assert_eq!(listing.clients[0].label, "anonymous");
+    assert_eq!(listing.clients[0].kind, "guest");
+    assert!(listing.clients[0].since.ends_with('Z'));
 }

@@ -152,7 +152,7 @@ impl Store {
         if dest.starts_with(&source) || source.starts_with(&dest) {
             return Err(conflict("destination must be separate from source"));
         }
-        let mut stmt=self.db.prepare("SELECT hash FROM attachments UNION SELECT thumb FROM attachments WHERE thumb IS NOT NULL")?;
+        let mut stmt=self.db.prepare("SELECT hash FROM attachments UNION SELECT thumb FROM attachments WHERE thumb IS NOT NULL UNION SELECT avatar FROM users WHERE avatar IS NOT NULL")?;
         let hashes = stmt
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;

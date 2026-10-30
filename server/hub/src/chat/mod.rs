@@ -1,35 +1,48 @@
 //! Authenticated social chat API, backed by SQLite WAL and content-addressed files.
 mod admin;
+mod audit;
 mod drasl;
 mod files;
 mod filter;
+mod guest;
+mod presence;
 mod store;
 #[cfg(test)]
 mod tests;
 
+use crate::auth::Identity;
 use crate::{error::ApiError, ratelimit::RateLimiter, AppState, ClientIp};
 use axum::body::to_bytes;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{DefaultBodyLimit, Extension, Request, State, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::extract::{
+    DefaultBodyLimit, Extension, FromRequest, Multipart, Request, State, WebSocketUpgrade,
+};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use lc_types::social::*;
+use rusqlite::OptionalExtension;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{broadcast, OwnedSemaphorePermit, Semaphore};
+
+/// Largest accepted avatar upload; the hub stores a 256×256 WebP after re-encoding.
+pub(super) const MAX_AVATAR: usize = 256 * 1024;
 
 /// Durable state. Open once during startup; an unavailable database fails startup.
 pub struct Chat {
     store: Mutex<store::Store>,
     events: broadcast::Sender<Notice>,
-    presence: Mutex<HashMap<String, (usize, SocialStatus)>>,
+    presence: Mutex<HashMap<String, Session>>,
+    /// Launcher heartbeats (`POST /presence/beat`), keyed by client id.
+    beats: Mutex<HashMap<String, presence::Beat>>,
     requests: RateLimiter<IpAddr>,
     users: RateLimiter<String>,
     uploads: RateLimiter<String>,
@@ -43,6 +56,12 @@ pub struct Chat {
     users_synced: Mutex<Option<Instant>>,
     disk_warning: std::sync::atomic::AtomicU64,
     last_health: Mutex<Option<AdminServerState>>,
+}
+/// Chat sockets of one profile; several launchers share a profile.
+struct Session {
+    sockets: usize,
+    status: SocialStatus,
+    since: SystemTime,
 }
 #[derive(Clone)]
 enum Notice {
@@ -64,6 +83,7 @@ impl Chat {
             store: Mutex::new(store),
             events,
             presence: Mutex::new(HashMap::new()),
+            beats: Mutex::new(HashMap::new()),
             requests: RateLimiter::per_minute(180, 60),
             users: RateLimiter::per_minute(120, 40),
             uploads: RateLimiter::per_minute(6, 2),
@@ -146,12 +166,13 @@ impl Chat {
         self.requests.sweep();
         self.users.sweep();
         self.uploads.sweep();
+        self.sweep_beats();
     }
     fn disconnect_presence(&self, me: &str) {
         if let Ok(mut presence) = self.presence.lock() {
             if let Some(entry) = presence.get_mut(me) {
-                entry.0 = entry.0.saturating_sub(1);
-                if entry.0 == 0 {
+                entry.sockets = entry.sockets.saturating_sub(1);
+                if entry.sockets == 0 {
                     presence.remove(me);
                 }
             }
@@ -174,6 +195,63 @@ impl Chat {
             }
         }
     }
+
+    /// Re-encodes and stores the caller's avatar, then returns the fresh profile.
+    pub(super) async fn set_avatar(
+        self: &Arc<Self>,
+        me: String,
+        bytes: Vec<u8>,
+    ) -> Result<SocialUser, ApiError> {
+        self.run(move |db, chat| {
+            if db.is_guest(&me)? {
+                return Err(guest_read_only());
+            }
+            let encoded = files::avatar(&bytes)?;
+            let hash = files::persist(&db.files, &encoded)?;
+            db.db.execute(
+                "UPDATE users SET avatar=?1 WHERE uuid=?2",
+                rusqlite::params![hash, me],
+            )?;
+            db.user(&me, &me, chat)
+        })
+        .await
+    }
+
+    /// Removes the caller's avatar; the profile falls back to its initials.
+    pub(super) async fn clear_avatar(self: &Arc<Self>, me: String) -> Result<SocialUser, ApiError> {
+        self.run(move |db, chat| {
+            if db.is_guest(&me)? {
+                return Err(guest_read_only());
+            }
+            db.db.execute(
+                "UPDATE users SET avatar=NULL WHERE uuid=?1",
+                rusqlite::params![me],
+            )?;
+            db.user(&me, &me, chat)
+        })
+        .await
+    }
+
+    /// Bytes of another profile's avatar; authenticated like the rest of `/chat`.
+    pub(super) async fn avatar(self: &Arc<Self>, id: String) -> Result<Vec<u8>, ApiError> {
+        self.run(move |db, _| {
+            let id = store::uuid(&id)?;
+            let hash: Option<String> = db
+                .db
+                .query_row("SELECT avatar FROM users WHERE uuid=?1", [&id], |r| {
+                    r.get::<_, Option<String>>(0)
+                })
+                .optional()?
+                .flatten();
+            let hash = hash.ok_or_else(|| ApiError::not_found("no avatar"))?;
+            let path = db.files.join(&hash);
+            if std::fs::metadata(&path)?.len() > MAX_AVATAR as u64 {
+                return Err(internal());
+            }
+            Ok(std::fs::read(path)?)
+        })
+        .await
+    }
 }
 fn internal() -> ApiError {
     ApiError::new(
@@ -191,6 +269,58 @@ fn denied() -> ApiError {
         "permissionDenied",
         "chat permission denied",
     )
+}
+/// Guests are unverified offline nicks: reading the global chat is all they get.
+fn guest_read_only() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "permissionDenied",
+        "guest accounts are read-only",
+    )
+    .detail("reason", "guestReadOnly")
+}
+fn avatar_too_large() -> ApiError {
+    ApiError::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "invalidInput",
+        "avatar exceeds 256 KiB",
+    )
+}
+fn unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "network",
+        "chat is not configured",
+    )
+}
+/// Caller resolved from a bearer: a Drasl account or a hub guest token.
+struct Resolved {
+    who: Identity,
+    guest: bool,
+}
+/// Drasl first (server accounts), then hub guest tokens.
+async fn resolve_token(
+    s: &AppState,
+    chat: &Arc<Chat>,
+    token: &str,
+) -> Result<Option<Resolved>, ApiError> {
+    if let Some(who) = s.validator.validate(token).await? {
+        return Ok(Some(Resolved { who, guest: false }));
+    }
+    Ok(chat
+        .guest_identity(token)
+        .await?
+        .map(|who| Resolved { who, guest: true }))
+}
+async fn resolve(
+    s: &AppState,
+    chat: &Arc<Chat>,
+    headers: &HeaderMap,
+) -> Result<Resolved, ApiError> {
+    let token = crate::bearer(headers).ok_or_else(ApiError::auth_required)?;
+    resolve_token(s, chat, token)
+        .await?
+        .ok_or_else(ApiError::auth_expired)
 }
 fn rejected(reason: &str) -> ApiError {
     ApiError::new(
@@ -217,8 +347,19 @@ impl From<serde_json::Error> for ApiError {
 }
 
 pub(super) fn router(state: AppState) -> Router<AppState> {
+    // Public endpoints: no bearer, own per-IP limits.
+    let public = Router::new()
+        .route("/chat/guest", post(guest_login))
+        .route_layer(DefaultBodyLimit::max(4 * 1024));
     Router::new()
         .route("/chat/ws", get(socket))
+        .route(
+            "/chat/avatar",
+            put(avatar_set)
+                .delete(avatar_clear)
+                .layer(DefaultBodyLimit::max(MAX_AVATAR + 64 * 1024)),
+        )
+        .route("/chat/avatar/{uuid}", get(avatar_download))
         .route(
             "/chat/files",
             post(files::upload).layer(DefaultBodyLimit::max(files::MAX_UPLOAD + 64 * 1024)),
@@ -226,17 +367,12 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         .route("/chat/files/{id}", get(files::download))
         .route("/chat/{*path}", any(dispatch))
         .route_layer(middleware::from_fn_with_state(state, authenticate))
+        .merge(public)
 }
 async fn authenticate(State(s): State<AppState>, mut req: Request, next: Next) -> Response {
     let route = req.uri().path().to_owned();
     let result = async {
-        let chat = s.chat.clone().ok_or_else(|| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "network",
-                "chat is not configured",
-            )
-        })?;
+        let chat = s.chat.clone().ok_or_else(unavailable)?;
         let (mut parts, body) = req.into_parts();
         let ClientIp(ip) =
             <ClientIp as axum::extract::FromRequestParts<AppState>>::from_request_parts(
@@ -244,13 +380,19 @@ async fn authenticate(State(s): State<AppState>, mut req: Request, next: Next) -
             )
             .await
             .map_err(|_| internal())?;
+        let headers = parts.headers.clone();
         req = Request::from_parts(parts, body);
         chat.requests.check(&ip).map_err(ApiError::rate_limited)?;
-        let who = crate::require_identity(&s, req.headers()).await?;
+        let Resolved { who, guest } = resolve(&s, &chat, &headers).await?;
         chat.users
             .check(&who.user_id)
             .map_err(ApiError::rate_limited)?;
-        let info = chat.directory.profile(&who.user_id).await;
+        // Guest tokens are not Drasl profiles: no admin flag and no skin lookup.
+        let info = if guest {
+            None
+        } else {
+            chat.directory.profile(&who.user_id).await
+        };
         let id = chat
             .run(move |db, _| {
                 db.identify(
@@ -270,6 +412,106 @@ async fn authenticate(State(s): State<AppState>, mut req: Request, next: Next) -
         eprintln!("hub: chat request rejected {} {}", response.status(), route);
     }
     response
+}
+#[derive(Deserialize)]
+struct GuestReq {
+    name: String,
+}
+/// `POST /chat/guest`: issues a guest token for an offline nickname.
+async fn guest_login(
+    State(s): State<AppState>,
+    ClientIp(ip): ClientIp,
+    body: Result<axum::body::Bytes, axum::extract::rejection::BytesRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let chat = s.chat.clone().ok_or_else(unavailable)?;
+    crate::limit(&s.limiters.guest_login, ip)?;
+    let req: GuestReq = crate::parse_json(&crate::request_body(body)?)?;
+    let issued = chat.guest_login(&req.name).await?;
+    Ok(Json(json!({
+        "token": issued.token,
+        "user": issued.user,
+        "expiresAt": issued.expires_at,
+    })))
+}
+/// `PUT /chat/avatar`: raw image bytes or a multipart `file` field.
+async fn avatar_set(
+    State(s): State<AppState>,
+    Extension(Caller(me)): Extension<Caller>,
+    req: Request,
+) -> Result<Json<SocialUser>, ApiError> {
+    let chat = s.chat.clone().ok_or_else(internal)?;
+    let bytes = avatar_body(&s, req).await?;
+    Ok(Json(chat.set_avatar(me, bytes).await?))
+}
+/// `DELETE /chat/avatar`: back to the initials placeholder.
+async fn avatar_clear(
+    State(s): State<AppState>,
+    Extension(Caller(me)): Extension<Caller>,
+) -> Result<Json<SocialUser>, ApiError> {
+    let chat = s.chat.clone().ok_or_else(internal)?;
+    Ok(Json(chat.clear_avatar(me).await?))
+}
+/// `GET /chat/avatar/{uuid}`: the stored 256×256 WebP of another profile.
+async fn avatar_download(
+    State(s): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, ApiError> {
+    let chat = s.chat.clone().ok_or_else(internal)?;
+    let bytes = chat.avatar(id).await?;
+    let mut response = axum::body::Body::from(bytes).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("image/webp"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        header::HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("private, max-age=60"),
+    );
+    Ok(response)
+}
+async fn avatar_body(s: &AppState, req: Request) -> Result<Vec<u8>, ApiError> {
+    let multipart = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.to_ascii_lowercase().starts_with("multipart/form-data"));
+    if multipart {
+        let mut form = Multipart::from_request(req, s)
+            .await
+            .map_err(|_| invalid("multipart form required"))?;
+        let field = form
+            .next_field()
+            .await
+            .map_err(|_| avatar_too_large())?
+            .ok_or_else(|| invalid("file required"))?;
+        let bytes = field.bytes().await.map_err(|_| avatar_too_large())?;
+        if form
+            .next_field()
+            .await
+            .map_err(|_| avatar_too_large())?
+            .is_some()
+        {
+            return Err(invalid("only one file is allowed"));
+        }
+        return avatar_bytes(&bytes);
+    }
+    let bytes = to_bytes(req.into_body(), MAX_AVATAR)
+        .await
+        .map_err(|_| avatar_too_large())?;
+    avatar_bytes(&bytes)
+}
+fn avatar_bytes(bytes: &[u8]) -> Result<Vec<u8>, ApiError> {
+    if bytes.is_empty() {
+        return Err(invalid("avatar is empty"));
+    }
+    if bytes.len() > MAX_AVATAR {
+        return Err(avatar_too_large());
+    }
+    Ok(bytes.to_vec())
 }
 async fn dispatch(
     State(s): State<AppState>,
@@ -351,16 +593,24 @@ async fn socket(
         .clone()
         .try_acquire_owned()
         .map_err(|_| ApiError::rate_limited(5))?;
+    let guest = chat
+        .run({
+            let me = me.clone();
+            move |db, _| db.is_guest(&me)
+        })
+        .await?;
     {
         let mut presence = chat.presence.lock().map_err(|_| internal())?;
-        let entry = presence
-            .entry(me.clone())
-            .or_insert((0, SocialStatus::Offline));
-        if entry.0 >= 3 {
+        let entry = presence.entry(me.clone()).or_insert_with(|| Session {
+            sockets: 0,
+            status: SocialStatus::Offline,
+            since: SystemTime::now(),
+        });
+        if entry.sockets >= 3 {
             return Err(ApiError::rate_limited(5));
         }
-        entry.0 += 1;
-        entry.1 = SocialStatus::Online;
+        entry.sockets += 1;
+        entry.status = SocialStatus::Online;
     }
     let failed_chat = chat.clone();
     let failed_me = me.clone();
@@ -372,7 +622,7 @@ async fn socket(
             let _permit = permit;
             eprintln!("hub: chat ws open");
             let _ = chat.events.send(Notice::Presence(me.clone()));
-            socket_loop(socket, s, chat.clone(), me.clone(), token).await;
+            socket_loop(socket, s, chat.clone(), me.clone(), token, guest).await;
             chat.disconnect_presence(&me);
             eprintln!("hub: chat ws closed");
         }))
@@ -393,6 +643,7 @@ async fn socket_loop(
     chat: Arc<Chat>,
     me: String,
     token: String,
+    guest: bool,
 ) {
     let mut events = chat.events.subscribe();
     let mut auth = tokio::time::interval(Duration::from_secs(60));
@@ -408,8 +659,8 @@ async fn socket_loop(
         tokio::select! {
             _=auth.tick()=>{
                 if last_seen.elapsed()>Duration::from_secs(120){break;}
-                let who=match s.validator.validate(&token).await{Ok(Some(who)) if store::uuid(&who.user_id).ok().as_deref()==Some(&me)=>who,_=>break};
-                let info=chat.directory.profile(&who.user_id).await;
+                let who=match resolve_token(&s,&chat,&token).await{Ok(Some(who)) if store::uuid(&who.who.user_id).ok().as_deref()==Some(&me)=>who.who,_=>break};
+                let info=if guest{None}else{chat.directory.profile(&who.user_id).await};
                 if chat.run_wait(move|db,_|db.identify(&who,info.as_ref().is_some_and(|v|v.admin),info.as_ref().and_then(|v|v.skin.as_deref()))).await.is_err(){break;}
                 if send_frame(&mut socket,Message::Ping(Vec::new().into())).await.is_err(){break;}
             }
@@ -420,7 +671,7 @@ async fn socket_loop(
                     let Ok(v)=serde_json::from_str::<Value>(&text)else{break;};
                     if v["type"]!="presence"{continue;}
                     let Ok(status)=serde_json::from_value::<SocialStatus>(v["status"].clone())else{break;};
-                    if let Ok(mut presence)=chat.presence.lock(){if let Some(entry)=presence.get_mut(&me){entry.1=status;}}
+                    if let Ok(mut presence)=chat.presence.lock(){if let Some(entry)=presence.get_mut(&me){entry.status=status;}}
                     let _=chat.events.send(Notice::Presence(me.clone()));
                 }
                 Some(Ok(Message::Ping(bytes)))=>{last_seen=tokio::time::Instant::now();if send_frame(&mut socket,Message::Pong(bytes)).await.is_err(){break;}}
@@ -429,6 +680,8 @@ async fn socket_loop(
             },
             event=events.recv()=>{
                 let Ok(event)=event else{break;};
+                // Guests only ever see the global channel: no presence, friends or admin events.
+                if guest&&matches!(event,Notice::Presence(_)|Notice::Friend(..)|Notice::Admin){continue;}
                 let viewer=me.clone();
                 let event=chat.run_wait(move|db,chat|{
                     let e=match event{

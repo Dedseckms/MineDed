@@ -114,6 +114,30 @@ fn encode(bytes: Vec<u8>) -> Result<Encoded, ApiError> {
         height: Some(height),
     })
 }
+/// Re-encodes an avatar to a 256×256 WebP (cropped to a square, bounded decode).
+pub(super) fn avatar(bytes: &[u8]) -> Result<Vec<u8>, ApiError> {
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| invalid("invalid image"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader
+        .decode()
+        .map_err(|_| invalid("invalid or oversized image"))?;
+    let image = image.resize_to_fill(256, 256, image::imageops::FilterType::Lanczos3);
+    let mut encoded = Cursor::new(Vec::new());
+    image
+        .write_to(&mut encoded, image::ImageFormat::WebP)
+        .map_err(|_| invalid("image conversion failed"))?;
+    if encoded.get_ref().len() > super::MAX_AVATAR {
+        return Err(super::avatar_too_large());
+    }
+    Ok(encoded.into_inner())
+}
+
 pub(super) async fn upload(
     State(s): State<AppState>,
     Extension(Caller(me)): Extension<Caller>,

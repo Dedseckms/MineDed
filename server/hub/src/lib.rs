@@ -81,6 +81,10 @@ struct Limiters {
     vpn_get: RateLimiter<String>,
     /// Limits unauthenticated VPN requests before they reach Drasl.
     vpn_request: RateLimiter<IpAddr>,
+    /// Launcher heartbeats per IP: several launchers may share one address.
+    presence_beat: RateLimiter<IpAddr>,
+    /// Guest logins per IP: 5 per hour.
+    guest_login: RateLimiter<IpAddr>,
 }
 
 #[derive(Clone)]
@@ -124,6 +128,8 @@ impl AppState {
                 vpn_provision: RateLimiter::per_hour(10, 3),
                 vpn_get: RateLimiter::per_minute(30, 10),
                 vpn_request: RateLimiter::per_minute(60, 20),
+                presence_beat: RateLimiter::per_minute(60, 10),
+                guest_login: RateLimiter::per_hour(5, 5),
             }),
             vpn,
             ws_connections: Arc::new(tokio::sync::Semaphore::new(128)),
@@ -148,6 +154,8 @@ impl AppState {
                 s.limiters.vpn_provision.sweep();
                 s.limiters.vpn_get.sweep();
                 s.limiters.vpn_request.sweep();
+                s.limiters.presence_beat.sweep();
+                s.limiters.guest_login.sweep();
                 if let Some(broker) = &s.curseforge {
                     broker.sweep();
                 }
@@ -163,6 +171,8 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .merge(chat::router(state.clone()))
+        .route("/presence", get(presence_summary))
+        .route("/presence/beat", post(presence_beat))
         .route(
             "/catalog/curseforge",
             axum::routing::any(curseforge::handle),
@@ -205,6 +215,49 @@ async fn not_implemented() -> ApiError {
         StatusCode::NOT_IMPLEMENTED,
         "notImplemented",
         "not implemented yet",
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeatRequest {
+    client_id: String,
+    #[serde(default)]
+    kind: String,
+}
+
+/// `GET /presence`: how many launchers are on air (any account kind).
+async fn presence_summary(
+    State(s): State<AppState>,
+) -> Result<Json<lc_types::social::PresenceSummary>, ApiError> {
+    let chat = s.chat.ok_or_else(chat_unavailable)?;
+    Ok(Json(chat.online()))
+}
+
+/// `POST /presence/beat`: idempotent heartbeat, one count per client id.
+async fn presence_beat(
+    State(s): State<AppState>,
+    ClientIp(ip): ClientIp,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<StatusCode, ApiError> {
+    let chat = s.chat.ok_or_else(chat_unavailable)?;
+    limit(&s.limiters.presence_beat, ip)?;
+    let mut req: BeatRequest = parse_json(&request_body(body)?)?;
+    req.client_id = req.client_id.trim().to_owned();
+    let client_id = Uuid::parse_str(&req.client_id)
+        .ok()
+        .filter(|id| !id.is_nil())
+        .map(|id| id.simple().to_string())
+        .ok_or_else(|| ApiError::invalid_input("clientId must be a UUID"))?;
+    chat.beat(&client_id, &req.kind)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn chat_unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "network",
+        "chat is not configured",
     )
 }
 
