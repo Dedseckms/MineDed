@@ -3,9 +3,9 @@
 use crate::state::AppState;
 use crate::tasks::spawn_task;
 use lc_types::social::{
-    AdminServerState, ModAction, SocialChannel, SocialContent, SocialFriend, SocialHistory,
-    SocialMessage, SocialPrivacy, SocialReport, SocialRole, SocialStatus, SocialUser,
-    StorageTarget,
+    AdminPresence, AdminServerState, AuditEntry, ModAction, PresenceSummary, ProfileUpdate,
+    SocialChannel, SocialContent, SocialFriend, SocialHistory, SocialMessage, SocialPrivacy,
+    SocialReport, SocialRole, SocialStatus, SocialUser, StorageTarget,
 };
 use lc_types::task::{TaskEvent, TaskKind};
 use lc_types::{AccountId, AppError, AppResult, ErrorCode, InstanceId, TaskId};
@@ -321,4 +321,62 @@ pub async fn social_save_attachment(
         on_event,
         move |sink| async move { svc.save_attachment(&attachment_id, &dest, &*sink).await },
     ))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_guest_login(state: State<'_, AppState>, name: String) -> AppResult<SocialUser> {
+    state.social.guest_login(&name).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_profile_update(
+    state: State<'_, AppState>,
+    patch: ProfileUpdate,
+) -> AppResult<SocialUser> {
+    state.social.update_profile(patch).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_avatar_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    on_event: Channel<TaskEvent>,
+) -> AppResult<TaskId> {
+    let svc = state.social.clone();
+    Ok(spawn_task(
+        &app,
+        &state.tasks,
+        TaskKind::ChatTransfer,
+        "tasks.chatAvatar",
+        on_event,
+        move |sink| async move { svc.set_avatar(&path, &*sink).await.map(|_| ()) },
+    ))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_avatar_clear(state: State<'_, AppState>) -> AppResult<SocialUser> {
+    state.social.clear_avatar().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_presence(state: State<'_, AppState>) -> AppResult<PresenceSummary> {
+    state.social.presence().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_admin_presence(state: State<'_, AppState>) -> AppResult<AdminPresence> {
+    state.social.admin_presence().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_admin_audit(state: State<'_, AppState>) -> AppResult<Vec<AuditEntry>> {
+    state.social.audit().await
 }

@@ -165,6 +165,13 @@ export const commands = {
 	socialAttachmentPreview: (attachmentId: string) => typedError<string, AppError>(__TAURI_INVOKE("social_attachment_preview", { attachmentId })),
 	/**  Publishes a real P2P offer; an existing unrelated room is never replaced. */
 	socialSharePack: (channel: string, instance: InstanceId) => typedError<SocialMessage, AppError>(__TAURI_INVOKE("social_share_pack", { channel, instance })),
+	socialGuestLogin: (name: string) => typedError<SocialUser, AppError>(__TAURI_INVOKE("social_guest_login", { name })),
+	socialProfileUpdate: (patch: ProfileUpdate) => typedError<SocialUser, AppError>(__TAURI_INVOKE("social_profile_update", { patch })),
+	socialAvatarSet: (path: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("social_avatar_set", { path, onEvent })),
+	socialAvatarClear: () => typedError<SocialUser, AppError>(__TAURI_INVOKE("social_avatar_clear")),
+	socialPresence: () => typedError<PresenceSummary, AppError>(__TAURI_INVOKE("social_presence")),
+	socialAdminPresence: () => typedError<AdminPresence, AppError>(__TAURI_INVOKE("social_admin_presence")),
+	socialAdminAudit: () => typedError<AuditEntry[], AppError>(__TAURI_INVOKE("social_admin_audit")),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
@@ -221,6 +228,11 @@ export type AccountKind = "offline" |
 
 export type AccountsChangedEvent = Account[];
 
+export type AdminPresence = {
+	online: number,
+	clients: PresenceClient[],
+};
+
 /**  Server health shown to admins (disk-full banner, backups, migrations). */
 export type AdminServerState = {
 	diskUsedBytes: number,
@@ -251,6 +263,19 @@ export type AudioDevice = {
 };
 
 export type AudioDirection = "input" | "output";
+
+/**  Admin action journal entry. */
+export type AuditEntry = {
+	id: string,
+	/**  RFC 3339 timestamp. */
+	at: string,
+	/**  Actor name (admin or moderator). */
+	actor: string,
+	/**  Action id, e.g. `role`, `mute`, `ban`, `delete`, `profileReset`. */
+	action: string,
+	target: string | null,
+	note: string | null,
+};
 
 export type Cape = {
 	id: string,
@@ -566,6 +591,27 @@ export type Peer = {
 
 export type PerfPreset = "potato" | "balanced" | "quality";
 
+/**  One connected launcher as seen by an admin. */
+export type PresenceClient = {
+	/**  Authenticated name, or `anonymous` for clients that only beat. */
+	label: string,
+	/**  `guest`, `yggdrasil` or `anonymous`. */
+	kind: string,
+	since: string,
+};
+
+/**  Public presence counter: launchers currently connected, any account kind. */
+export type PresenceSummary = {
+	online: number,
+};
+
+/**  Own-profile edit. `None` keeps a field, `Some("")` clears it. */
+export type ProfileUpdate = {
+	displayName?: string | null,
+	bio?: string | null,
+	accent?: string | null,
+};
+
 export type ProjectSummary = {
 	source: ContentSourceKind,
 	/**  Source-specific project id (Modrinth id / CurseForge numeric id as string). */
@@ -821,6 +867,11 @@ export type SocialReport = {
 };
 
 export type SocialRole = "user" | 
+/**
+ *  Offline account with a hub guest token: may read the global chat only.
+ *  Direct chats and friendships require a full account.
+ */
+"guest" | 
 /**  Chat moderation only (assigned by an admin). */
 "moderator" | 
 /**  Drasl administrator: everything, including roles and server tools. */
@@ -843,6 +894,14 @@ export type SocialUser = {
 	/**  The caller may open a direct chat with this player. */
 	canMessage: boolean,
 	canInvite: boolean,
+	/**  Guest identity of an offline account (hub-issued token, unverified name). */
+	guest?: boolean,
+	/**  Chosen display name; `None` falls back to `name`. */
+	displayName?: string | null,
+	/**  Short self-description (≤ 120 characters). */
+	bio?: string | null,
+	/**  Accent id from the fixed palette, used for the name and profile header. */
+	accent?: string | null,
 };
 
 export type SortBy = "relevance" | "downloads" | "updated" | "newest";

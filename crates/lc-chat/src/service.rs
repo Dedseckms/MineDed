@@ -755,6 +755,28 @@ impl ChatService for ChatClient {
         )
         .await
     }
+    // Filled in by net per docs/plans/chat-1.4.md; the hub endpoints are new.
+    async fn guest_login(&self, _name: &str) -> AppResult<SocialUser> {
+        Err(AppError::not_implemented("ChatService::guest_login"))
+    }
+    async fn update_profile(&self, _patch: ProfileUpdate) -> AppResult<SocialUser> {
+        Err(AppError::not_implemented("ChatService::update_profile"))
+    }
+    async fn set_avatar(&self, _path: &str, _sink: &dyn ProgressSink) -> AppResult<SocialUser> {
+        Err(AppError::not_implemented("ChatService::set_avatar"))
+    }
+    async fn clear_avatar(&self) -> AppResult<SocialUser> {
+        Err(AppError::not_implemented("ChatService::clear_avatar"))
+    }
+    async fn presence(&self) -> AppResult<PresenceSummary> {
+        Ok(PresenceSummary::default())
+    }
+    async fn admin_presence(&self) -> AppResult<AdminPresence> {
+        Err(AppError::not_implemented("ChatService::admin_presence"))
+    }
+    async fn audit(&self) -> AppResult<Vec<AuditEntry>> {
+        Err(AppError::not_implemented("ChatService::audit"))
+    }
 }
 
 #[cfg(test)]
