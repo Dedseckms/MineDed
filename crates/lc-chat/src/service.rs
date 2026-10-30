@@ -302,7 +302,7 @@ async fn socket_once(
     let token = auth.launch_auth(Some(s.account)).await?.access_token;
     let key = generate_key();
     let handshake = downloader
-        .client(Route::Auto)
+        .upgrade_client(Route::Auto)
         .get(endpoint(&s.base, &["ws"])?)
         .version(reqwest::Version::HTTP_11)
         .bearer_auth(token.expose())

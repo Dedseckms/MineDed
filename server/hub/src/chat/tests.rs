@@ -881,3 +881,34 @@ fn directory_sync_is_claimed_once_a_minute_and_retried_after_failure() {
         "the window expires after a minute"
     );
 }
+
+#[tokio::test]
+async fn reqwest_handshake_upgrades_like_the_launcher_client() {
+    let temp = Temp::new();
+    let state = AppState::new(crate::Config::default(), Arc::new(Fake))
+        .with_chat(Chat::open(&temp.0).unwrap());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            crate::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let response = client
+        .get(format!("http://{addr}/api/v1/chat/ws"))
+        .version(reqwest::Version::HTTP_11)
+        .bearer_auth("good")
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::SWITCHING_PROTOCOLS);
+    server.abort();
+}
