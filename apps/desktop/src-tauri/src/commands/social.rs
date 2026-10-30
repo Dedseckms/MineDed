@@ -380,3 +380,18 @@ pub async fn social_admin_presence(state: State<'_, AppState>) -> AppResult<Admi
 pub async fn social_admin_audit(state: State<'_, AppState>) -> AppResult<Vec<AuditEntry>> {
     state.social.audit().await
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_session(state: State<'_, AppState>) -> AppResult<Option<SocialUser>> {
+    state.social.session().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_attachment_original(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<String> {
+    state.social.attachment_original(&id).await
+}

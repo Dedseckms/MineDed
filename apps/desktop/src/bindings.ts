@@ -172,6 +172,30 @@ export const commands = {
 	socialPresence: () => typedError<PresenceSummary, AppError>(__TAURI_INVOKE("social_presence")),
 	socialAdminPresence: () => typedError<AdminPresence, AppError>(__TAURI_INVOKE("social_admin_presence")),
 	socialAdminAudit: () => typedError<AuditEntry[], AppError>(__TAURI_INVOKE("social_admin_audit")),
+	socialSession: () => typedError<{
+	/**  Undashed profile UUID. */
+	uuid: string,
+	name: string,
+	skinUrl: string | null,
+	/**  `None` when hidden by the player's privacy settings. */
+	status: SocialStatus | null,
+	role: SocialRole,
+	isFriend: boolean,
+	/**  Whether the caller has blocked this player; never reveals reverse blocks. */
+	isBlocked?: boolean,
+	/**  The caller may open a direct chat with this player. */
+	canMessage: boolean,
+	canInvite: boolean,
+	/**  Guest identity of an offline account (hub-issued token, unverified name). */
+	guest?: boolean,
+	/**  Chosen display name; `None` falls back to `name`. */
+	displayName?: string | null,
+	/**  Short self-description (≤ 120 characters). */
+	bio?: string | null,
+	/**  Accent id from the fixed palette, used for the name and profile header. */
+	accent?: string | null,
+} | null, AppError>(__TAURI_INVOKE("social_session")),
+	socialAttachmentOriginal: (id: string) => typedError<string, AppError>(__TAURI_INVOKE("social_attachment_original", { id })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),

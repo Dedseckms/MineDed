@@ -136,6 +136,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             social::social_presence,
             social::social_admin_presence,
             social::social_admin_audit,
+            social::social_session,
+            social::social_attachment_original,
             settings::settings_get,
             settings::settings_set,
             tasks::tasks_list,

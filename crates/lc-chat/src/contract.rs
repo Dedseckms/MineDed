@@ -119,6 +119,20 @@ pub trait ChatService: Send + Sync {
     async fn admin_presence(&self) -> AppResult<AdminPresence>;
     /// Admin only: recent moderation and admin actions.
     async fn audit(&self) -> AppResult<Vec<AuditEntry>>;
+
+    /// Current chat session (guest or full account) held in memory, without a
+    /// network round trip; `None` when signed out.
+    async fn session(&self) -> AppResult<Option<SocialUser>> {
+        Ok(None)
+    }
+    /// Original attachment bytes as a `data:` URL for the full-screen viewer;
+    /// bounded and decoded natively, never exposed as a public hub URL.
+    async fn attachment_original(&self, id: &str) -> AppResult<String> {
+        let _ = id;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::attachment_original",
+        ))
+    }
 }
 
 /// Default privacy for new users: everyone may message and invite, everyone
