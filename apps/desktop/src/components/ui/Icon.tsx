@@ -41,6 +41,8 @@ const PATHS = {
   maximize: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
   chevronDown: "M6 9l6 6 6-6",
   image: "M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15.5 9.5h.01",
+  paperclip:
+    "M21 11.5 12.4 20a5.4 5.4 0 0 1-7.6-7.6l8.5-8.5a3.6 3.6 0 0 1 5.1 5.1l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8",
 } as const;
 
 export type IconName = keyof typeof PATHS;
