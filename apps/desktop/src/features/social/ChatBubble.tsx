@@ -201,7 +201,10 @@ function MessageContent({
             })}
           </Button>
           {content.attachment.mime.startsWith("image/") ? (
-            <AttachmentPreview id={content.attachment.id} />
+            <AttachmentPreview
+              attachment={content.attachment}
+              onSave={save}
+            />
           ) : null}
         </div>
       </div>
