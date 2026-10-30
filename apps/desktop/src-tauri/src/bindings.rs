@@ -5,8 +5,8 @@
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 use crate::commands::{
-    accounts, app, content, instances, java, loaders, rooms, settings, skins, system, tasks,
-    versions, voice, vpn,
+    accounts, app, content, instances, java, loaders, rooms, settings, skins, social, system,
+    tasks, versions, voice, vpn,
 };
 use crate::events::*;
 
@@ -63,6 +63,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             skins::skin_remove,
             skins::skin_apply,
             skins::cape_list,
+            skins::cape_add,
             skins::cape_set,
             // net
             vpn::vpn_state,
@@ -99,6 +100,35 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             voice::voice_set_self_muted,
             voice::voice_mic_test,
             // lead
+            social::social_connect,
+            social::social_disconnect,
+            social::social_set_presence,
+            social::social_channels,
+            social::social_history,
+            social::social_mark_read,
+            social::social_send,
+            social::social_delete_message,
+            social::social_open_direct,
+            social::social_search_users,
+            social::social_profile,
+            social::social_friends,
+            social::social_add_friend,
+            social::social_remove_friend,
+            social::social_set_blocked,
+            social::social_privacy,
+            social::social_set_privacy,
+            social::social_report,
+            social::social_reports,
+            social::social_resolve_report,
+            social::social_moderate_delete,
+            social::social_moderate_user,
+            social::social_set_role,
+            social::social_server_state,
+            social::social_migrate_storage,
+            social::social_send_file,
+            social::social_save_attachment,
+            social::social_attachment_preview,
+            social::social_share_pack,
             settings::settings_get,
             settings::settings_set,
             tasks::tasks_list,
@@ -121,6 +151,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             VoiceSpeakingEvent,
             VoiceStatusEvent,
             UpdateAvailableEvent,
+            SocialChangedEvent,
         ])
         // Byte counts and sizes stay far below 2^53.
         .dangerously_cast_bigints_to_number()

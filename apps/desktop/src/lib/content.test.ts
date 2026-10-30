@@ -61,6 +61,11 @@ const plan = (over: Partial<ResolvePlan> = {}): ResolvePlan => ({
 });
 
 describe("search query", () => {
+  it("keeps the selected provider with compatibility and paging", () => {
+    expect(buildSearchQuery({ ...filters, source: "curseForge" }, fabric, 12)).toMatchObject({
+      source: "curseForge", mc: "1.21.1", loader: "fabric", offset: 12,
+    });
+  });
   it("uses instance version and loader by default", () => {
     expect(buildSearchQuery(filters, fabric, 40)).toEqual({
       source: "modrinth",

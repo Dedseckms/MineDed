@@ -34,6 +34,12 @@ impl RoomService for StubRooms {
         Err(AppError::not_implemented("RoomService::create_voice"))
     }
 
+    async fn share_pack(&self, _instance: InstanceId) -> AppResult<RoomState> {
+        Err(lc_types::AppError::not_implemented(
+            "RoomService::share_pack",
+        ))
+    }
+
     async fn leave(&self) -> AppResult<()> {
         Ok(())
     }

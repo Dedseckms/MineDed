@@ -5,6 +5,7 @@
 # The s-ui admin panel is NOT exposed: owner uses an SSH tunnel to 127.0.0.1:2095,
 # hub reaches the API over the docker network (http://mineded-vpn:2095/...).
 handle /__SUB_PATH__/* {
+	header Cache-Control "no-store"
 	@write not method GET HEAD
 	respond @write 405
 	reverse_proxy 127.0.0.1:2096

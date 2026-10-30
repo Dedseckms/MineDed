@@ -19,6 +19,7 @@ use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 
 use crate::api::{Api, DlHttp, Http};
 use crate::contract::ContentService;
+use crate::curseforge::CurseForgeSource;
 use crate::index::{base_name, key, ContentIndex, IndexEntry};
 use crate::modmeta::{read_jar_meta_async, ModMeta};
 use crate::modrinth::ModrinthSource;
@@ -26,19 +27,22 @@ use crate::resolver::{resolve, DiskMeta, InstalledRef, Lookup};
 use crate::shaders::{has_shader_loader, optifine_manual, shader_loader_groups};
 use crate::source::{Catalog, Target, UpdateItem};
 use crate::util::{
-    check_file_name, file_hashes, io_err, kind_dir, loader_compatible, parse_url, sha1_hex,
-    CONTENT_DIRS,
+    check_file_name, ensure_no_links, file_hashes, io_err, is_link, kind_dir, loader_compatible,
+    parse_url, safe_join, sha1_hex, CONTENT_DIRS,
 };
 
 /// Jars larger than this are not fetched just to read their metadata.
 const MAX_META_JAR: u64 = 64 * 1024 * 1024;
 
+#[derive(Clone)]
 pub(crate) struct Inner {
+    api: Arc<Api>,
     pub paths: Paths,
     pub dl: Arc<dyn Downloader>,
     pub instances: Arc<dyn InstanceService>,
     pub system: Arc<dyn SystemProbe>,
     pub modrinth: Arc<ModrinthSource>,
+    pub curseforge: Arc<CurseForgeSource>,
 }
 
 /// Real content services. Cheap to clone; implements `ContentService`,
@@ -71,8 +75,7 @@ impl DiskFile {
 }
 
 impl ContentServices {
-    /// Modrinth only: CurseForge is turned off (owner decision); requests for it
-    /// fail with `InvalidInput` + `reason=curseforgeDisabled`.
+    /// Uses Modrinth and the default hub CurseForge broker.
     pub fn new(
         paths: Paths,
         downloader: Arc<dyn Downloader>,
@@ -81,6 +84,13 @@ impl ContentServices {
     ) -> Self {
         let http: Arc<dyn Http> = Arc::new(DlHttp::new(downloader.clone()));
         Self::with_parts(paths, downloader, instances, system, http)
+    }
+
+    /// Configure the hub API root used for the CurseForge catalogue.
+    pub fn with_hub_url(mut self, hub: &str) -> Self {
+        let inner = Arc::make_mut(&mut self.inner);
+        inner.curseforge = Arc::new(CurseForgeSource::new(inner.api.clone(), hub));
+        self
     }
 
     pub(crate) fn with_parts(
@@ -93,7 +103,12 @@ impl ContentServices {
         let api = Arc::new(Api::new(http, paths.cache().join("content")));
         Self {
             inner: Arc::new(Inner {
-                modrinth: Arc::new(ModrinthSource::new(api)),
+                api: api.clone(),
+                modrinth: Arc::new(ModrinthSource::new(api.clone())),
+                curseforge: Arc::new(CurseForgeSource::new(
+                    api,
+                    lc_types::settings::DEFAULT_HUB_URL,
+                )),
                 paths,
                 dl: downloader,
                 instances,
@@ -101,15 +116,6 @@ impl ContentServices {
             }),
         }
     }
-}
-
-/// CurseForge is turned off: its API needs a key the project does not use.
-pub(crate) fn curseforge_disabled() -> AppError {
-    AppError::new(
-        ErrorCode::InvalidInput,
-        "CurseForge is not supported; use Modrinth",
-    )
-    .detail("reason", "curseforgeDisabled")
 }
 
 pub(crate) fn target_of(inst: &Instance) -> Target {
@@ -123,7 +129,7 @@ impl Inner {
     pub fn catalog(&self, source: ContentSourceKind) -> AppResult<Arc<dyn Catalog>> {
         match source {
             ContentSourceKind::Modrinth => Ok(self.modrinth.clone()),
-            ContentSourceKind::CurseForge => Err(curseforge_disabled()),
+            ContentSourceKind::CurseForge => Ok(self.curseforge.clone()),
             ContentSourceKind::Local => Err(AppError::new(
                 ErrorCode::InvalidInput,
                 "local files have no remote catalogue",
@@ -182,15 +188,20 @@ impl Inner {
         let mut out = Vec::new();
         for (dir, kind) in CONTENT_DIRS {
             let path = game_dir.join(dir);
+            ensure_no_links(&path)?;
             let mut rd = match tokio::fs::read_dir(&path).await {
                 Ok(rd) => rd,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(io_err(&path, e)),
             };
             while let Some(e) = rd.next_entry().await.map_err(|e| io_err(&path, e))? {
-                let Ok(ft) = e.file_type().await else {
+                let Ok(meta) = tokio::fs::symlink_metadata(e.path()).await else {
                     continue;
                 };
+                if is_link(&meta) {
+                    continue;
+                }
+                let ft = meta.file_type();
                 let name = e.file_name().to_string_lossy().into_owned();
                 // Unpacked resource/shader/data packs are folders; hidden
                 // names are temp files of `add_local`.
@@ -276,7 +287,7 @@ impl Inner {
                 .as_ref()
                 .and_then(|k| disk.iter().find(|f| &f.key() == k));
             let disabled = old_disk.map(|f| !f.enabled).unwrap_or(false);
-            let dest = game.join(dir).join(&v.file_name);
+            let dest = safe_join(&game, &format!("{dir}/{}", v.file_name))?;
             let sha1 = rf.sha1.clone().or_else(|| v.sha1.clone());
             if let Some(h) = &sha1 {
                 // Fetched while resolving: the downloader re-verifies and skips it.
@@ -369,7 +380,7 @@ impl Inner {
     ) -> AppResult<HashMap<(ContentSourceKind, String), ContentVersion>> {
         let target = target_of(inst);
         let mut out = HashMap::new();
-        for source in [ContentSourceKind::Modrinth] {
+        for source in [ContentSourceKind::Modrinth, ContentSourceKind::CurseForge] {
             let items: Vec<UpdateItem> = idx
                 .files
                 .values()
@@ -634,12 +645,13 @@ impl ContentService for ContentServices {
             return Ok(());
         }
         let dir = game.join(f.dir);
-        let from = dir.join(&f.name);
+        let from = safe_join(&dir, &f.name)?;
         let to = if enabled {
             dir.join(f.base())
         } else {
             dir.join(format!("{}.disabled", f.base()))
         };
+        ensure_no_links(&to)?;
         tokio::fs::rename(&from, &to)
             .await
             .map_err(|e| io_err(&from, e))
@@ -648,7 +660,7 @@ impl ContentService for ContentServices {
     async fn remove(&self, instance: InstanceId, file_name: &str) -> AppResult<()> {
         let game = self.inner.instances.game_dir(instance);
         let f = self.inner.find_file(&game, file_name).await?;
-        let p = game.join(f.dir).join(&f.name);
+        let p = safe_join(&game, &format!("{}/{}", f.dir, f.name))?;
         if f.is_dir {
             tokio::fs::remove_dir_all(&p).await
         } else {

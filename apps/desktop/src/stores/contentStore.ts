@@ -1,10 +1,12 @@
 import { create } from "zustand";
+import type { SearchSource } from "../lib/content";
 
 import type { SortBy } from "../bindings";
 import type { SearchFilters, SearchKind } from "../lib/content";
 
 interface ContentState extends SearchFilters {
   setKind: (kind: SearchKind) => void;
+  setSource: (source: SearchSource) => void;
   setText: (text: string) => void;
   setSort: (sort: SortBy) => void;
   setCompatibleOnly: (v: boolean) => void;
@@ -25,6 +27,7 @@ const initial: SearchFilters = {
 export const useContentStore = create<ContentState>()((set) => ({
   ...initial,
   setKind: (kind) => set({ kind }),
+  setSource: (source) => set({ source }),
   setText: (text) => set({ text }),
   setSort: (sort) => set({ sort }),
   setCompatibleOnly: (compatibleOnly) => set({ compatibleOnly }),

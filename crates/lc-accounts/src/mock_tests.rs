@@ -37,6 +37,7 @@ struct Mock {
     counter: u32,
     skin: Option<(String, Vec<u8>)>,
     cape: bool,
+    cape_upload: Option<Vec<u8>>,
     calls: Vec<String>,
 }
 
@@ -166,6 +167,11 @@ async fn handle(
                 }
                 ("DELETE", r) if r == format!("{PROFILE_ID}/cape") => {
                     m.cape = false;
+                    StatusCode::NO_CONTENT.into_response()
+                }
+                ("PUT", r) if r == format!("{PROFILE_ID}/cape") => {
+                    m.cape = true;
+                    m.cape_upload = Some(body.to_vec());
                     StatusCode::NO_CONTENT.into_response()
                 }
                 _ => StatusCode::BAD_REQUEST.into_response(),
@@ -541,6 +547,105 @@ async fn skin_library_apply_and_capes() {
     e.skins.remove(skin.id).await.unwrap();
     assert!(e.skins.library().await.unwrap().is_empty());
     assert!(!std::path::Path::new(skin.local_path.as_ref().unwrap()).exists());
+}
+
+#[tokio::test]
+async fn cape_import_switch_remove_and_account_authorization() {
+    let e = env().await;
+    let mut imported = Vec::new();
+    for value in [8, 27] {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 64, 32);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&vec![value; 64 * 32 * 4])
+                .unwrap();
+        }
+        let path = e.dir_path.join(format!("cape{value}.png"));
+        std::fs::write(&path, &bytes).unwrap();
+        let cape = e.skins.add_cape(path.to_str().unwrap()).await.unwrap();
+        assert!(!cape.active);
+        imported.push((cape, bytes));
+    }
+    assert!(e.mock.lock().unwrap().cape_upload.is_none());
+    let offline = e.svc.offline_add("Offline").await.unwrap();
+    assert!(e.skins.capes(offline.id).await.is_err());
+    assert!(e
+        .skins
+        .set_cape(offline.id, Some(imported[0].0.id.clone()))
+        .await
+        .is_err());
+    assert!(e
+        .skins
+        .set_cape(lc_types::AccountId::new(), None)
+        .await
+        .is_err());
+    let account = e
+        .svc
+        .yggdrasil_login(&e.domain(), "Steve", "pw")
+        .await
+        .unwrap();
+    assert_eq!(e.skins.capes(account.id).await.unwrap().len(), 2);
+    for (cape, bytes) in &imported {
+        e.skins
+            .set_cape(account.id, Some(cape.id.clone()))
+            .await
+            .unwrap();
+        let body = e.mock.lock().unwrap().cape_upload.clone().unwrap();
+        assert!(body.windows(bytes.len()).any(|part| part == bytes));
+        let multipart = String::from_utf8_lossy(&body);
+        assert!(multipart.contains("filename=\"cape.png\""));
+        assert!(!multipart.contains("name=\"model\""));
+        let catalog = e.skins.capes(account.id).await.unwrap();
+        assert_eq!(catalog.len(), 2, "remote cape merged with local entry");
+        assert_eq!(catalog.iter().filter(|c| c.active).count(), 1);
+        assert!(catalog.iter().find(|c| c.id == cape.id).unwrap().active);
+    }
+    let restored = SkinsService::new(&Paths::new(&e.dir_path), e.svc.clone());
+    let catalog = restored.capes(account.id).await.unwrap();
+    assert!(
+        catalog
+            .iter()
+            .find(|c| c.id == imported[1].0.id)
+            .unwrap()
+            .active
+    );
+    let calls_before = e.mock.lock().unwrap().calls.len();
+    std::fs::write(&imported[0].0.url, &imported[1].1).unwrap();
+    assert!(e
+        .skins
+        .set_cape(account.id, Some(imported[0].0.id.clone()))
+        .await
+        .is_err());
+    assert!(!e.mock.lock().unwrap().calls[calls_before..]
+        .iter()
+        .any(|c| c.starts_with("PUT")));
+    e.skins.set_cape(account.id, None).await.unwrap();
+    assert!(!e.mock.lock().unwrap().cape);
+    // Restore the cached input so listing can validate all local previews.
+    std::fs::write(&imported[0].0.url, &imported[0].1).unwrap();
+    assert!(e
+        .skins
+        .capes(account.id)
+        .await
+        .unwrap()
+        .iter()
+        .all(|c| !c.active));
+    e.mock.lock().unwrap().valid = None;
+    e.mock.lock().unwrap().refreshable.clear();
+    let count = e.mock.lock().unwrap().calls.len();
+    assert!(e
+        .skins
+        .set_cape(account.id, Some(imported[0].0.id.clone()))
+        .await
+        .is_err());
+    assert!(!e.mock.lock().unwrap().calls[count..]
+        .iter()
+        .any(|c| c.starts_with("PUT")));
 }
 
 #[tokio::test]

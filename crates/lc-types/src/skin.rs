@@ -44,6 +44,7 @@ pub struct RemoteSkin {
 pub struct Cape {
     pub id: String,
     pub name: String,
+    /// Remote texture URL, or absolute validated local PNG path for asset preview.
     pub url: String,
     pub active: bool,
 }

@@ -28,7 +28,6 @@
 | 👕 **Own skins** | Own skin and cape server with a 3D preview — friends see your skin in game |
 | 🌍 **Multiplayer without a server** | Create a room and send the code — your friend gets your modpack automatically and joins. End-to-end encrypted P2P with a relay fallback, no port forwarding |
 | 🎙 **Voice and chat** | Built-in voice and text chat with noise suppression, push-to-talk and an in-game overlay |
-| 🛡 **Works behind blocks** | Built-in VPN (VLESS / mihomo), mirrors and smart routing |
 | 🥔 **Low-end PCs** | Optimization presets: mods, memory, JVM flags and graphics settings |
 | 🔄 **Auto-updates** | Signed updates from GitHub or a mirror |
 
@@ -38,7 +37,7 @@
 |---|---|
 | ![Instances](site/screenshots/instances-en.webp) | ![Mod catalog](site/screenshots/catalog-en.webp) |
 | ![Modpack catalog](site/screenshots/modpacks-en.webp) | ![3D skins](site/screenshots/skins-en.webp) |
-| ![Room, voice and chat](site/screenshots/multiplayer-en.webp) | ![VPN](site/screenshots/vpn-en.webp) |
+| ![Room, voice and chat](site/screenshots/multiplayer-en.webp) | ![Appearance](site/screenshots/settings-en.webp) |
 
 ## Install
 
@@ -70,12 +69,6 @@ The launcher updates itself; updates are signed. The interface is available in R
 ## Voice and chat
 
 Every room has text and voice chat. To play on a regular server, create a **Voice room** (no instance). Settings → "Voice chat": push-to-talk with a key of your choice or voice activation, microphone, per-player volume. The compact in-game overlay works in windowed / borderless mode (not exclusive fullscreen; on Wayland it may not stay on top).
-
-## If something is blocked
-
-- The launcher tries mirrors and proxies on its own: built-in VPN → manual proxy → system proxy.
-- **VPN**: paste a subscription link (VLESS / mihomo) or a file and pick a node. Modes: "Launcher and downloads", "Launcher + game" or "Selected programs". No admin rights needed except for "Selected programs"; no conflict with an installed Clash/mihomo.
-- Manual proxy (HTTP / SOCKS5) — in Settings.
 
 ## Building from source
 

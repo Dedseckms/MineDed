@@ -22,6 +22,7 @@ const MAX_TEXT_CHARS: usize = 500;
 const MAX_ID_LEN: usize = 64;
 const MAX_REASON_CHARS: usize = 120;
 const MAX_FRAME: usize = 4 * 1024;
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Client messages: `chat`, `ping` (contract) plus `leave` (any member) and
 /// `kick` (host only) which free a slot as described in joinRoom.
@@ -62,6 +63,12 @@ fn handle_client(
     chat: &RateLimiter<()>,
     t: &str,
 ) -> Step {
+    if !state
+        .rooms
+        .socket_authorized(room_id, me.peer_id, me.is_host)
+    {
+        return Step::Stop;
+    }
     match serde_json::from_str::<ClientMsg>(t) {
         Ok(ClientMsg::Chat { id, text: body }) => {
             let body = body.trim();
@@ -95,11 +102,18 @@ fn handle_client(
     }
 }
 
+async fn send(socket: &mut WebSocket, message: Message) -> Result<(), ()> {
+    tokio::time::timeout(SEND_TIMEOUT, socket.send(message))
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())
+}
+
 pub async fn run(mut socket: WebSocket, state: AppState, room_id: Uuid, me: Member) {
     let mut rx = me.events.subscribe();
     if !state.rooms.socket(room_id, me.peer_id, me.is_host, true) {
-        let _ = socket.send(text(&json!({ "t": "closed" }))).await;
-        let _ = socket.send(Message::Close(None)).await;
+        let _ = send(&mut socket, text(&json!({ "t": "closed" }))).await;
+        let _ = send(&mut socket, Message::Close(None)).await;
         return;
     }
     let _ = me
@@ -112,7 +126,7 @@ pub async fn run(mut socket: WebSocket, state: AppState, room_id: Uuid, me: Memb
     let mut last_seen = Instant::now();
     let my_id = Value::String(me.peer_id.to_string());
 
-    if socket.send(text(&hello)).await.is_ok() {
+    if send(&mut socket, text(&hello)).await.is_ok() {
         loop {
             tokio::select! {
                 incoming = socket.recv() => {
@@ -133,20 +147,26 @@ pub async fn run(mut socket: WebSocket, state: AppState, room_id: Uuid, me: Memb
                     match ev {
                         Ok(v) => {
                             let end = v["t"] == "closed" || (v["t"] == "kick" && v["peerId"] == my_id);
-                            if socket.send(text(&v)).await.is_err() || end {
+                            if !end && !state.rooms.socket_authorized(room_id, me.peer_id, me.is_host) {
+                                // Discard queued broadcasts until the revocation event.
+                                continue;
+                            }
+                            if send(&mut socket, text(&v)).await.is_err() || end {
                                 break;
                             }
                         }
-                        Err(RecvError::Lagged(_)) => {}
+                        // Missing a revocation event must never retain access.
+                        Err(RecvError::Lagged(_)) => break,
                         Err(RecvError::Closed) => {
-                            let _ = socket.send(text(&json!({ "t": "closed" }))).await;
+                            let _ = send(&mut socket, text(&json!({ "t": "closed" }))).await;
                             break;
                         }
                     }
                 }
                 _ = ping.tick() => {
                     if last_seen.elapsed() > IDLE_TIMEOUT
-                        || socket.send(Message::Ping(Default::default())).await.is_err()
+                        || !state.rooms.socket_authorized(room_id, me.peer_id, me.is_host)
+                        || send(&mut socket, Message::Ping(Default::default())).await.is_err()
                     {
                         break;
                     }
@@ -159,5 +179,5 @@ pub async fn run(mut socket: WebSocket, state: AppState, room_id: Uuid, me: Memb
     let _ = me
         .events
         .send(json!({ "t": "peer_left", "peerId": me.peer_id }));
-    let _ = socket.send(Message::Close(None)).await;
+    let _ = send(&mut socket, Message::Close(None)).await;
 }

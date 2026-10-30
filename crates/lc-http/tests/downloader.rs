@@ -286,6 +286,76 @@ const LEN: usize = 300_000;
 // ---------- tests ----------
 
 #[tokio::test]
+async fn staging_hardlink_never_modifies_its_other_name() {
+    let (srv, addr) = start(LEN).await;
+    // Exercise both resume and an upstream that ignores Range.
+    for route in ["/ok/hardlink", "/norange/hardlink"] {
+        let tmp = TempDir::new("hardlink");
+        let dest = tmp.path().join("file.jar");
+        let other = tmp.path().join("user-data");
+        let prefix = &srv.data[..1234];
+        std::fs::write(&other, prefix).unwrap();
+        std::fs::hard_link(&other, part_of(&dest)).unwrap();
+        downloader()
+            .fetch_many(
+                vec![req(vec![url(addr, route)], &srv.data, dest.clone())],
+                &*RecSink::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&other).unwrap(), prefix);
+        assert_eq!(std::fs::read(&dest).unwrap(), *srv.data);
+    }
+}
+
+#[tokio::test]
+async fn rejects_staging_directory_without_modifying_it() {
+    let (srv, addr) = start(LEN).await;
+    let tmp = TempDir::new("part-directory");
+    let dest = tmp.path().join("file.jar");
+    std::fs::create_dir(part_of(&dest)).unwrap();
+    let marker = part_of(&dest).join("user-data");
+    std::fs::write(&marker, b"keep").unwrap();
+    assert!(downloader()
+        .fetch_many(
+            vec![req(vec![url(addr, "/ok/a")], &srv.data, dest.clone())],
+            &*RecSink::new(),
+        )
+        .await
+        .is_err());
+    assert_eq!(std::fs::read(&marker).unwrap(), b"keep");
+    assert!(!dest.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejects_staging_symlink_without_modifying_target() {
+    let (srv, addr) = start(LEN).await;
+    for existing in [false, true] {
+        let tmp = TempDir::new("part-symlink");
+        let dest = tmp.path().join("file.jar");
+        let other = tmp.path().join("user-data");
+        if existing {
+            std::fs::write(&other, &srv.data[..1234]).unwrap();
+        }
+        std::os::unix::fs::symlink(&other, part_of(&dest)).unwrap();
+        assert!(downloader()
+            .fetch_many(
+                vec![req(vec![url(addr, "/ok/a")], &srv.data, dest.clone())],
+                &*RecSink::new(),
+            )
+            .await
+            .is_err());
+        if existing {
+            assert_eq!(std::fs::read(&other).unwrap(), &srv.data[..1234]);
+        } else {
+            assert!(!other.exists());
+        }
+        assert!(!dest.exists());
+    }
+}
+
+#[tokio::test]
 async fn downloads_and_verifies_hash() {
     let (srv, addr) = start(LEN).await;
     let tmp = TempDir::new("plain");

@@ -40,6 +40,7 @@ fn build_state(app: &tauri::AppHandle) -> Result<state::AppState, Box<dyn std::e
         &settings,
         observer.clone(),
         observer.clone(),
+        observer.clone(),
         observer,
     )?)
 }

@@ -9,7 +9,7 @@
 use std::time::{Duration, SystemTime};
 
 use axum::body::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::{header, Method, Request, StatusCode};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
@@ -22,6 +22,7 @@ use crate::error::ApiError;
 use crate::rfc3339;
 
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_PANEL_BYTES: usize = 1024 * 1024;
 /// Panel inbounds every client gets: 1 = Hysteria2, 2 = VLESS Reality.
 const INBOUNDS: [u32; 2] = [1, 2];
 /// s-ui `timeLocation` is Europe/Moscow (UTC+3, no DST); `globalReset` = `0 0 1 * *`.
@@ -48,19 +49,15 @@ impl std::fmt::Debug for VpnConfig {
 }
 
 /// Client summary from `GET clients`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct PanelClient {
     id: u64,
-    #[serde(default)]
     enable: bool,
     name: String,
     #[serde(default)]
     remark: String,
-    #[serde(default)]
     volume: u64,
-    #[serde(default)]
     up: u64,
-    #[serde(default)]
     down: u64,
 }
 
@@ -68,8 +65,6 @@ struct PanelClient {
 struct Envelope {
     #[serde(default)]
     success: bool,
-    #[serde(default)]
-    msg: String,
     #[serde(default)]
     obj: Value,
 }
@@ -79,6 +74,8 @@ pub struct VpnService {
     client: Client<HttpConnector, Full<Bytes>>,
     /// Serializes provisioning so concurrent POSTs never create duplicate clients.
     provision: tokio::sync::Mutex<()>,
+    /// Bounds active requests and queued provisioning work on the small hub host.
+    requests: tokio::sync::Semaphore,
 }
 
 fn unavailable(message: &str) -> ApiError {
@@ -99,6 +96,7 @@ impl VpnService {
             cfg,
             client: Client::builder(TokioExecutor::new()).build_http(),
             provision: tokio::sync::Mutex::new(()),
+            requests: tokio::sync::Semaphore::new(2),
         }
     }
 
@@ -121,7 +119,10 @@ impl VpnService {
         let fut = async {
             let res = self.client.request(req).await?;
             let status = res.status();
-            let bytes = res.into_body().collect().await?.to_bytes();
+            let bytes = Limited::new(res.into_body(), MAX_PANEL_BYTES)
+                .collect()
+                .await?
+                .to_bytes();
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>((status, bytes))
         };
         let (status, bytes) = match tokio::time::timeout(UPSTREAM_TIMEOUT, fut).await {
@@ -135,24 +136,37 @@ impl VpnService {
         let env: Envelope = serde_json::from_slice(&bytes)
             .map_err(|_| unavailable("vpn backend returned invalid JSON"))?;
         if !env.success {
-            return Err(unavailable("vpn backend rejected the request").detail("msg", env.msg));
+            // Panel messages may contain the submitted client configuration or credentials.
+            return Err(unavailable("vpn backend rejected the request"));
         }
         Ok(env.obj)
     }
 
     async fn find(&self, key: &str) -> Result<Option<PanelClient>, ApiError> {
         let obj = self.call(Method::GET, "clients", None).await?;
-        let list = obj.get("clients").cloned().unwrap_or(Value::Null);
-        let list: Vec<PanelClient> = if list.is_null() {
-            Vec::new()
-        } else {
-            serde_json::from_value(list)
-                .map_err(|_| unavailable("vpn backend returned unexpected clients"))?
-        };
-        Ok(list
-            .into_iter()
-            .filter(|c| c.remark == key)
-            .min_by_key(|c| c.id))
+        let list = obj
+            .get("clients")
+            .filter(|list| list.is_array())
+            .ok_or_else(|| unavailable("vpn backend returned unexpected clients"))?;
+        let list: Vec<PanelClient> = serde_json::from_value(list.clone())
+            .map_err(|_| unavailable("vpn backend returned unexpected clients"))?;
+        let mut matches = list.into_iter().filter(|c| c.remark == key);
+        let found = matches.next();
+        if matches.next().is_some() {
+            return Err(unavailable("vpn backend returned ambiguous clients"));
+        }
+        if found.as_ref().is_some_and(|c| {
+            c.id == 0
+                || c.name.is_empty()
+                || c.name.len() > 128
+                || !c
+                    .name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        }) {
+            return Err(unavailable("vpn backend returned an invalid subscription"));
+        }
+        Ok(found)
     }
 
     async fn create(&self, key: &str) -> Result<(), ApiError> {
@@ -196,6 +210,10 @@ impl VpnService {
 
     /// The `VpnAccess` of `key`, `None` if no client exists.
     pub async fn get(&self, key: &str) -> Result<Option<Value>, ApiError> {
+        let _permit = self
+            .requests
+            .try_acquire()
+            .map_err(|_| unavailable("vpn backend busy"))?;
         Ok(self
             .find(key)
             .await?
@@ -204,6 +222,10 @@ impl VpnService {
 
     /// Idempotent: returns the existing client's access or creates one.
     pub async fn provision(&self, key: &str) -> Result<Value, ApiError> {
+        let _permit = self
+            .requests
+            .try_acquire()
+            .map_err(|_| unavailable("vpn backend busy"))?;
         let _guard = self.provision.lock().await;
         if let Some(c) = self.find(key).await? {
             return Ok(self.access(&c, SystemTime::now()));
@@ -232,5 +254,23 @@ mod tests {
             Some("mc-0000000000000000000000000000000b")
         );
         assert_eq!(client_key("token:abcdef"), None);
+    }
+
+    #[tokio::test]
+    async fn request_and_provision_waiters_have_a_global_bound() {
+        let service = VpnService::new(VpnConfig {
+            api_url: "http://127.0.0.1:1".into(),
+            api_token: "secret".into(),
+            sub_base: "https://example.test/sub".into(),
+            quota_bytes: 1,
+        });
+        let _permits = service.requests.acquire_many(2).await.unwrap();
+        for err in [
+            service.get("mc-test").await.unwrap_err(),
+            service.provision("mc-test").await.unwrap_err(),
+        ] {
+            assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(err.message, "vpn backend busy");
+        }
     }
 }

@@ -1,6 +1,7 @@
 {
   "name": "launcher-workspace",
   "private": true,
+  "packageManager": "pnpm@12.14.0",
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter desktop tauri dev",

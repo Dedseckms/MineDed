@@ -18,11 +18,11 @@ c mineded.dedseckms.ru /README.md
 curl -skI $(R mineup.dedseckms.ru) "https://mineup.dedseckms.ru/a?b=1" | grep -iE '^(HTTP|location)' | tr -d '\r'
 curl -sk $(R relay.dedseckms.ru) "https://relay.dedseckms.ru/updates/status.json"; echo
 # Open room: create (anonymous) then delete with hostToken.
-body='{"authMode":"open","endpointId":"'$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')'"}'
+body='{"authMode":"open","kind":"voice","endpointId":"'$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')'"}'
 resp=$(curl -sk $(R relay.dedseckms.ru) -H 'Content-Type: application/json' -d "$body" \
   -w '\n%{http_code}' https://relay.dedseckms.ru/api/v1/rooms)
 code=$(echo "$resp" | tail -1); json=$(echo "$resp" | head -n -1)
-echo "create room: $code $(echo "$json" | head -c 160)"
+echo "create room: $code"
 if [ "$code" = 201 ]; then
   id=$(echo "$json" | sed -n 's/.*"roomId":"\([^"]*\)".*/\1/p')
   tok=$(echo "$json" | sed -n 's/.*"hostToken":"\([^"]*\)".*/\1/p')

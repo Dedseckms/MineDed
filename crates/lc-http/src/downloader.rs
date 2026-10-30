@@ -48,6 +48,7 @@ const UNREACHABLE_TTL: Duration = Duration::from_secs(10 * 60);
 /// Cheap to share behind `Arc`; all methods take `&self`.
 pub struct HttpDownloader {
     cfg: DownloaderConfig,
+    follow_redirects: bool,
     /// Never uses a proxy (system/env proxies ignored too).
     direct: reqwest::Client,
     /// Clients that depend on the effective proxy; rebuilt whenever a proxy
@@ -124,7 +125,17 @@ impl std::fmt::Debug for HttpDownloader {
 impl HttpDownloader {
     /// Builds the downloader. Fails with `InvalidInput` when the initial
     /// proxy is malformed, or `Internal` if the HTTP stack cannot start.
-    pub fn new(mut cfg: DownloaderConfig) -> AppResult<Self> {
+    pub fn new(cfg: DownloaderConfig) -> AppResult<Self> {
+        Self::with_redirects(cfg, true)
+    }
+
+    /// Builds a downloader whose clients return redirects without following them.
+    /// Use this for requests carrying credentials in custom headers.
+    pub fn new_no_redirects(cfg: DownloaderConfig) -> AppResult<Self> {
+        Self::with_redirects(cfg, false)
+    }
+
+    fn with_redirects(mut cfg: DownloaderConfig, follow_redirects: bool) -> AppResult<Self> {
         cfg.max_parallel = cfg.max_parallel.max(1);
         cfg.max_per_host = cfg.max_per_host.clamp(1, cfg.max_parallel);
         cfg.attempts_per_url = cfg.attempts_per_url.max(1);
@@ -146,14 +157,14 @@ impl HttpDownloader {
             system_checked,
         };
         let memory = Arc::new(HostMemory::new(cfg.proxy_first_ttl));
-        let direct = build_client(&cfg, None)?;
-        let routed = match build_routed(&cfg, &sources, &memory, &direct) {
+        let direct = build_client(&cfg, None, follow_redirects)?;
+        let routed = match build_routed(&cfg, &sources, &memory, &direct, follow_redirects) {
             Ok(r) => r,
             // A broken OS proxy must not prevent startup.
             Err(_) if sources.manual.is_none() => {
                 tracing::warn!("system proxy rejected; ignoring it");
                 sources.system = None;
-                build_routed(&cfg, &sources, &memory, &direct)?
+                build_routed(&cfg, &sources, &memory, &direct, follow_redirects)?
             }
             Err(e) => return Err(e),
         };
@@ -163,6 +174,7 @@ impl HttpDownloader {
                 reqwest::Proxy::all(UNCONFIGURED_PROXY)
                     .map_err(|e| AppError::internal(format!("cannot build proxy: {e}")))?,
             ),
+            follow_redirects,
         )?;
         Ok(Self {
             prefer_mirrors: AtomicBool::new(cfg.prefer_mirrors),
@@ -177,6 +189,7 @@ impl HttpDownloader {
             unreachable: HostMemory::new(UNREACHABLE_TTL),
             unconfigured,
             cfg,
+            follow_redirects,
         })
     }
 
@@ -264,7 +277,13 @@ impl HttpDownloader {
     /// Rebuilds the proxy-dependent clients from `s`. On failure (malformed
     /// proxy) logs and keeps the previous clients; returns whether it applied.
     fn apply(&self, s: &Sources) -> bool {
-        match build_routed(&self.cfg, s, &self.memory, &self.direct) {
+        match build_routed(
+            &self.cfg,
+            s,
+            &self.memory,
+            &self.direct,
+            self.follow_redirects,
+        ) {
             Ok(routed) => {
                 *self.routed.write().unwrap_or_else(PoisonError::into_inner) = routed;
                 match effective(s) {
@@ -573,9 +592,16 @@ impl HttpDownloader {
         let sniff = req.sha1.is_none() && route::expects_data(req.kind);
         let fatal_io = |e: std::io::Error| AttemptError::fatal(errors::io_err(e, part));
 
-        let mut part_len = match tokio::fs::metadata(part).await {
-            Ok(m) if m.is_file() => m.len(),
-            _ => 0,
+        let mut part_len = match tokio::fs::symlink_metadata(part).await {
+            Ok(m) if is_regular_part(&m) => m.len(),
+            Ok(_) => {
+                return Err(fatal_io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "download staging path is not a regular file",
+                )))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => return Err(fatal_io(e)),
         };
         if part_len > 0 && req.sha1.is_none() {
             // Without a hash the old bytes cannot be verified: never resume blindly.
@@ -624,12 +650,15 @@ impl HttpDownloader {
                         .detail("url", url.as_str()),
                 ));
             }
+            // Resume into a private inode: an imported .part may be a hardlink.
+            let file = resume_part(part, cancel).await.map_err(|e| {
+                if cancel.is_cancelled() {
+                    AttemptError::fatal(errors::cancelled())
+                } else {
+                    fatal_io(e)
+                }
+            })?;
             let hasher = hash_prefix(part).await?;
-            let file = tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(part)
-                .await
-                .map_err(fatal_io)?;
             counted.store(part_len, Ordering::Relaxed);
             prog.reused(part_len);
             (hasher, file)
@@ -639,7 +668,18 @@ impl HttpDownloader {
             }
             // 200 (server ignored Range or no part): start from scratch.
             part_len = 0;
-            let file = tokio::fs::File::create(part).await.map_err(fatal_io)?;
+            // Unlink any prior file before creation; never truncate through a link.
+            match tokio::fs::remove_file(part).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(fatal_io(e)),
+            }
+            let file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(part)
+                .await
+                .map_err(fatal_io)?;
             (Sha1::new(), file)
         } else if status == StatusCode::RANGE_NOT_SATISFIABLE {
             remove_quiet(part).await;
@@ -862,11 +902,15 @@ impl Downloader for HttpDownloader {
 fn build_client(
     cfg: &DownloaderConfig,
     proxy: Option<reqwest::Proxy>,
+    follow_redirects: bool,
 ) -> AppResult<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .user_agent(cfg.user_agent.clone())
         .connect_timeout(cfg.connect_timeout)
         .read_timeout(cfg.read_timeout);
+    if !follow_redirects {
+        b = b.redirect(reqwest::redirect::Policy::none());
+    }
     b = match proxy {
         Some(p) => b.proxy(p),
         // `None` means direct: reqwest must not pick up HTTP(S)_PROXY or the
@@ -896,6 +940,7 @@ fn build_routed(
     s: &Sources,
     memory: &Arc<HostMemory>,
     direct: &reqwest::Client,
+    follow_redirects: bool,
 ) -> AppResult<Routed> {
     let (target, system) = if let Some(u) = &s.vpn {
         (url_target(u)?, None)
@@ -926,8 +971,12 @@ fn build_routed(
         use_proxy.then(|| url.clone())
     });
     Ok(Routed {
-        proxy: Some(build_client(cfg, Some(target.apply(proxy)))?),
-        auto: build_client(cfg, Some(target.apply(auto)))?,
+        proxy: Some(build_client(
+            cfg,
+            Some(target.apply(proxy)),
+            follow_redirects,
+        )?),
+        auto: build_client(cfg, Some(target.apply(auto)), follow_redirects)?,
         system,
     })
 }
@@ -1046,6 +1095,60 @@ fn part_path(dest: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+fn is_regular_part(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return false;
+        }
+    }
+    meta.file_type().is_file()
+}
+
+/// Detach resumed data from pre-existing hardlinks before writing to it.
+async fn resume_part(part: &Path, cancel: &CancelToken) -> std::io::Result<tokio::fs::File> {
+    let mut source = tokio::fs::File::open(part).await?;
+    // Only read the existing file; all writes go to an exclusively created inode.
+    let mut name = part.as_os_str().to_owned();
+    name.push(format!(".{}.tmp", lc_types::TaskId::new().0));
+    let temp = PathBuf::from(name);
+    // Create and arm cleanup in the same poll, before any cancellation point.
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    // Also clean up if a sibling download fails and drops this future.
+    let mut cleanup = PartCopyCleanup(Some(temp));
+    let mut file = tokio::fs::File::from_std(file);
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "download cancelled"));
+        }
+        copied = tokio::io::copy(&mut source, &mut file) => { copied?; }
+    }
+    file.flush().await?;
+    // `temp` is kept until the rename completes, including cancellation by drop.
+    if let Some(temp) = cleanup.0.as_ref() {
+        tokio::fs::rename(temp, part).await?;
+    }
+    cleanup.0 = None;
+    Ok(file)
+}
+
+struct PartCopyCleanup(Option<PathBuf>);
+
+impl Drop for PartCopyCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.as_ref() {
+            // Open staging handles permit deletion on Windows as well as Unix.
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 async fn remove_quiet(path: &Path) {
     let _ = tokio::fs::remove_file(path).await;
 }
@@ -1119,6 +1222,21 @@ async fn verified_len(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_resume_copy_preserves_original_and_removes_temp() {
+        let dir = std::env::temp_dir().join(format!("lc-http-copy-{}", lc_types::TaskId::new().0));
+        std::fs::create_dir(&dir).unwrap();
+        let part = dir.join("download.part");
+        std::fs::write(&part, b"original partial data").unwrap();
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        let err = resume_part(&part, &cancel).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
+        assert_eq!(std::fs::read(&part).unwrap(), b"original partial data");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn no_sys() -> DownloaderConfig {
         DownloaderConfig {

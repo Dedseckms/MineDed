@@ -39,7 +39,8 @@
 |---|---|
 | ![Сборки](site/screenshots/instances-ru.webp) | ![Каталог модов](site/screenshots/catalog-ru.webp) |
 | ![Каталог сборок](site/screenshots/modpacks-ru.webp) | ![Скины в 3D](site/screenshots/skins-ru.webp) |
-| ![Комната, голос и чат](site/screenshots/multiplayer-ru.webp) | ![VPN](site/screenshots/vpn-ru.webp) |
+| ![Комната, голос и чат](site/screenshots/multiplayer-ru.webp) | ![Внешний вид](site/screenshots/settings-ru.webp) |
+
 ## Установка
 
 Скачайте установщик из [Releases](https://github.com/Dedseckms/MineDed/releases/latest):

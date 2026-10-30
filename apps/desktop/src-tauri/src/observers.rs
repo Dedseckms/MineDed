@@ -26,6 +26,12 @@ impl EventObserver {
 }
 
 // Emission failures mean no window is listening; nothing to recover.
+impl lc_chat::SocialObserver for EventObserver {
+    fn on_event(&self, event: lc_types::social::SocialEvent) {
+        let _ = crate::events::SocialChangedEvent(event).emit(&self.app);
+    }
+}
+
 impl GameObserver for EventObserver {
     fn on_state(&self, payload: InstanceStatePayload) {
         let _ = InstanceStateEvent(payload).emit(&self.app);

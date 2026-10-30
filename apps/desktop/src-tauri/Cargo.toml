@@ -24,6 +24,7 @@ lc-accounts.workspace = true
 lc-vpn.workspace = true
 lc-p2p.workspace = true
 lc-voice.workspace = true
+lc-chat.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -46,7 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-version = "0.1"
+windows-version = "0.100"
 
 [lints]
 workspace = true

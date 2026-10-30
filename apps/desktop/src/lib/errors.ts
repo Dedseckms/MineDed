@@ -37,6 +37,7 @@ const TASK_KIND_MAP = {
   accountLogin: true,
   vpnUpdate: true,
   appUpdate: true,
+  chatTransfer: true,
 } satisfies Record<TaskKind, true>;
 
 export const TASK_KINDS = Object.keys(TASK_KIND_MAP) as TaskKind[];
@@ -67,6 +68,7 @@ export const KNOWN_REASONS = [
   "relayUnreachable",
   "rateLimited",
   "curseforgeDisabled",
+  "packRoomBusy",
   "vpnUnavailable",
   "uacDeclined",
   "helperFailed",

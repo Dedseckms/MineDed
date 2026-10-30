@@ -90,6 +90,10 @@ impl SkinService for StubSkins {
         Ok(Vec::new())
     }
 
+    async fn add_cape(&self, _source: &str) -> AppResult<Cape> {
+        Err(AppError::not_implemented("SkinService::add_cape"))
+    }
+
     async fn set_cape(&self, _account: AccountId, _cape_id: Option<String>) -> AppResult<()> {
         Err(AppError::not_implemented("SkinService::set_cape"))
     }

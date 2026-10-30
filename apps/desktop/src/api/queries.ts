@@ -375,6 +375,15 @@ export const useCapes = (account: AccountId | null) =>
     enabled: account !== null,
   });
 
+/** Imports to the local cape library; applying remains a separate action. */
+export function useAddCape() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (source: string) => unwrap(await api.capeAdd(source)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["capes"] }),
+  });
+}
+
 export function useSetCape() {
   const qc = useQueryClient();
   return useMutation({

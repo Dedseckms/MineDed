@@ -34,6 +34,9 @@ pub trait RoomService: Send + Sync {
     /// server: no game tunnel, no instance check. Auth follows the account
     /// (Yggdrasil bearer if available, else anonymous like open rooms).
     async fn create_voice(&self, password: Option<String>) -> AppResult<RoomState>;
+    /// Reuses the hosted game room for this exact instance, or creates a new
+    /// Yggdrasil room before LAN is open. Never replaces another active room.
+    async fn share_pack(&self, instance: InstanceId) -> AppResult<RoomState>;
     async fn leave(&self) -> AppResult<()>;
     /// Guest of a game room: asks the host for its instance as `.mrpack`
     /// (exported by the host on request and sent over P2P; Modrinth files as

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import "../../i18n";
@@ -54,10 +54,16 @@ describe("modpack catalog (mocks)", () => {
     expect(useNavStore.getState().openInstance).toMatch(/^inst-fabulously-optimized/);
   }, 15000);
 
-  it("is Modrinth only: no source toggle, no CurseForge", async () => {
+  it("switches provider, previews versions and installs the actual CurseForge pack", async () => {
     await openCatalog();
     await screen.findByRole("list", { name: "Modpack catalog" });
-    expect(screen.queryByRole("radio", { name: "CurseForge" })).toBeNull();
-    expect(screen.queryByRole("radio", { name: "Modrinth" })).toBeNull();
-  });
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "curseForge" } });
+    const title = await screen.findByRole("button", { name: "Better MC (CurseForge)" });
+    expect(useModpackStore.getState().source).toBe("curseForge");
+    fireEvent.click(title);
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findAllByRole("button", { name: /^Install version/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install latest" }));
+    await waitFor(() => expect(useNavStore.getState().openInstance).toMatch(/^inst-better-mc-curseforge/), { timeout: 8000 });
+  }, 15000);
 });

@@ -8,7 +8,7 @@ use lc_types::content::{ContentKind, ContentSourceKind};
 use lc_types::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
-use crate::util::io_err;
+use crate::util::{ensure_no_links, io_err};
 
 pub(crate) const INDEX_FILE: &str = "content-index.json";
 
@@ -56,6 +56,7 @@ impl ContentIndex {
 
     pub async fn load(instance_dir: &Path) -> AppResult<Self> {
         let p = Self::path(instance_dir);
+        ensure_no_links(&p)?;
         match tokio::fs::read(&p).await {
             Ok(b) => Ok(serde_json::from_slice(&b).unwrap_or_default()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -65,12 +66,14 @@ impl ContentIndex {
 
     pub async fn save(&self, instance_dir: &Path) -> AppResult<()> {
         let p = Self::path(instance_dir);
+        ensure_no_links(&p)?;
         tokio::fs::create_dir_all(instance_dir)
             .await
             .map_err(|e| io_err(instance_dir, e))?;
         let bytes = serde_json::to_vec_pretty(self)
             .map_err(|e| AppError::internal(format!("json encode: {e}")))?;
         let tmp = p.with_extension("json.tmp");
+        ensure_no_links(&tmp)?;
         tokio::fs::write(&tmp, bytes)
             .await
             .map_err(|e| io_err(&tmp, e))?;

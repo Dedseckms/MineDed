@@ -12,6 +12,7 @@ pub mod ids;
 pub mod instance;
 pub mod java;
 pub mod room;
+pub mod secret;
 pub mod settings;
 pub mod skin;
 pub mod social;
@@ -23,3 +24,4 @@ pub mod vpn;
 
 pub use error::{AppError, AppResult, ErrorCode};
 pub use ids::{AccountId, InstanceId, RoomId, SkinId, TaskId};
+pub use secret::Secret;

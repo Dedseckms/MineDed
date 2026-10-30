@@ -7,7 +7,9 @@ use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 
 use crate::index::{key, ContentIndex, IndexEntry};
 use crate::service::Inner;
-use crate::util::{check_file_name, file_hashes_blocking, io_err, join, kind_dir};
+use crate::util::{
+    check_file_name, ensure_no_links, file_hashes_blocking, io_err, is_link, join, kind_dir,
+};
 
 /// A validated source: path, bare name, folder or file.
 #[derive(Debug)]
@@ -72,6 +74,7 @@ fn validate(path: &str, kind: ContentKind) -> AppResult<Item> {
 
 fn remove_any(p: &Path) -> AppResult<()> {
     match std::fs::symlink_metadata(p) {
+        Ok(m) if is_link(&m) && m.is_dir() => std::fs::remove_dir(p).map_err(|e| io_err(p, e)),
         Ok(m) if m.is_dir() => std::fs::remove_dir_all(p).map_err(|e| io_err(p, e)),
         Ok(_) => std::fs::remove_file(p).map_err(|e| io_err(p, e)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -89,7 +92,11 @@ fn copy_tree(src: &Path, dst: &Path) -> AppResult<()> {
             let e = e.map_err(|e| io_err(&from_dir, e))?;
             let from = e.path();
             let to = to_dir.join(e.file_name());
-            let ft = e.file_type().map_err(|err| io_err(&from, err))?;
+            let meta = std::fs::symlink_metadata(&from).map_err(|err| io_err(&from, err))?;
+            if is_link(&meta) {
+                continue;
+            }
+            let ft = meta.file_type();
             if ft.is_dir() {
                 stack.push((from, to));
             } else if ft.is_file() {
@@ -103,6 +110,7 @@ fn copy_tree(src: &Path, dst: &Path) -> AppResult<()> {
 /// Copies `item` into `dest_dir` through a hidden temp name, then swaps it in
 /// (replacing an enabled or disabled copy with the same name).
 fn install_item(item: &Item, dest_dir: &Path) -> AppResult<()> {
+    ensure_no_links(dest_dir)?;
     std::fs::create_dir_all(dest_dir).map_err(|e| io_err(dest_dir, e))?;
     let dest = dest_dir.join(&item.name);
     let disabled = dest_dir.join(format!("{}.disabled", item.name));
@@ -258,5 +266,29 @@ mod tests {
         };
         assert!(install_item(&it, &root).is_err());
         assert!(!root.join("resourcepacks").exists());
+    }
+
+    #[test]
+    fn local_pack_copy_skips_redirected_subfolders() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "private").unwrap();
+        let src = dir.path().join("source");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("pack.mcmeta"), "{}").unwrap();
+        crate::util::link_dir(outside.path(), &src.join("assets"));
+        let item = Item {
+            src,
+            name: "pack".into(),
+            is_dir: true,
+        };
+        let dest = dir.path().join("resourcepacks");
+        install_item(&item, &dest).unwrap();
+        assert!(dest.join("pack/pack.mcmeta").exists());
+        assert!(!dest.join("pack/assets").exists());
+
+        crate::util::link_dir(outside.path(), &dir.path().join("redirected"));
+        assert!(install_item(&item, &dir.path().join("redirected")).is_err());
+        assert!(!outside.path().join("pack").exists());
     }
 }

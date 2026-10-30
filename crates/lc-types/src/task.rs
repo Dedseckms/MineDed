@@ -18,6 +18,7 @@ pub enum TaskKind {
     AccountLogin,
     VpnUpdate,
     AppUpdate,
+    ChatTransfer,
 }
 
 /// Streamed through `tauri::ipc::Channel<TaskEvent>` for every long operation.

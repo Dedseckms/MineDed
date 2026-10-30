@@ -8,25 +8,7 @@ use lc_types::skin::{Cape, RemoteSkin, Skin, SkinModel};
 use lc_types::{AccountId, AppResult, SkinId};
 use url::Url;
 
-/// String that never shows up in `Debug` output or logs.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Secret(String);
-
-impl Secret {
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for Secret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Secret(***)")
-    }
-}
+pub use lc_types::Secret;
 
 /// `--userType` game argument. Microsoft accounts are out of scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +93,12 @@ pub trait SkinService: Send + Sync {
     async fn remove(&self, id: SkinId) -> AppResult<()>;
     /// Uploads to the account's server (own Yggdrasil / Mojang) and selects it.
     async fn apply(&self, account: AccountId, skin: SkinId) -> AppResult<()>;
+    /// Imports a cape PNG from a local file or HTTPS URL into the local library.
+    /// Fully validates a 64x32 image, limits input to 1 MiB, and returns a local
+    /// preview. This does not upload or select it on an account.
+    async fn add_cape(&self, source: &str) -> AppResult<Cape>;
+    /// Local cape library and the account's current remote cape.
     async fn capes(&self, account: AccountId) -> AppResult<Vec<Cape>>;
+    /// Selects a validated local cape or the current remote cape; None removes it.
     async fn set_cape(&self, account: AccountId, cape_id: Option<String>) -> AppResult<()>;
 }

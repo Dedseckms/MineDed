@@ -423,20 +423,13 @@ impl MihomoVpn {
         if !status.is_success() {
             return Err(net(format!("HTTP {}", status.as_u16())));
         }
-        if resp
-            .content_length()
-            .is_some_and(|l| l > MAX_SUBSCRIPTION as u64)
-        {
-            return Err(net("subscription too large".into()));
-        }
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| net(e.without_url().to_string()))?;
-        if body.len() > MAX_SUBSCRIPTION {
-            return Err(net("subscription too large".into()));
-        }
-        Ok(body.to_vec())
+        crate::response::read_limited(
+            resp,
+            MAX_SUBSCRIPTION,
+            || net("subscription too large".into()),
+            |e| net(e.without_url().to_string()),
+        )
+        .await
     }
 }
 
@@ -1260,6 +1253,27 @@ mod tests {
 
     fn vpn(paths: &Paths) -> MihomoVpn {
         MihomoVpn::new(paths.clone(), Arc::new(StubDownloader))
+    }
+
+    #[tokio::test]
+    async fn rejects_chunked_subscription_before_body_finishes() {
+        let (url, server) = crate::response::tests::oversized_chunked(MAX_SUBSCRIPTION).await;
+        let v = vpn(&tmp("oversized-subscription"));
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            v.get_text(&url, Route::Direct, Duration::from_secs(20)),
+        )
+        .await;
+        server.abort();
+        let err = result
+            .expect("must reject without waiting for EOF")
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Network);
+        assert_eq!(
+            err.details.as_ref().unwrap()["reason"],
+            "subscription too large"
+        );
+        assert!(!format!("{err:?}").contains("secret-subscription"));
     }
 
     #[tokio::test]

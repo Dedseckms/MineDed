@@ -28,6 +28,34 @@ pub(crate) fn join<T>(r: Result<AppResult<T>, tokio::task::JoinError>) -> AppRes
     r.map_err(|e| AppError::internal(format!("blocking task failed: {e}")))?
 }
 
+/// Reject existing symlinks and Windows reparse points, including junctions.
+/// Concurrent replacement by another local process is outside this check.
+pub(crate) fn ensure_no_links(path: &Path) -> AppResult<()> {
+    for part in path.ancestors() {
+        match std::fs::symlink_metadata(part) {
+            Ok(meta) => {
+                #[cfg(windows)]
+                let reparse = {
+                    use std::os::windows::fs::MetadataExt;
+                    meta.file_attributes() & 0x400 != 0
+                };
+                #[cfg(not(windows))]
+                let reparse = false;
+                if meta.file_type().is_symlink() || reparse {
+                    return Err(AppError::new(
+                        ErrorCode::InvalidInput,
+                        "linked path is not allowed",
+                    )
+                    .detail("path", part.to_string_lossy()));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_err(part, e)),
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn sha1_hex(bytes: &[u8]) -> String {
     hex::encode(Sha1::digest(bytes))
 }
@@ -58,6 +86,26 @@ pub(crate) fn safe_join(root: &Path, rel: &str) -> AppResult<PathBuf> {
     }
     let mut out = root.to_path_buf();
     for part in rel.split('/').filter(|p| !p.is_empty() && *p != ".") {
+        // Windows aliases trailing dots/spaces and reserves device names.
+        let stem = part
+            .split('.')
+            .next()
+            .unwrap_or(part)
+            .trim_end()
+            .to_ascii_uppercase();
+        if part.ends_with(['.', ' '])
+            || part.contains([':', '\0', '<', '>', '"', '|', '?', '*'])
+            || part.chars().any(char::is_control)
+            || matches!(
+                stem.as_str(),
+                "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+            )
+            || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+                && stem.len() == 4
+                && stem.as_bytes()[3].is_ascii_digit())
+        {
+            return Err(bad());
+        }
         let comp = Path::new(part);
         let mut comps = comp.components();
         match (comps.next(), comps.next()) {
@@ -68,10 +116,12 @@ pub(crate) fn safe_join(root: &Path, rel: &str) -> AppResult<PathBuf> {
     if out == root {
         return Err(bad());
     }
+    ensure_no_links(&out)?;
     Ok(out)
 }
 
 pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
+    ensure_no_links(path)?;
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -80,6 +130,7 @@ pub(crate) async fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
+    ensure_no_links(&tmp)?;
     tokio::fs::write(&tmp, bytes)
         .await
         .map_err(|e| io_err(&tmp, e))?;
@@ -231,5 +282,32 @@ mod tests {
         assert!(safe_join(root, "a/../../x").is_err());
         assert!(safe_join(root, "C:/x").is_err());
         assert!(safe_join(root, "").is_err());
+        assert!(safe_join(root, "a/.. /x").is_err());
+        assert!(safe_join(root, "a/NUL.jar").is_err());
+        assert!(safe_join(root, "a/file:stream").is_err());
+    }
+
+    #[tokio::test]
+    async fn refuses_redirected_libraries_and_temporary_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let redirected = dir.path().join("redirected");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), &redirected).unwrap();
+        #[cfg(windows)]
+        {
+            let result = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&redirected)
+                .arg(outside.path())
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{:?}", result);
+        }
+        assert!(safe_join(dir.path(), "redirected/new/library.jar").is_err());
+        assert!(write_atomic(&redirected.join("profile.json"), b"write")
+            .await
+            .is_err());
+        assert!(!outside.path().join("profile.json").exists());
     }
 }

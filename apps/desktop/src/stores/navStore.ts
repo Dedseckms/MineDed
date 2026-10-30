@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { AccountId, InstanceId } from "../bindings";
 
-export const SECTIONS = ["play", "instances", "multiplayer", "vpn", "skins", "accounts", "settings"] as const;
+export const SECTIONS = ["play", "instances", "multiplayer", "vpn", "chat", "skins", "accounts", "settings"] as const;
 export type Section = (typeof SECTIONS)[number];
 
 export const INSTANCE_TABS = ["mods", "resourcePacks", "shaders", "browse"] as const;

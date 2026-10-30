@@ -11,6 +11,7 @@ pub mod loaders;
 pub mod rooms;
 pub mod settings;
 pub mod skins;
+pub mod social;
 pub mod system;
 pub mod tasks;
 pub mod versions;

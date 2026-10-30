@@ -7,7 +7,7 @@ use lc_runtime::ProgressSink;
 use lc_types::social::{
     AdminServerState, ModAction, SocialAudience, SocialChannel, SocialChannelId, SocialContent,
     SocialEvent, SocialFriend, SocialHistory, SocialMessage, SocialPrivacy, SocialReport,
-    SocialRole, SocialUser, StorageTarget,
+    SocialRole, SocialStatus, SocialUser, StorageTarget,
 };
 use lc_types::{AccountId, AppResult};
 
@@ -23,6 +23,8 @@ pub trait ChatService: Send + Sync {
     /// reconnects until `disconnect`. Returns the caller's profile (with role).
     async fn connect(&self, account: AccountId) -> AppResult<SocialUser>;
     async fn disconnect(&self) -> AppResult<()>;
+    /// Announces the local activity; visibility is enforced by the hub.
+    async fn set_presence(&self, status: SocialStatus) -> AppResult<()>;
 
     /// Global chat first, then direct chats by last activity.
     async fn channels(&self) -> AppResult<Vec<SocialChannel>>;
@@ -57,6 +59,9 @@ pub trait ChatService: Send + Sync {
         dest: &str,
         sink: &dyn ProgressSink,
     ) -> AppResult<()>;
+
+    /// Fetches an authenticated, size-bounded WebP thumbnail as a data URL.
+    async fn attachment_preview(&self, attachment_id: &str) -> AppResult<String>;
 
     /// Opens (or returns) the direct chat with `uuid`; `PermissionDenied` when
     /// their privacy settings or a block forbid it.

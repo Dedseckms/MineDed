@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::social::{
     AdminServerState, ModAction, SocialChannel, SocialChannelId, SocialContent, SocialFriend,
-    SocialHistory, SocialMessage, SocialPrivacy, SocialReport, SocialRole, SocialUser,
-    StorageTarget,
+    SocialHistory, SocialMessage, SocialPrivacy, SocialReport, SocialRole, SocialStatus,
+    SocialUser, StorageTarget,
 };
 use lc_types::{AccountId, AppError, AppResult};
 
@@ -24,6 +24,9 @@ impl ChatService for StubChat {
     }
     async fn disconnect(&self) -> AppResult<()> {
         Ok(())
+    }
+    async fn set_presence(&self, _status: SocialStatus) -> AppResult<()> {
+        ni("ChatService::set_presence")
     }
     async fn channels(&self) -> AppResult<Vec<SocialChannel>> {
         Ok(Vec::new())
@@ -57,6 +60,10 @@ impl ChatService for StubChat {
     async fn delete_message(&self, _message_id: &str) -> AppResult<()> {
         ni("ChatService::delete_message")
     }
+    async fn attachment_preview(&self, _attachment_id: &str) -> AppResult<String> {
+        ni("ChatService::attachment_preview")
+    }
+
     async fn save_attachment(
         &self,
         _attachment_id: &str,

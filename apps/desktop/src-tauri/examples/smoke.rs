@@ -73,6 +73,10 @@ impl ProgressSink for PrintSink {
 
 struct NoRoomObs;
 
+impl lc_chat::SocialObserver for NoRoomObs {
+    fn on_event(&self, _: lc_types::social::SocialEvent) {}
+}
+
 impl lc_p2p::RoomObserver for NoRoomObs {
     fn on_state(&self, _state: Option<lc_types::room::RoomState>) {}
     fn on_peer(&self, _peer: lc_types::room::Peer, _joined: bool) {}
@@ -105,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store,
         &settings,
         obs.clone(),
+        Arc::new(NoRoomObs),
         Arc::new(NoRoomObs),
         Arc::new(NoRoomObs),
     )?;

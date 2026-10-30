@@ -17,6 +17,7 @@ use crate::error::ApiError;
 /// Room code alphabet: 32 symbols without 0/O/1/I. `byte & 31` is unbiased.
 const CODE_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const EVENTS_CAPACITY: usize = 64;
+const MAX_SOCKETS_PER_MEMBER: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -105,7 +106,7 @@ pub fn validate_endpoint_id(id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Peer {
     pub peer_id: Uuid,
     pub token: String,
@@ -175,7 +176,6 @@ fn token_exp(token: &str) -> Option<u64> {
     token.split_once('.')?.0.parse().ok()
 }
 
-#[derive(Debug)]
 pub struct Room {
     pub id: Uuid,
     pub code: String,
@@ -192,6 +192,12 @@ pub struct Room {
     pub host_sockets: usize,
     pub peers: Vec<Peer>,
     pub events: broadcast::Sender<Value>,
+}
+
+impl Room {
+    fn is_active(&self) -> bool {
+        self.deadline > Instant::now() || self.host_sockets > 0
+    }
 }
 
 /// Who a WS token belongs to.
@@ -351,11 +357,16 @@ impl RoomStore {
     pub fn auth_mode_by_code(&self, code: &str) -> Option<AuthMode> {
         let inner = self.lock();
         let id = inner.by_code.get(code)?;
-        inner.rooms.get(id).map(|r| r.auth_mode)
+        inner
+            .rooms
+            .get(id)
+            .filter(|r| r.is_active())
+            .map(|r| r.auth_mode)
     }
 
     /// Joins by code. Only live members count toward `maxPeers` (see [`Peer::is_live`]).
-    /// Re-joining with the same endpoint keeps the slot and issues a fresh token.
+    /// Only the same authenticated profile may rejoin an occupied endpoint;
+    /// anonymous callers must leave/disconnect or wait for the join grace to expire.
     /// `uuid` = [`profile_uuid`] of the caller (`-` for anonymous guests).
     pub fn join(
         &self,
@@ -397,9 +408,28 @@ impl RoomStore {
             .rooms
             .get_mut(&id)
             .ok_or_else(|| ApiError::not_found("room not found"))?;
-        // Stale guests (joined, never connected, grace over) free their slot.
-        room.peers
-            .retain(|p| p.is_live(now) || p.endpoint_id == endpoint_id);
+        if room.deadline <= now && room.host_sockets == 0 {
+            return Err(ApiError::not_found("room not found"));
+        }
+        if room.host.endpoint_id == endpoint_id {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "conflict",
+                "endpoint is the host",
+            ));
+        }
+        // A public endpoint id is not proof of ownership. Anonymous live slots
+        // cannot be replaced; authenticated rejoin must keep the same identity.
+        room.peers.retain(|p| p.is_live(now));
+        if let Some(peer) = room.peers.iter().find(|p| p.endpoint_id == endpoint_id) {
+            if uuid == "-" || peer.token.split('.').nth(1) != Some(uuid) {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "conflict",
+                    "endpoint already belongs to a room member",
+                ));
+            }
+        }
         let token = peer_token(
             &room.host.token,
             room.id,
@@ -409,6 +439,14 @@ impl RoomStore {
         );
         match room.peers.iter_mut().find(|p| p.endpoint_id == endpoint_id) {
             Some(p) => {
+                if p.token != token {
+                    // Old sockets retain their original peer id and lose access.
+                    let _ = room.events.send(json!({
+                        "t": "kick", "peerId": p.peer_id, "reason": "session replaced"
+                    }));
+                    p.peer_id = Uuid::new_v4();
+                    p.sockets = 0;
+                }
                 p.token = token.clone();
                 p.joined_at = now;
                 p.name = name;
@@ -478,13 +516,21 @@ impl RoomStore {
     pub fn member(&self, room_id: Uuid, token: &str) -> Option<Member> {
         let inner = self.lock();
         let room = inner.rooms.get(&room_id)?;
+        if !room.is_active() {
+            return None;
+        }
         let (p, is_host) = if room.host.token == token {
             (&room.host, true)
         } else {
-            if token_exp(token)? < unix_now() {
+            if token_exp(token)? <= unix_now() {
                 return None;
             }
-            (room.peers.iter().find(|p| p.token == token)?, false)
+            (
+                room.peers
+                    .iter()
+                    .find(|p| p.token == token && p.is_live(Instant::now()))?,
+                false,
+            )
         };
         Some(Member {
             peer_id: p.peer_id,
@@ -495,6 +541,27 @@ impl RoomStore {
         })
     }
 
+    /// Guest hub sockets cannot bypass a protected room's host-side password check.
+    /// The host retains signaling; admitted guests use the authenticated P2P path.
+    pub(crate) fn websocket_member(&self, room_id: Uuid, token: &str) -> Result<Member, ApiError> {
+        let member = self
+            .member(room_id, token)
+            .ok_or_else(ApiError::auth_expired)?;
+        let inner = self.lock();
+        let room = inner
+            .rooms
+            .get(&room_id)
+            .ok_or_else(ApiError::auth_expired)?;
+        if room.password_protected && !member.is_host {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "permissionDenied",
+                "protected room guests must use the host's authenticated P2P connection",
+            ));
+        }
+        Ok(member)
+    }
+
     /// Tracks a member's WS. Returns `false` if the member is gone (left/kicked/closed).
     /// When a guest's last socket closes, the guest leaves and its slot is freed.
     pub fn socket(&self, room_id: Uuid, peer_id: Uuid, is_host: bool, connected: bool) -> bool {
@@ -502,8 +569,17 @@ impl RoomStore {
         let Some(r) = inner.rooms.get_mut(&room_id) else {
             return false;
         };
+        if connected && !r.is_active() {
+            return false;
+        }
         if is_host {
+            if r.host.peer_id != peer_id {
+                return false;
+            }
             if connected {
+                if r.host_sockets >= MAX_SOCKETS_PER_MEMBER {
+                    return false;
+                }
                 r.host_sockets += 1;
             } else {
                 r.host_sockets = r.host_sockets.saturating_sub(1);
@@ -514,6 +590,12 @@ impl RoomStore {
             return false;
         };
         if connected {
+            if r.peers[i].sockets >= MAX_SOCKETS_PER_MEMBER
+                || !r.peers[i].is_live(Instant::now())
+                || token_exp(&r.peers[i].token).is_none_or(|exp| exp <= unix_now())
+            {
+                return false;
+            }
             r.peers[i].sockets += 1;
         } else {
             r.peers[i].sockets = r.peers[i].sockets.saturating_sub(1);
@@ -522,6 +604,18 @@ impl RoomStore {
             }
         }
         true
+    }
+
+    /// Checks current membership for an already open socket after kick/rejoin/close.
+    pub(crate) fn socket_authorized(&self, room_id: Uuid, peer_id: Uuid, is_host: bool) -> bool {
+        let inner = self.lock();
+        let Some(room) = inner.rooms.get(&room_id).filter(|r| r.is_active()) else {
+            return false;
+        };
+        if is_host {
+            return room.host.peer_id == peer_id;
+        }
+        room.peers.iter().any(|p| p.peer_id == peer_id)
     }
 
     /// Removes a guest (leave or host kick). Returns `true` if it was a member.
@@ -642,7 +736,13 @@ mod tests {
 
         // Re-join keeps the slot; a second guest does not fit (maxPeers=2 incl. host).
         s.join(&a.code, "g1".into(), "G".into(), "-").unwrap();
-        s.join(&a.code, "g1".into(), "G".into(), "-").unwrap();
+        assert_eq!(
+            s.join(&a.code, "g1".into(), "G".into(), "-")
+                .err()
+                .unwrap()
+                .status,
+            StatusCode::CONFLICT
+        );
         let full = s.join(&a.code, "g2".into(), "G".into(), "-").err().unwrap();
         assert_eq!(full.status, StatusCode::CONFLICT);
 
@@ -685,6 +785,12 @@ mod tests {
             peer_token(&a.host_token, a.room_id, "guest2", &uuid, exp)
         );
         // Anonymous guests carry `-`; the MAC covers the uuid segment.
+        let existing = s.member(a.room_id, &j.peer_token).unwrap();
+        assert!(s
+            .join(&a.code, "guest1".into(), "Impostor".into(), "-")
+            .is_err());
+        assert!(s.member(a.room_id, &j.peer_token).is_some());
+        assert!(s.remove_peer(a.room_id, existing.peer_id));
         let anon = s.join(&a.code, "guest1".into(), "G".into(), "-").unwrap();
         assert_eq!(anon.peer_token.split('.').nth(1), Some("-"));
         assert_ne!(
@@ -708,7 +814,10 @@ mod tests {
 
     #[test]
     fn only_live_members_count() {
-        let s = RoomStore::new(limits());
+        let s = RoomStore::new(Limits {
+            ttl: Duration::from_secs(120),
+            ..limits()
+        });
         let a = s.create(req(), &who("a")).unwrap(); // maxPeers 2 = host + 1 guest
         let t0 = Instant::now();
         let u = unix_now();
@@ -756,5 +865,119 @@ mod tests {
         assert!(s.close(a.room_id, None, Some(&a.host_token)).unwrap());
         assert_eq!(rx.try_recv().unwrap()["t"], "closed");
         assert!(!s.close(a.room_id, Some("a"), None).unwrap());
+    }
+
+    #[test]
+    fn duplicate_endpoint_cannot_replace_live_identity_or_capacity() {
+        let s = RoomStore::new(limits());
+        let a = s.create(req(), &who("a")).unwrap();
+        let j = s
+            .join(&a.code, "victim".into(), "Victim".into(), "-")
+            .unwrap();
+        let victim = s.member(a.room_id, &j.peer_token).unwrap();
+        assert!(s.socket(a.room_id, victim.peer_id, false, true));
+        assert!(s
+            .join(&a.code, "victim".into(), "Attacker".into(), "-")
+            .is_err());
+        assert_eq!(s.member(a.room_id, &j.peer_token).unwrap().name, "Victim");
+        assert_eq!(s.live_members(a.room_id), 2);
+        assert!(s
+            .join(&a.code, "other".into(), "Other".into(), "-")
+            .is_err());
+        assert!(s.socket(a.room_id, victim.peer_id, false, false));
+        let j = s
+            .join(
+                &a.code,
+                "victim".into(),
+                "Bob".into(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+            .unwrap();
+        assert!(s
+            .join(
+                &a.code,
+                "victim".into(),
+                "Alice".into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+            .is_err());
+        assert_eq!(s.member(a.room_id, &j.peer_token).unwrap().name, "Bob");
+        assert!(s
+            .join(
+                &a.code,
+                "victim".into(),
+                "Bob".into(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            )
+            .is_ok());
+        assert!(s
+            .join(&a.code, "abc123".into(), "Host".into(), "-")
+            .is_err());
+    }
+
+    #[test]
+    fn socket_count_is_bounded_and_removed_members_are_revoked() {
+        let s = RoomStore::new(limits());
+        let a = s.create(req(), &who("a")).unwrap();
+        let j = s.join(&a.code, "guest".into(), "G".into(), "-").unwrap();
+        for m in [
+            s.member(a.room_id, &a.host_token).unwrap(),
+            s.member(a.room_id, &j.peer_token).unwrap(),
+        ] {
+            assert!(s.socket(a.room_id, m.peer_id, m.is_host, true));
+            assert!(s.socket(a.room_id, m.peer_id, m.is_host, true));
+            assert!(!s.socket(a.room_id, m.peer_id, m.is_host, true));
+        }
+        let guest = s.member(a.room_id, &j.peer_token).unwrap();
+        assert!(s.remove_peer(a.room_id, guest.peer_id));
+        assert!(!s.socket_authorized(a.room_id, guest.peer_id, false));
+        assert!(!s.socket(a.room_id, guest.peer_id, false, true));
+    }
+
+    #[test]
+    fn expired_rooms_and_stale_join_tokens_do_not_need_reaper_to_deny_access() {
+        let s = RoomStore::new(Limits {
+            ttl: Duration::ZERO,
+            ..limits()
+        });
+        let a = s.create(req(), &who("a")).unwrap();
+        assert!(s.member(a.room_id, &a.host_token).is_none());
+        assert!(s.auth_mode_by_code(&a.code).is_none());
+        assert_eq!(
+            s.join(&a.code, "g".into(), "G".into(), "-")
+                .err()
+                .unwrap()
+                .status,
+            StatusCode::NOT_FOUND
+        );
+        let s = RoomStore::new(limits());
+        let a = s.create(req(), &who("a")).unwrap();
+        let old = Instant::now() - JOIN_GRACE - Duration::from_secs(1);
+        let j = s
+            .join_at(&a.code, "g".into(), "Old".into(), old, unix_now())
+            .unwrap();
+        assert!(s.member(a.room_id, &j.peer_token).is_none());
+        assert!(s.join(&a.code, "g".into(), "New".into(), "-").is_ok());
+    }
+
+    #[test]
+    fn authenticated_token_rotation_revokes_previous_socket_generation() {
+        let s = RoomStore::new(limits());
+        let a = s.create(req(), &who("a")).unwrap();
+        let uuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let now = Instant::now();
+        let unix = unix_now();
+        let first = s
+            .join_full(&a.code, "g".into(), "G".into(), uuid, now, unix)
+            .unwrap();
+        let old = s.member(a.room_id, &first.peer_token).unwrap();
+        assert!(s.socket(a.room_id, old.peer_id, false, true));
+        let new = s
+            .join_full(&a.code, "g".into(), "G".into(), uuid, now, unix + 1)
+            .unwrap();
+        assert!(s.member(a.room_id, &first.peer_token).is_none());
+        assert!(!s.socket_authorized(a.room_id, old.peer_id, false));
+        assert!(!s.socket(a.room_id, old.peer_id, false, true));
+        assert!(s.member(a.room_id, &new.peer_token).is_some());
     }
 }

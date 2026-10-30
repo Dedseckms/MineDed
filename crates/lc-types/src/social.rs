@@ -57,6 +57,9 @@ pub struct SocialUser {
     pub status: Option<SocialStatus>,
     pub role: SocialRole,
     pub is_friend: bool,
+    /// Whether the caller has blocked this player; never reveals reverse blocks.
+    #[serde(default)]
+    pub is_blocked: bool,
     /// The caller may open a direct chat with this player.
     pub can_message: bool,
     pub can_invite: bool,
@@ -80,6 +83,14 @@ pub enum SocialContent {
     },
     /// A modpack offered over P2P while the sender is online (direct chats only).
     PackShare {
+        /// Existing authenticated P2P room; absent on legacy metadata-only cards.
+        #[serde(default)]
+        #[specta(optional)]
+        code: Option<String>,
+        #[serde(default)]
+        #[specta(optional)]
+        #[serde(rename = "passwordProtected")]
+        password_protected: bool,
         name: String,
         mc: String,
         loader: String,

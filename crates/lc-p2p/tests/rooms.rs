@@ -1445,6 +1445,147 @@ fn env(token: Option<&'static str>, delay: Duration) -> Arc<dyn RoomEnv> {
     Arc::new(TestEnv { token, delay })
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn share_pack_reuses_only_exact_host_instance() {
+    let (hub_url, hub) = spawn_hub(vec![]).await;
+    let host = side_env(
+        &hub_url,
+        base_cfg(Arc::new(loopback_only), vec![]),
+        env(None, Duration::ZERO),
+    )
+    .await;
+    let instance = InstanceId::new();
+    let initial = host
+        .rooms
+        .create(instance, RoomAuthMode::Open, Some("private".into()))
+        .await
+        .unwrap();
+    let shared = host.rooms.share_pack(instance).await.unwrap();
+    assert_eq!(shared.room_id, initial.room_id);
+    assert_eq!(shared.auth_mode, RoomAuthMode::Open);
+    assert!(shared.password_protected);
+    assert_eq!(shared.world_open, Some(false));
+    assert_eq!(
+        host.rooms
+            .share_pack(InstanceId::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        host.rooms.state().await.unwrap().unwrap().room_id,
+        initial.room_id
+    );
+    assert!(!hub.lock().unwrap().closed);
+    host.rooms.leave().await.unwrap();
+
+    let voice = host.rooms.create_voice(None).await.unwrap();
+    assert_eq!(
+        host.rooms.share_pack(instance).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        host.rooms.state().await.unwrap().unwrap().room_id,
+        voice.room_id
+    );
+    host.rooms.leave().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn share_pack_preserves_guest_room() {
+    let (host, guest, hub, _lookup) = direct_pair(None).await;
+    let initial = guest.rooms.join("ABCD-1234", None, None).await.unwrap();
+    assert_eq!(
+        guest
+            .rooms
+            .share_pack(InstanceId::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    let state = guest.rooms.state().await.unwrap().unwrap();
+    assert_eq!(state.room_id, initial.room_id);
+    assert_eq!(state.role, RoomRole::Guest);
+    assert!(!hub.lock().unwrap().closed);
+    guest.rooms.leave().await.unwrap();
+    host.rooms.leave().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn share_pack_creates_yggdrasil_room_before_lan_only_with_account() {
+    let (hub_url, hub) = spawn_hub(vec![]).await;
+    let host = side_env(
+        &hub_url,
+        base_cfg(Arc::new(loopback_only), vec![]),
+        env(Some("ygg"), Duration::ZERO),
+    )
+    .await;
+    let instance = InstanceId::new();
+    let state = host.rooms.share_pack(instance).await.unwrap();
+    assert_eq!(state.kind, RoomKind::Game);
+    assert_eq!(state.role, RoomRole::Host);
+    assert_eq!(state.auth_mode, RoomAuthMode::Yggdrasil);
+    assert_eq!(state.world_open, Some(false));
+    assert!(!state.password_protected);
+    assert!(hub.lock().unwrap().create_had_bearer);
+    assert_eq!(
+        host.rooms.share_pack(instance).await.unwrap().room_id,
+        state.room_id
+    );
+    host.rooms.leave().await.unwrap();
+
+    let offline = side_env(
+        &hub_url,
+        base_cfg(Arc::new(loopback_only), vec![]),
+        env(None, Duration::ZERO),
+    )
+    .await;
+    let err = offline.rooms.share_pack(instance).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert_eq!(err.details.unwrap()["reason"], "authModeMismatch");
+    assert!(offline.rooms.state().await.unwrap().is_none());
+    assert!(hub.lock().unwrap().closed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn share_pack_serializes_with_room_creation() {
+    let (hub_url, hub) = spawn_hub(vec![]).await;
+    let host = side_env(
+        &hub_url,
+        base_cfg(Arc::new(loopback_only), vec![]),
+        env(Some("ygg"), Duration::from_millis(100)),
+    )
+    .await;
+    let instance = InstanceId::new();
+    let (shared, created) = tokio::join!(
+        host.rooms.share_pack(instance),
+        host.rooms.create_voice(None),
+    );
+    let shared = shared.unwrap();
+    assert_eq!(created.unwrap_err().code, ErrorCode::Conflict);
+    assert_eq!(
+        host.rooms.state().await.unwrap().unwrap().room_id,
+        shared.room_id
+    );
+    assert!(!hub.lock().unwrap().closed);
+    host.rooms.leave().await.unwrap();
+
+    let (created, shared) = tokio::join!(
+        host.rooms.create_voice(None),
+        host.rooms.share_pack(instance),
+    );
+    let created = created.unwrap();
+    assert_eq!(shared.unwrap_err().code, ErrorCode::Conflict);
+    assert_eq!(
+        host.rooms.state().await.unwrap().unwrap().room_id,
+        created.room_id
+    );
+    assert!(!hub.lock().unwrap().closed);
+    host.rooms.leave().await.unwrap();
+}
+
 /// Hub refuses a Yggdrasil bearer: the voice room still opens (open mode).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn voice_room_survives_rejected_bearer() {

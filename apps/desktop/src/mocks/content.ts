@@ -131,6 +131,12 @@ export const CATALOG: MockProject[] = [
   ...MR_SHADERS.map((r, i) => project("modrinth", "shader", r, i + 40)),
 ];
 
+// Numeric provider IDs exercise source-aware query and install paths.
+CATALOG.push(
+  project("curseForge", "mod", ["306612", "fabric-api", "Fabric API (CurseForge)", "modmuss50", 9000000, ["fabric"], "library", "Fabric libraries from CurseForge."], 100),
+  project("curseForge", "modpack", ["447315", "better-mc", "Better MC (CurseForge)", "LunaPixelStudios", 6000000, ["forge"], "adventure", "An adventure modpack from CurseForge."], 101),
+);
+
 export function findProject(source: ContentSourceKind, projectId: string): MockProject | undefined {
   return CATALOG.find((p) => p.source === source && p.projectId === projectId);
 }
@@ -207,7 +213,7 @@ export function projectVersions(p: MockProject): ContentVersion[] {
   mcs.forEach((mc, mi) => {
     for (let rev = 0; rev < 2; rev += 1) {
       const versionNumber = `${1 + (base % 3)}.${9 - mi}.${base + (1 - rev)}${p.kind === "mod" ? `+${mc}` : ""}`;
-      const versionId = `${p.projectId}-${mc}-${rev}`;
+      const versionId = p.source === "curseForge" ? String(5000000 + Number(p.projectId) * 20 + mi * 2 + rev) : `${p.projectId}-${mc}-${rev}`;
       const published = new Date(Date.parse(p.updated) - (mi * 40 + rev * 15) * 86_400_000).toISOString();
       out.push({
         source: p.source,

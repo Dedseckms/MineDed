@@ -1,6 +1,7 @@
 //! Service container. Swapping a stub for a real implementation happens only
 //! here (lead), so roles never touch each other's crates.
 
+use lc_chat::{ChatClient, ChatService, SocialObserver, StubChat};
 use std::sync::Arc;
 
 use lc_accounts::{
@@ -28,6 +29,7 @@ use lc_vpn::{MihomoVpn, StubVpn, VpnController};
 use crate::tasks::TaskRegistry;
 
 pub struct AppState {
+    pub social: Arc<dyn ChatService>,
     pub tasks: Arc<TaskRegistry>,
     pub settings: Arc<dyn SettingsStore>,
     pub downloader: Arc<dyn Downloader>,
@@ -65,6 +67,7 @@ impl AppState {
         observer: Arc<dyn GameObserver>,
         room_observer: Arc<dyn RoomObserver>,
         voice_observer: Arc<dyn VoiceObserver>,
+        social_observer: Arc<dyn SocialObserver>,
     ) -> AppResult<Self> {
         let voice = Arc::new(CpalVoiceEngine::new(&paths, voice_observer));
         let downloader: Arc<dyn Downloader> = Arc::new(HttpDownloader::new(
@@ -98,16 +101,28 @@ impl AppState {
             vec![mihomo.clone(), p2p.launch_contributor()],
         ));
         room_env.attach_instances(core.clone());
-        let content = Arc::new(ContentServices::new(
-            paths.clone(),
-            downloader.clone(),
-            core.clone(),
-            core.clone(),
-        ));
+        let content = Arc::new(
+            ContentServices::new(
+                paths.clone(),
+                downloader.clone(),
+                core.clone(),
+                core.clone(),
+            )
+            .with_hub_url(&initial.hub_url),
+        );
         room_env.attach_packs(content.clone(), paths.cache());
         let rooms = Arc::new(p2p);
+        let social = Arc::new(ChatClient::new(
+            paths,
+            downloader.clone(),
+            accounts.clone(),
+            accounts.clone(),
+            settings.clone(),
+            social_observer,
+        ));
 
         Ok(Self {
+            social,
             tasks: Arc::new(TaskRegistry::default()),
             settings,
             downloader,
@@ -149,6 +164,7 @@ impl AppState {
         }
 
         Self {
+            social: Arc::new(StubChat),
             tasks: Arc::new(TaskRegistry::default()),
             settings: Arc::new(MemorySettingsStore::default()),
             downloader: Arc::new(StubDownloader),

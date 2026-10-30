@@ -3,6 +3,7 @@
 
 mod api;
 pub mod contract;
+mod curseforge;
 mod index;
 mod local;
 mod localdeps;
@@ -20,6 +21,7 @@ mod tests;
 mod util;
 
 pub use contract::{ContentService, ContentSource, PackIo, PresetService};
+pub use curseforge::CurseForgeSource;
 pub use modrinth::ModrinthSource;
 pub use service::ContentServices;
 pub use stub::StubContent;

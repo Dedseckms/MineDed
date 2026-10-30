@@ -107,11 +107,8 @@ pub(crate) async fn fetch(
             )
         }
     }
-    let body = resp.bytes().await.map_err(net)?;
     let bad = || hub_err(ErrorCode::Network, "unexpected hub response");
-    if body.len() > MAX_BODY {
-        return Err(bad());
-    }
+    let body = crate::response::read_limited(resp, MAX_BODY, bad, net).await?;
     let w: Wire = serde_json::from_slice(&body).map_err(|_| bad())?;
     let ok = Url::parse(&w.subscription_url)
         .map(|u| matches!(u.scheme(), "http" | "https"))
@@ -203,6 +200,25 @@ pub(crate) mod tests {
             endpoint("ftp://x").unwrap_err().code,
             ErrorCode::InvalidInput
         );
+    }
+
+    #[tokio::test]
+    async fn rejects_chunked_access_before_body_finishes() {
+        let (url, server) = crate::response::tests::oversized_chunked(MAX_BODY).await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            fetch(&client, &url, "test-bearer", false),
+        )
+        .await;
+        server.abort();
+        let err = result
+            .expect("must reject without waiting for EOF")
+            .err()
+            .unwrap();
+        assert_eq!(err.code, ErrorCode::Network);
+        assert!(!format!("{err:?}").contains("secret-subscription"));
+        assert!(!format!("{err:?}").contains("test-bearer"));
     }
 
     #[tokio::test]
