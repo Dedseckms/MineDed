@@ -5,8 +5,8 @@ use std::hash::Hash;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Upper bound of tracked keys; on overflow the table is reset (fail-open for
-/// memory safety on a small host, the limiter refills from scratch).
+/// Upper bound of tracked keys. New keys fail closed while the table is full;
+/// existing buckets retain their limits until housekeeping frees idle entries.
 const MAX_KEYS: usize = 50_000;
 
 #[derive(Debug)]
@@ -43,7 +43,7 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
     fn check_at(&self, key: &K, now: Instant) -> Result<(), u64> {
         let mut map = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         if map.len() >= MAX_KEYS && !map.contains_key(key) {
-            map.clear();
+            return Err((self.burst / self.per_sec).ceil().max(1.0) as u64);
         }
         let entry = map.entry(key.clone()).or_insert((self.burst, now));
         let elapsed = now.saturating_duration_since(entry.1).as_secs_f64();
@@ -86,5 +86,18 @@ mod tests {
         assert!(rl
             .check_at(&1u8, t0 + Duration::from_millis(1_200))
             .is_err());
+    }
+
+    #[test]
+    fn key_overflow_does_not_reset_existing_limits() {
+        let rl = RateLimiter::per_minute(60, 1);
+        let t0 = Instant::now();
+        for key in 0..MAX_KEYS {
+            assert!(rl.check_at(&key, t0).is_ok());
+        }
+        assert!(rl.check_at(&MAX_KEYS, t0).is_err());
+        assert!(rl.check_at(&0, t0).is_err());
+        assert_eq!(rl.buckets.lock().unwrap().len(), MAX_KEYS);
+        assert!(rl.check_at(&0, t0 + Duration::from_secs(1)).is_ok());
     }
 }

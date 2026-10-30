@@ -26,6 +26,9 @@ import { SkinsScreen } from "../skins/SkinsScreen";
 import { VoiceHeaderToggle } from "../voice/VoicePanel";
 import { VpnScreen } from "../vpn/VpnScreen";
 import { UpdateBanner } from "../updates/UpdateBanner";
+import { ChatScreen } from "../social/ChatScreen";
+import { useSocialSync } from "../../hooks/useSocialSync";
+import { useSocialStore } from "../../stores/socialStore";
 import { TaskCenter } from "./TaskCenter";
 
 const ICONS: Record<Section, IconName> = {
@@ -33,6 +36,7 @@ const ICONS: Record<Section, IconName> = {
   instances: "layers",
   multiplayer: "users",
   vpn: "shield",
+  chat: "send",
   skins: "shirt",
   accounts: "user",
   settings: "settings",
@@ -43,6 +47,7 @@ const SCREENS: Record<Section, ComponentType> = {
   instances: InstancesScreen,
   multiplayer: MultiplayerScreen,
   vpn: VpnScreen,
+  chat: ChatScreen,
   skins: SkinsScreen,
   accounts: AccountsScreen,
   settings: SettingsScreen,
@@ -76,6 +81,7 @@ function Sidebar() {
   const section = useNavStore((s) => s.section);
   const go = useNavStore((s) => s.go);
   const version = useAppVersion();
+  const socialUnread = useSocialStore((s) => s.unread);
   const unread = useRoomStore((s) => s.unread);
   const { reduced } = useMotionPrefs();
   // Below `lg` (e.g. 1024px windows) the sidebar collapses to icons; labels stay for screen readers.
@@ -113,10 +119,10 @@ function Sidebar() {
                 <span className="relative flex items-center gap-3">
                   <Icon name={ICONS[s]} />
                   <span className="sr-only lg:not-sr-only">{t(`nav.${s}`)}</span>
-                  {s === "multiplayer" && unread > 0 && !active ? (
+                  {(s === "multiplayer" ? unread : s === "chat" ? socialUnread : 0) > 0 && !active ? (
                     <span className="absolute -top-1.5 left-3 lg:static">
                       <Badge tone="accent">
-                        <span aria-label={t("rooms.chat.unread", { n: unread })}>{unread > 99 ? "99+" : unread}</span>
+                        <span aria-label={t(s === "chat" ? "social.unreadBadge" : "rooms.chat.unread", { n: s === "chat" ? socialUnread : unread })}>{s === "chat" ? socialUnread : unread}</span>
                       </Badge>
                     </span>
                   ) : null}
@@ -166,6 +172,7 @@ export function AppShell() {
   const { t } = useTranslation();
   useApplyAppearance();
   useBackendSync();
+  useSocialSync();
   usePttSoundCue();
   useDeepLinks();
   const { reduced, light } = useMotionPrefs();

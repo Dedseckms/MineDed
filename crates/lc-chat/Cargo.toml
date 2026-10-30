@@ -8,9 +8,22 @@ license.workspace = true
 [dependencies]
 lc-types.workspace = true
 lc-runtime.workspace = true
+lc-http.workspace = true
+lc-accounts.workspace = true
 async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+reqwest = { workspace = true, features = ["multipart", "stream"] }
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = "=0.29.0"
+sha2 = "0.10"
+base64 = "0.23"
 
 [lints]
 workspace = true
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+axum.workspace = true
+tokio = { workspace = true, features = ["net"] }

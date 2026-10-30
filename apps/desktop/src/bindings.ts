@@ -57,6 +57,7 @@ export const commands = {
 	skinRemove: (id: SkinId) => typedError<null, AppError>(__TAURI_INVOKE("skin_remove", { id })),
 	skinApply: (account: AccountId, skin: SkinId) => typedError<null, AppError>(__TAURI_INVOKE("skin_apply", { account, skin })),
 	capeList: (account: AccountId) => typedError<Cape[], AppError>(__TAURI_INVOKE("cape_list", { account })),
+	capeAdd: (source: string) => typedError<Cape, AppError>(__TAURI_INVOKE("cape_add", { source })),
 	capeSet: (account: AccountId, capeId: string | null) => typedError<null, AppError>(__TAURI_INVOKE("cape_set", { account, capeId })),
 	vpnState: () => typedError<VpnState, AppError>(__TAURI_INVOKE("vpn_state")),
 	vpnSetSubscription: (urls: string[]) => typedError<null, AppError>(__TAURI_INVOKE("vpn_set_subscription", { urls })),
@@ -134,6 +135,36 @@ export const commands = {
 	voiceStatus: () => typedError<VoiceStatus, AppError>(__TAURI_INVOKE("voice_status")),
 	voiceSetSelfMuted: (muted: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_self_muted", { muted })),
 	voiceMicTest: (enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_mic_test", { enabled })),
+	socialConnect: (account: AccountId) => typedError<SocialUser, AppError>(__TAURI_INVOKE("social_connect", { account })),
+	socialDisconnect: () => typedError<null, AppError>(__TAURI_INVOKE("social_disconnect")),
+	socialSetPresence: (status: SocialStatus) => typedError<null, AppError>(__TAURI_INVOKE("social_set_presence", { status })),
+	socialChannels: () => typedError<SocialChannel[], AppError>(__TAURI_INVOKE("social_channels")),
+	socialHistory: (channel: string, before: string | null) => typedError<SocialHistory, AppError>(__TAURI_INVOKE("social_history", { channel, before })),
+	socialMarkRead: (channel: string, messageId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_mark_read", { channel, messageId })),
+	socialSend: (channel: string, content: SocialContent) => typedError<SocialMessage, AppError>(__TAURI_INVOKE("social_send", { channel, content })),
+	socialDeleteMessage: (messageId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_delete_message", { messageId })),
+	socialOpenDirect: (uuid: string) => typedError<SocialChannel, AppError>(__TAURI_INVOKE("social_open_direct", { uuid })),
+	socialSearchUsers: (query: string) => typedError<SocialUser[], AppError>(__TAURI_INVOKE("social_search_users", { query })),
+	socialProfile: (uuid: string) => typedError<SocialUser, AppError>(__TAURI_INVOKE("social_profile", { uuid })),
+	socialFriends: () => typedError<SocialFriend[], AppError>(__TAURI_INVOKE("social_friends")),
+	socialAddFriend: (uuid: string) => typedError<SocialFriend, AppError>(__TAURI_INVOKE("social_add_friend", { uuid })),
+	socialRemoveFriend: (uuid: string) => typedError<null, AppError>(__TAURI_INVOKE("social_remove_friend", { uuid })),
+	socialSetBlocked: (uuid: string, blocked: boolean) => typedError<null, AppError>(__TAURI_INVOKE("social_set_blocked", { uuid, blocked })),
+	socialPrivacy: () => typedError<SocialPrivacy, AppError>(__TAURI_INVOKE("social_privacy")),
+	socialSetPrivacy: (privacy: SocialPrivacy) => typedError<SocialPrivacy, AppError>(__TAURI_INVOKE("social_set_privacy", { privacy })),
+	socialReport: (messageId: string, reason: string | null) => typedError<null, AppError>(__TAURI_INVOKE("social_report", { messageId, reason })),
+	socialReports: () => typedError<SocialReport[], AppError>(__TAURI_INVOKE("social_reports")),
+	socialResolveReport: (reportId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_resolve_report", { reportId })),
+	socialModerateDelete: (messageId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_moderate_delete", { messageId })),
+	socialModerateUser: (uuid: string, action: ModAction, seconds: number | null) => typedError<null, AppError>(__TAURI_INVOKE("social_moderate_user", { uuid, action, seconds })),
+	socialSetRole: (uuid: string, role: SocialRole) => typedError<null, AppError>(__TAURI_INVOKE("social_set_role", { uuid, role })),
+	socialServerState: () => typedError<AdminServerState, AppError>(__TAURI_INVOKE("social_server_state")),
+	socialMigrateStorage: (target: StorageTarget) => typedError<null, AppError>(__TAURI_INVOKE("social_migrate_storage", { target })),
+	socialSendFile: (channel: string, path: string, caption: string | null, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("social_send_file", { channel, path, caption, onEvent })),
+	socialSaveAttachment: (attachmentId: string, dest: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("social_save_attachment", { attachmentId, dest, onEvent })),
+	socialAttachmentPreview: (attachmentId: string) => typedError<string, AppError>(__TAURI_INVOKE("social_attachment_preview", { attachmentId })),
+	/**  Publishes a real P2P offer; an existing unrelated room is never replaced. */
+	socialSharePack: (channel: string, instance: InstanceId) => typedError<SocialMessage, AppError>(__TAURI_INVOKE("social_share_pack", { channel, instance })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
@@ -158,6 +189,7 @@ export const events = {
 	netBlocked: makeEvent<NetBlockedEvent>("net://blocked"),
 	roomPeer: makeEvent<RoomPeerEvent>("room://peer"),
 	roomState: makeEvent<RoomStateEvent>("room://state"),
+	socialEvent: makeEvent<SocialChangedEvent>("social://event"),
 	tasksChanged: makeEvent<TasksChangedEvent>("tasks://changed"),
 	updateAvailable: makeEvent<UpdateAvailableEvent>("update://available"),
 	voiceSpeaking: makeEvent<VoiceSpeakingEvent>("voice://speaking"),
@@ -189,6 +221,19 @@ export type AccountKind = "offline" |
 
 export type AccountsChangedEvent = Account[];
 
+/**  Server health shown to admins (disk-full banner, backups, migrations). */
+export type AdminServerState = {
+	diskUsedBytes: number,
+	diskTotalBytes: number,
+	/**  New attachments are refused (≥ 95 % full). */
+	attachmentsPaused: boolean,
+	/**  RFC 3339 of the last successful backup to the home server. */
+	lastBackup: string | null,
+	backupError: string | null,
+	/**  A running storage migration, 0..=1. */
+	migrationProgress: number | null,
+};
+
 /**  The only error type that crosses crate and IPC boundaries. */
 export type AppError = {
 	code: ErrorCode,
@@ -210,6 +255,7 @@ export type AudioDirection = "input" | "output";
 export type Cape = {
 	id: string,
 	name: string,
+	/**  Remote texture URL, or absolute validated local PNG path for asset preview. */
 	url: string,
 	active: boolean,
 };
@@ -287,6 +333,12 @@ export type ErrorCode =
 "manualDownloadRequired" | "cancelled" | "io" | "invalidInput" | "conflict" | "permissionDenied" | 
 /**  Too many requests / attempts; `details.retryAfter` (seconds) when known. */
 "rateLimited" | "notImplemented" | "internal";
+
+export type FriendState = "friends" | 
+/**  The caller sent a request. */
+"outgoing" | 
+/**  The caller received a request. */
+"incoming";
 
 /**  File present in an instance (`mods/`, `resourcepacks/`, `shaderpacks/`). */
 export type InstalledContent = {
@@ -470,6 +522,12 @@ export type MemoryRecommendation = {
 	/**  i18n key explaining the choice. */
 	reasonKey: string,
 };
+
+export type ModAction = 
+/**  Seconds; moderators are limited to 86 400. */
+"mute" | 
+/**  Admin only; permanent chat ban. */
+"ban" | "unmute" | "unban";
 
 export type NetBlockedEvent = NetBlockedPayload;
 
@@ -676,7 +734,124 @@ export type SkinModel =
 /**  Alex, 3px arms. */
 "slim";
 
+export type SocialAttachment = {
+	id: string,
+	fileName: string,
+	mime: string,
+	size: number,
+	/**  Full file / image URL (authorized download through hub). */
+	url: string,
+	/**  Small preview for images. */
+	thumbUrl: string | null,
+	width: number | null,
+	height: number | null,
+};
+
+export type SocialAudience = "everyone" | "friends" | "nobody";
+
+export type SocialChangedEvent = SocialEvent;
+
+export type SocialChannel = {
+	id: string,
+	kind: SocialChannelKind,
+	/**  The other participant of a direct chat. */
+	peer: SocialUser | null,
+	lastMessage: SocialMessage | null,
+	unread: number,
+};
+
+export type SocialChannelKind = "global" | "direct";
+
+export type SocialContent = { type: "text"; text: string } | 
+/**  Image or file uploaded to hub (≤ 10 MB). */
+{ type: "attachment"; attachment: SocialAttachment; caption: string | null } | 
+/**  Invitation to a room (`mineded://join/<code>`). */
+{ type: "roomInvite"; code: string; link: string } | 
+/**  A modpack offered over P2P while the sender is online (direct chats only). */
+{ type: "packShare"; 
+/**  Existing authenticated P2P room; absent on legacy metadata-only cards. */
+code?: string | null; passwordProtected?: boolean; name: string; mc: string; loader: string; mods: number };
+
+/**  Events pushed by hub over the chat WebSocket. */
+export type SocialEvent = { type: "message"; message: SocialMessage } | { type: "messageUpdated"; message: SocialMessage } | { type: "presence"; uuid: string; status: SocialStatus } | { type: "friend"; friend: SocialFriend } | { type: "friendRemoved"; uuid: string } | 
+/**  Message rejected by the public chat filter (profanity/insults) or a mute. */
+{ type: "rejected"; reason: string } | 
+/**  Admins only: disk/backup state changed (see `AdminServerState`). */
+{ type: "admin"; state: AdminServerState } | { type: "connection"; connected: boolean };
+
+export type SocialFriend = {
+	user: SocialUser,
+	state: FriendState,
+};
+
+/**  A page of history, newest last. `before` = pass to load older messages. */
+export type SocialHistory = {
+	messages: SocialMessage[],
+	before: string | null,
+};
+
+export type SocialMessage = {
+	/**  Monotonic per channel; also the history cursor. */
+	id: string,
+	channel: string,
+	author: SocialUser,
+	content: SocialContent,
+	/**  RFC 3339. */
+	createdAt: string,
+	editedAt: string | null,
+	/**  Removed by the author or a moderator (content is emptied). */
+	deleted: boolean,
+};
+
+export type SocialPrivacy = {
+	whoCanMessage: SocialAudience,
+	/**  `Nobody` is treated as `Friends` for invites. */
+	whoCanInvite: SocialAudience,
+	whoSeesStatus: SocialAudience,
+	/**  `Friends` is treated as `Nobody`. */
+	whoCanAddFriend: SocialAudience,
+};
+
+export type SocialReport = {
+	id: string,
+	message: SocialMessage,
+	reporter: SocialUser,
+	reason: string | null,
+	createdAt: string,
+};
+
+export type SocialRole = "user" | 
+/**  Chat moderation only (assigned by an admin). */
+"moderator" | 
+/**  Drasl administrator: everything, including roles and server tools. */
+"admin";
+
+export type SocialStatus = "offline" | "online" | "inGame" | "inRoom";
+
+/**  Public view of a player (respects their privacy settings). */
+export type SocialUser = {
+	/**  Undashed profile UUID. */
+	uuid: string,
+	name: string,
+	skinUrl: string | null,
+	/**  `None` when hidden by the player's privacy settings. */
+	status: SocialStatus | null,
+	role: SocialRole,
+	isFriend: boolean,
+	/**  Whether the caller has blocked this player; never reveals reverse blocks. */
+	isBlocked?: boolean,
+	/**  The caller may open a direct chat with this player. */
+	canMessage: boolean,
+	canInvite: boolean,
+};
+
 export type SortBy = "relevance" | "downloads" | "updated" | "newest";
+
+export type StorageTarget = 
+/**  A new, bigger disk attached to the VPS. */
+"newDisk" | 
+/**  S3-compatible object storage (credentials configured on the server). */
+"objectStorage";
 
 export type SystemInfo = {
 	/**  `windows`, `linux`. */
@@ -708,7 +883,7 @@ error: AppError | null };
 
 export type TaskId = string;
 
-export type TaskKind = "javaInstall" | "instanceCreate" | "instanceRepair" | "instanceImport" | "instanceExport" | "launch" | "contentInstall" | "contentUpdate" | "presetApply" | "accountLogin" | "vpnUpdate" | "appUpdate";
+export type TaskKind = "javaInstall" | "instanceCreate" | "instanceRepair" | "instanceImport" | "instanceExport" | "launch" | "contentInstall" | "contentUpdate" | "presetApply" | "accountLogin" | "vpnUpdate" | "appUpdate" | "chatTransfer";
 
 export type TaskStatus = "running" | "succeeded" | "failed" | "cancelled";
 

@@ -1,0 +1,9 @@
+{
+  "id": 11, "modId": 1, "gameId": 432, "displayName": "Example 1.0",
+  "fileName": "example.jar", "fileDate": "2026-01-01T00:00:00Z", "fileLength": 7,
+  "isAvailable": true, "releaseType": 1,
+  "downloadUrl": "https://edge.forgecdn.net/files/1/1/example.jar",
+  "hashes": [{"algo": 1, "value": "0123456789abcdef0123456789abcdef01234567"}],
+  "gameVersions": ["1.20.1", "Forge"],
+  "dependencies": [{"modId": 2, "relationType": 3}, {"modId": 3, "relationType": 5}, {"modId": 4, "relationType": 2}, {"modId": 5, "relationType": 1}]
+}

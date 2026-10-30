@@ -356,28 +356,42 @@ fn open_zip(path: &Path) -> AppResult<zip::ZipArchive<std::fs::File>> {
     })
 }
 
-fn zip_read(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> AppResult<Option<Vec<u8>>> {
+const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_BUNDLED_BYTES: u64 = 256 * 1024 * 1024;
+
+fn zip_read(
+    zip: &mut zip::ZipArchive<std::fs::File>,
+    name: &str,
+    limit: u64,
+) -> AppResult<Option<Vec<u8>>> {
     let name = name.trim_start_matches('/');
-    let mut entry = match zip.by_name(name) {
+    let entry = match zip.by_name(name) {
         Ok(e) => e,
         Err(zip::result::ZipError::FileNotFound) => return Ok(None),
         Err(e) => return Err(loader_err(format!("installer read failed: {e}"))),
     };
-    let mut buf = Vec::with_capacity(entry.size() as usize);
+    if entry.size() > limit {
+        return Err(loader_err("installer entry is too large").detail("entry", name));
+    }
+    let mut buf = Vec::new();
     entry
+        .take(limit + 1)
         .read_to_end(&mut buf)
         .map_err(|e| loader_err(format!("installer read failed: {e}")))?;
+    if buf.len() as u64 > limit {
+        return Err(loader_err("installer entry is too large").detail("entry", name));
+    }
     Ok(Some(buf))
 }
 
 /// `install_profile.json` and (modern) the version json bytes.
 fn read_installer(path: &Path) -> AppResult<(AnyProfile, Option<Vec<u8>>)> {
     let mut zip = open_zip(path)?;
-    let bytes = zip_read(&mut zip, "install_profile.json")?
+    let bytes = zip_read(&mut zip, "install_profile.json", MAX_METADATA_BYTES)?
         .ok_or_else(|| loader_err("installer has no install_profile.json"))?;
     let profile = parse_profile(&bytes)?;
     let version = match &profile {
-        AnyProfile::Modern(p) => zip_read(&mut zip, &p.json)?,
+        AnyProfile::Modern(p) => zip_read(&mut zip, &p.json, MAX_METADATA_BYTES)?,
         AnyProfile::Legacy(_) => None,
     };
     Ok((profile, version))
@@ -403,7 +417,7 @@ fn extract_bundled(
         if ok {
             continue;
         }
-        match zip_read(&mut zip, &format!("maven/{}", lib.path))? {
+        match zip_read(&mut zip, &format!("maven/{}", lib.path), MAX_BUNDLED_BYTES)? {
             Some(bytes) => {
                 if let Some(want) = &lib.sha1 {
                     let got = sha1_hex(&bytes);
@@ -426,12 +440,14 @@ fn extract_bundled(
 }
 
 fn write_blocking(dest: &Path, bytes: &[u8]) -> AppResult<()> {
+    crate::util::ensure_no_links(dest)?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
     }
     let mut tmp = dest.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
+    crate::util::ensure_no_links(&tmp)?;
     std::fs::write(&tmp, bytes).map_err(|e| io_err(&tmp, e))?;
     std::fs::rename(&tmp, dest).map_err(|e| io_err(dest, e))
 }
@@ -680,7 +696,7 @@ async fn build_data(
             let mut zip = open_zip(&inst)?;
             let mut extract = |p: &str| -> AppResult<PathBuf> {
                 let dest = safe_join(&work, p.trim_start_matches('/'))?;
-                let bytes = zip_read(&mut zip, p)?
+                let bytes = zip_read(&mut zip, p, MAX_BUNDLED_BYTES)?
                     .ok_or_else(|| loader_err("installer entry missing").detail("entry", p))?;
                 write_blocking(&dest, &bytes)?;
                 Ok(dest)
@@ -738,7 +754,7 @@ async fn outputs_valid(
 
 fn main_class(jar: &Path) -> AppResult<String> {
     let mut zip = open_zip(jar)?;
-    let manifest = zip_read(&mut zip, "META-INF/MANIFEST.MF")?
+    let manifest = zip_read(&mut zip, "META-INF/MANIFEST.MF", MAX_METADATA_BYTES)?
         .ok_or_else(|| loader_err("processor jar has no manifest"))?;
     let text = String::from_utf8_lossy(&manifest);
     text.lines()
@@ -833,7 +849,7 @@ async fn install_legacy(
     let sha1 = join(
         tokio::task::spawn_blocking(move || -> AppResult<String> {
             let mut zip = open_zip(&inst)?;
-            let bytes = zip_read(&mut zip, &file)?
+            let bytes = zip_read(&mut zip, &file, MAX_BUNDLED_BYTES)?
                 .ok_or_else(|| loader_err("installer has no universal jar"))?;
             let sha = sha1_hex(&bytes);
             if file_sha1_blocking(&d)?.as_deref() != Some(sha.as_str()) {
@@ -868,6 +884,57 @@ async fn install_legacy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zip_reads_reject_attacker_declared_allocation_sizes() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bomb.jar");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        zip.start_file(
+            "install_profile.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(b"{}").unwrap();
+        zip.finish().unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        let error = zip_read(
+            &mut open_zip(&path).unwrap(),
+            "install_profile.json",
+            MAX_METADATA_BYTES,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::LoaderInstall);
+        assert!(error.message.contains("too large"));
+    }
+
+    #[test]
+    fn zip_reads_enforce_actual_payload_limit() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.jar");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        zip.start_file("data", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"payload").unwrap();
+        zip.finish().unwrap();
+        assert!(zip_read(&mut open_zip(&path).unwrap(), "data", 6).is_err());
+        assert_eq!(
+            zip_read(&mut open_zip(&path).unwrap(), "data", 7)
+                .unwrap()
+                .unwrap(),
+            b"payload"
+        );
+        let mut bytes = std::fs::read(&path).unwrap();
+        let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        assert!(zip_read(&mut open_zip(&path).unwrap(), "data", 6).is_err());
+    }
 
     #[test]
     fn sha1_sidecar_parsing() {

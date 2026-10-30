@@ -75,6 +75,8 @@ struct HubError {
 
 /// Whole-request limit for every hub call (connect + response body).
 pub(crate) const HUB_TIMEOUT: Duration = Duration::from_secs(15);
+/// Room metadata and error responses never need large bodies.
+const MAX_BODY: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct HubClient {
@@ -177,7 +179,7 @@ impl HubClient {
             if !resp.status().is_success() {
                 return Err(status_error(resp, url).await);
             }
-            let bytes = resp.bytes().await.map_err(|e| network(url, &e))?;
+            let bytes = read_limited(resp, url).await?;
             serde_json::from_slice(&bytes).map_err(|e| {
                 AppError::new(ErrorCode::Network, format!("unexpected hub response: {e}"))
                     .detail("url", url)
@@ -211,8 +213,7 @@ async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<u64>().ok());
-    let body: Option<HubError> = resp
-        .bytes()
+    let body: Option<HubError> = read_limited(resp, url)
         .await
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok());
@@ -253,6 +254,26 @@ async fn status_error(resp: reqwest::Response, url: &str) -> AppError {
         err = err.detail("retryAfter", secs);
     }
     err
+}
+
+async fn read_limited(mut resp: reqwest::Response, url: &str) -> AppResult<Vec<u8>> {
+    let too_large = || {
+        AppError::new(ErrorCode::Network, "hub response body exceeds limit")
+            .detail("url", url)
+            .detail("source", "hub")
+            .detail("reason", "bodyTooLarge")
+    };
+    if resp.content_length().is_some_and(|n| n > MAX_BODY as u64) {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| network(url, &e))? {
+        if chunk.len() > MAX_BODY.saturating_sub(body.len()) {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 #[cfg(test)]
@@ -395,6 +416,58 @@ mod tests {
         let d = err.details.unwrap();
         assert_eq!(d["reason"], "timeout");
         assert_eq!(d["source"], "hub");
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_chunked_success_and_error_without_waiting_for_eof() {
+        use lc_http::{Downloader, Route, StubDownloader};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for status in ["200 OK", "429 Too Many Requests"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    request.push(socket.read_u8().await.unwrap());
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let headers = format!(
+                    "HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\nRetry-After: 30\r\n\r\n"
+                );
+                socket.write_all(headers.as_bytes()).await.unwrap();
+                let chunk = vec![b'x'; MAX_BODY + 1];
+                socket
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .await
+                    .unwrap();
+                let _ = socket.write_all(&chunk).await;
+                let _ = socket.write_all(b"\r\n").await;
+                // No final zero chunk: a buffering client would wait until timeout.
+                std::future::pending::<()>().await;
+            });
+            let hub = HubClient::new(
+                StubDownloader.client(Route::Direct),
+                &format!("http://{addr}"),
+            )
+            .unwrap();
+            let result =
+                tokio::time::timeout(Duration::from_secs(3), hub.create_room(&voice_req(), None))
+                    .await;
+            server.abort();
+            let err = result.expect("must reject before EOF").unwrap_err();
+            let details = err.details.unwrap();
+            if status.starts_with("200") {
+                assert_eq!(err.code, ErrorCode::Network);
+                assert_eq!(details["reason"], "bodyTooLarge");
+            } else {
+                assert_eq!(err.code, ErrorCode::RateLimited);
+                assert_eq!(details["retryAfter"], "30");
+            }
+        }
     }
 
     #[test]

@@ -41,6 +41,7 @@ import {
   searchCatalog,
   seedInstalled,
 } from "./content";
+import { createSocialMocks } from "./social";
 import { createNetMocks } from "./net";
 import { paletteFromSeed, seedCapes, seedSkins, skinDataUrl } from "./skins";
 import { MOCK_CURRENT_VERSION, createUpdateMocks } from "./updates";
@@ -79,8 +80,6 @@ const ok = <T,>(data: T) => ({ status: "ok" as const, data });
 const fail = (error: AppError) => ({ status: "error" as const, error });
 
 /** CurseForge is turned off: the backend answers like this for any CurseForge request. */
-const curseForgeOff = () =>
-  fail({ ...appError("authRequired", "mock: CurseForge is disabled"), details: { reason: "curseforgeDisabled" } });
 
 const notImplemented = (name: string) => async () => fail(appError("notImplemented", `mock: ${name}`));
 
@@ -484,7 +483,6 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
 
     contentSearch: async (query) => {
       await wait();
-      if (query.source === "curseForge") return curseForgeOff();
       if (query.limit < 1 || query.limit > 100 || query.offset < 0)
         return fail(appError("invalidInput", "mock: bad paging"));
       return ok(searchCatalog(query));
@@ -492,7 +490,6 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
 
     contentVersions: async (source, projectId, filter) => {
       await wait();
-      if (source === "curseForge") return curseForgeOff();
       const p = findProject(source, projectId);
       if (!p) return notFound(`project ${projectId}`);
       return ok(filterVersions(projectVersions(p), loaderBound(p.kind) ? filter : { ...filter, loader: null }));
@@ -695,7 +692,6 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
 
     modpackInstall: async (source, projectId, versionId, ch) => {
       await wait();
-      if (source === "curseForge") return curseForgeOff();
       const p = findProject(source, projectId);
       if (!p || p.kind !== "modpack") return notFound(`modpack ${projectId}`);
       const versions = projectVersions(p);
@@ -807,6 +803,18 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       return ok(null);
     },
 
+    capeAdd: async (source) => {
+      await wait();
+      if (!source.trim() || (!/^https:\/\//i.test(source) && !/^(?:[a-z]:[\\/]|\/)/i.test(source)))
+        return fail(appError("invalidInput", "mock: expected PNG path or HTTPS URL"));
+      if (/missing/i.test(source)) return notFound("cape texture");
+      if (!/^https:\/\//i.test(source) && !/\.png$/i.test(source))
+        return fail(appError("invalidInput", "mock: expected cape PNG"));
+      const cape = { id: `cape-local-${++seq}`, name: source.split(/[\\/]/).pop() || "Cape", url: seedCapes()[0]?.url ?? source, active: false };
+      capes.push(cape);
+      return ok({ ...cape });
+    },
+
     capeList: async (accountId) => {
       await wait();
       if (!accounts.some((a) => a.id === accountId)) return notFound(`account ${accountId}`);
@@ -867,6 +875,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       selfName: () => (accounts.find((a) => a.isDefault) ?? accounts[0])?.name ?? "Player",
     }),
 
+    ...createSocialMocks({ bus, findAccount: (id) => accounts.find((a) => a.id === id), runTask }),
     // ---- self-update ----
     ...createUpdateMocks({ bus, wait, runTask }),
   };
@@ -897,6 +906,28 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
     const keep = (installed[instanceId] ?? []).filter((c) => !names.includes(c.fileName));
     installed[instanceId] = [...keep, ...added];
     return ok(added.map((c) => ({ ...c })));
+  };
+  let sharedInstance: string | null = null;
+  impl.socialSharePack = async (channel, instanceId) => {
+    const instance = findInstance(instanceId);
+    if (!instance) return notFound(`instance ${instanceId}`);
+    const channels = await impl.socialChannels!();
+    if (channels.status === "error") return channels;
+    const direct = channels.data.find((c) => c.id === channel);
+    if (direct?.kind !== "direct" || !direct.peer?.canInvite || direct.peer.isBlocked)
+      return fail(appError("permissionDenied", "mock: sharing denied"));
+    const state = await impl.roomState!();
+    if (state.status === "error") return state;
+    if (state.data && (state.data.role !== "host" || sharedInstance !== instanceId))
+      return fail(appError("conflict", "mock: another room is active"));
+    const room = state.data ? ok(state.data) : await impl.roomCreate!(instanceId, "open", null);
+    if (room.status === "error") return room;
+    sharedInstance = instanceId;
+    return impl.socialSend!(channel, {
+      type: "packShare", name: instance.name, mc: instance.mc, loader: instance.loader.kind,
+      mods: (installed[instanceId] ?? []).filter((c) => c.kind === "mod").length,
+      code: room.data.code, passwordProtected: room.data.passwordProtected,
+    });
   };
   return Object.assign(impl, { contentAddLocal });
 }

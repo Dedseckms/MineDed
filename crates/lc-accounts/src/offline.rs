@@ -1,7 +1,6 @@
 //! Offline accounts: nickname validation, Mojang-compatible offline UUID, throwaway tokens.
 
-use chacha20poly1305::aead::rand_core::RngCore;
-use chacha20poly1305::aead::OsRng;
+use chacha20poly1305::aead::Generate;
 use lc_types::{AppError, AppResult, ErrorCode};
 use md5::{Digest, Md5};
 use uuid::{Builder, Uuid};
@@ -40,10 +39,10 @@ pub fn offline_uuid(name: &str) -> Uuid {
 }
 
 /// Random hex access token for offline launches (the game only needs a non-empty value).
-pub fn random_access_token() -> String {
-    let mut bytes = [0u8; 16];
-    OsRng.fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+pub fn random_access_token() -> AppResult<String> {
+    let bytes = <[u8; 16]>::try_generate()
+        .map_err(|_| AppError::new(ErrorCode::Internal, "access token generation failed"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(test)]
@@ -115,8 +114,8 @@ mod tests {
 
     #[test]
     fn access_token_is_random_hex() {
-        let a = random_access_token();
-        let b = random_access_token();
+        let a = random_access_token().unwrap();
+        let b = random_access_token().unwrap();
         assert_eq!(a.len(), 32);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);

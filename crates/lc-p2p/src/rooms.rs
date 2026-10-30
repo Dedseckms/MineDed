@@ -746,6 +746,16 @@ impl P2pRooms {
         password: Option<String>,
     ) -> AppResult<RoomState> {
         let _op = self.inner.op.lock().await;
+        self.create_room_locked(instance, auth_mode, password).await
+    }
+
+    /// Caller holds `op` through both the active-room check and publication.
+    async fn create_room_locked(
+        &self,
+        instance: InstanceId,
+        auth_mode: RoomAuthMode,
+        password: Option<String>,
+    ) -> AppResult<RoomState> {
         if self.inner.current().is_some() {
             return Err(AppError::new(ErrorCode::Conflict, "already in a room"));
         }
@@ -2033,6 +2043,24 @@ impl RoomService for P2pRooms {
 
     async fn create_voice(&self, password: Option<String>) -> AppResult<RoomState> {
         self.create_voice_room(password).await
+    }
+
+    async fn share_pack(&self, instance: InstanceId) -> AppResult<RoomState> {
+        let _op = self.inner.op.lock().await;
+        if let Some(s) = self.inner.current() {
+            if s.role == RoomRole::Host
+                && s.kind == RoomKind::Game
+                && s.host.as_ref().and_then(|h| h.instance) == Some(instance)
+            {
+                return Ok(s.state());
+            }
+            return Err(AppError::new(
+                ErrorCode::Conflict,
+                "already in another room",
+            ));
+        }
+        self.create_room_locked(instance, RoomAuthMode::Yggdrasil, None)
+            .await
     }
 
     async fn leave(&self) -> AppResult<()> {

@@ -5,6 +5,7 @@ import type { Skin, SkinModel } from "../../bindings";
 import { pickFile } from "../../api/dialog";
 import {
   useAccounts,
+  useAddCape,
   useAddSkin,
   useApplySkin,
   useCapes,
@@ -245,34 +246,58 @@ function SkinTile({ skin, selected, onSelect }: { skin: Skin; selected: boolean;
 function CapePicker({ account, onPreview }: { account: string; onPreview: (url: string | null) => void }) {
   const { t } = useTranslation();
   const capes = useCapes(account);
+  const add = useAddCape();
   const setCape = useSetCape();
+  const [selectedId, setSelectedId] = useState<string | null | undefined>(undefined);
+  const [web, setWeb] = useState("");
+  const [pickError, setPickError] = useState<unknown>(null);
   const active = capes.data?.find((c) => c.active) ?? null;
+  const id = selectedId === undefined ? active?.id ?? null : selectedId;
+  const selected = capes.data?.find((c) => c.id === id) ?? (add.data?.id === id ? add.data : null);
+  const preview = selected ? localSkinSrc(selected.url) : null;
+  const pending = add.isPending || setCape.isPending;
 
-  useEffect(() => onPreview(active?.url ?? null), [active?.url, onPreview]);
+  useEffect(() => onPreview(preview), [preview, onPreview]);
 
-  if (capes.isPending) return <ListSkeleton rows={1} rowClassName="h-10" />;
-  if (capes.error) return <ErrorMessage error={capes.error} onRetry={() => void capes.refetch()} />;
-  if (capes.data.length === 0) return <p className="text-sm text-muted">{t("skins.noCapes")}</p>;
+  const importCape = (source: string) => {
+    setPickError(null);
+    add.mutate(source, { onSuccess: (cape) => setSelectedId(cape.id) });
+  };
+  const pick = async () => {
+    try {
+      const path = await pickFile([{ name: t("dialog.png"), extensions: ["png"] }]);
+      if (path) importCape(path);
+    } catch (e) { setPickError(e); }
+  };
+
   return (
     <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted">{t("skins.capeHint")}</p>
+      {capes.isPending ? <ListSkeleton rows={1} rowClassName="h-10" /> : null}
+      <ErrorMessage error={capes.error} onRetry={() => void capes.refetch()} />
       <Field label={t("skins.cape")}>
-        {(id) => (
-          <Select
-            id={id}
-            value={active?.id ?? ""}
-            disabled={setCape.isPending}
-            onChange={(e) => setCape.mutate({ account, capeId: e.target.value === "" ? null : e.target.value })}
-          >
+        {(inputId) => (
+          <Select id={inputId} value={id ?? ""} disabled={pending || capes.isPending}
+            onChange={(e) => setSelectedId(e.target.value || null)}>
             <option value="">{t("skins.noCape")}</option>
-            {capes.data.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
+            {(capes.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
         )}
       </Field>
-      <ErrorMessage error={setCape.error} />
+      {preview ? <img src={preview} alt={t("skins.capePreview")} className="h-16 w-32 self-center object-contain [image-rendering:pixelated]" /> : null}
+      <Button disabled={pending} loading={add.isPending} onClick={() => void pick()}>{t("skins.addCapeFile")}</Button>
+      <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); importCape(web.trim()); }}>
+        <Field label={t("skins.capeUrl")}>
+          {(inputId) => <TextInput id={inputId} type="url" value={web} placeholder={t("skins.capeUrlPlaceholder")}
+            onChange={(e) => setWeb(e.target.value)} />}
+        </Field>
+        <Button type="submit" disabled={pending || !/^https:\/\//i.test(web.trim())} loading={add.isPending}>{t("skins.addCapeUrl")}</Button>
+      </form>
+      <Button variant="primary" disabled={pending || id === (active?.id ?? null)} loading={setCape.isPending}
+        onClick={() => setCape.mutate({ account, capeId: id })}>
+        {id === null ? t("skins.removeCape") : t("skins.applyCape")}
+      </Button>
+      <ErrorMessage error={add.error ?? pickError ?? setCape.error} />
     </div>
   );
 }

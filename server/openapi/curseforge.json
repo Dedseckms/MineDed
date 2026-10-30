@@ -1,0 +1,721 @@
+{
+  "description": "Restricted Minecraft-only CurseForge broker. Base: /api/v1/catalog/curseforge. API key only from VPS environment CURSEFORGE_API_KEY, redacted in Debug/logs; no client key/header accepted. Unknown query keys and all unlisted routes/methods rejected. Fixed upstream https://api.curseforge.com/v1, no redirects, no user-controlled upstream URLs. Force game432 and validate returned project/file ownership/game. JSON streamed cap4MiB, timeout15s, global concurrency8, per-IP60/min. Bounded response cache <=64entries/16MiB TTL60s; only successful public metadata cached. Response data uses official envelopes. GET files/{fileId} maps to fixed POST mods/files {fileIds:[id]}, returning single data object. Downloads use existing Downloader against permitted CDN URLs; no API key required. No deployment automatically authorized.",
+  "paths": {
+  "/mods": {
+    "post": {
+      "tags": [
+        "catalog"
+      ],
+      "operationId": "curseforgeModsBatch",
+      "summary": "Read-only bounded Minecraft metadata batch",
+      "security": [],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "modIds"
+              ],
+              "properties": {
+                "modIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 50,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Official data envelope with Minecraft-only objects; no credentials",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "data"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "400": {
+          "description": "Invalid batch or unknown body fields"
+        },
+        "413": {
+          "description": "Request exceeds 4 KiB"
+        },
+        "429": {
+          "description": "Rate limited; Retry-After seconds <=60",
+          "headers": {
+            "Retry-After": {
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60
+              }
+            }
+          }
+        },
+        "502": {
+          "description": "Sanitized invalid upstream response"
+        },
+        "503": {
+          "description": "Broker not configured"
+        }
+      }
+    }
+  },
+  "/files": {
+    "post": {
+      "tags": [
+        "catalog"
+      ],
+      "operationId": "curseforgeFilesBatch",
+      "summary": "Read-only bounded Minecraft metadata batch",
+      "security": [],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "fileIds"
+              ],
+              "properties": {
+                "fileIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 50,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Official data envelope with Minecraft-only objects; no credentials",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "data"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "400": {
+          "description": "Invalid batch or unknown body fields"
+        },
+        "413": {
+          "description": "Request exceeds 4 KiB"
+        },
+        "429": {
+          "description": "Rate limited; Retry-After seconds <=60",
+          "headers": {
+            "Retry-After": {
+              "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60
+              }
+            }
+          }
+        },
+        "502": {
+          "description": "Sanitized invalid upstream response"
+        },
+        "503": {
+          "description": "Broker not configured"
+        }
+      }
+    }
+  },
+    "/mods/search": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "operationId": "curseforgeSearch",
+        "summary": "Search Minecraft content",
+        "security": [],
+        "parameters": [
+          {
+            "name": "gameVersion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "description": "Minecraft version"
+          },
+          {
+            "name": "modLoaderType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                0,
+                1,
+                4,
+                5,
+                6
+              ]
+            },
+            "description": "Any/Forge/Fabric/Quilt/NeoForge"
+          },
+          {
+            "name": "index",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9950
+            },
+            "description": "Pagination offset"
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "description": "Page size"
+          },
+          {
+            "name": "gameId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                432
+              ]
+            },
+            "description": "Always Minecraft; default432"
+          },
+          {
+            "name": "searchFilter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Search text"
+          },
+          {
+            "name": "slug",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "description": "Project slug"
+          },
+          {
+            "name": "classId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "description": "Content class"
+          },
+          {
+            "name": "categoryId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "description": "Category"
+          },
+          {
+            "name": "sortField",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 14
+            },
+            "description": "CurseForge sort field"
+          },
+          {
+            "name": "sortOrder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "description": "Sort order"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CurseForge JSON envelope; never contains API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {},
+                    "pagination": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported route or query; invalid numeric ID"
+          },
+          "404": {
+            "description": "Minecraft project or file not found"
+          },
+          "429": {
+            "description": "Per-IP or global request limit"
+          },
+          "502": {
+            "description": "Sanitized upstream failure, malformed or oversized response"
+          },
+          "503": {
+            "description": "Broker not configured"
+          }
+        }
+      }
+    },
+    "/mods/{modId}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "operationId": "curseforgeMod",
+        "summary": "Get Minecraft project",
+        "security": [],
+        "parameters": [
+          {
+            "name": "modId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CurseForge JSON envelope; never contains API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {},
+                    "pagination": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported route or query; invalid numeric ID"
+          },
+          "404": {
+            "description": "Minecraft project or file not found"
+          },
+          "429": {
+            "description": "Per-IP or global request limit"
+          },
+          "502": {
+            "description": "Sanitized upstream failure, malformed or oversized response"
+          },
+          "503": {
+            "description": "Broker not configured"
+          }
+        }
+      }
+    },
+    "/mods/{modId}/files": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "operationId": "curseforgeModFiles",
+        "summary": "List Minecraft project files",
+        "security": [],
+        "parameters": [
+          {
+            "name": "modId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "name": "gameVersion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "description": "Minecraft version"
+          },
+          {
+            "name": "modLoaderType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                0,
+                1,
+                4,
+                5,
+                6
+              ]
+            },
+            "description": "Any/Forge/Fabric/Quilt/NeoForge"
+          },
+          {
+            "name": "index",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9950
+            },
+            "description": "Pagination offset"
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "description": "Page size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CurseForge JSON envelope; never contains API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {},
+                    "pagination": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported route or query; invalid numeric ID"
+          },
+          "404": {
+            "description": "Minecraft project or file not found"
+          },
+          "429": {
+            "description": "Per-IP or global request limit"
+          },
+          "502": {
+            "description": "Sanitized upstream failure, malformed or oversized response"
+          },
+          "503": {
+            "description": "Broker not configured"
+          }
+        }
+      }
+    },
+    "/mods/{modId}/files/{fileId}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "operationId": "curseforgeModFile",
+        "summary": "Get project file",
+        "security": [],
+        "parameters": [
+          {
+            "name": "modId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CurseForge JSON envelope; never contains API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {},
+                    "pagination": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported route or query; invalid numeric ID"
+          },
+          "404": {
+            "description": "Minecraft project or file not found"
+          },
+          "429": {
+            "description": "Per-IP or global request limit"
+          },
+          "502": {
+            "description": "Sanitized upstream failure, malformed or oversized response"
+          },
+          "503": {
+            "description": "Broker not configured"
+          }
+        }
+      }
+    },
+    "/files/{fileId}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "operationId": "curseforgeFile",
+        "summary": "Resolve file by numeric ID; server translates to fixed official batch request",
+        "security": [],
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CurseForge JSON envelope; never contains API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {},
+                    "pagination": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported route or query; invalid numeric ID"
+          },
+          "404": {
+            "description": "Minecraft project or file not found"
+          },
+          "429": {
+            "description": "Per-IP or global request limit"
+          },
+          "502": {
+            "description": "Sanitized upstream failure, malformed or oversized response"
+          },
+          "503": {
+            "description": "Broker not configured"
+          }
+        }
+      }
+    },
+    "/mods/{modId}/files/{fileId}/download-url": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "operationId": "curseforgeDownloadUrl",
+        "summary": "Get author-permitted download URL; never bypass distribution restrictions",
+        "security": [],
+        "parameters": [
+          {
+            "name": "modId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CurseForge JSON envelope; never contains API credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {},
+                    "pagination": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported route or query; invalid numeric ID"
+          },
+          "404": {
+            "description": "Minecraft project or file not found"
+          },
+          "429": {
+            "description": "Per-IP or global request limit"
+          },
+          "502": {
+            "description": "Sanitized upstream failure, malformed or oversized response"
+          },
+          "503": {
+            "description": "Broker not configured"
+          }
+        }
+      }
+    }
+  }
+}

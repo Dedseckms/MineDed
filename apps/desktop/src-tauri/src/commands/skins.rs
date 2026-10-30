@@ -51,6 +51,12 @@ pub async fn skin_apply(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn cape_add(state: State<'_, AppState>, source: String) -> AppResult<Cape> {
+    state.skins.add_cape(&source).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn cape_list(state: State<'_, AppState>, account: AccountId) -> AppResult<Vec<Cape>> {
     state.skins.capes(account).await
 }

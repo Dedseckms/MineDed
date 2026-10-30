@@ -22,6 +22,8 @@ servers:
 security:
   - bearer: []
 tags:
+  - name: catalog
+    description: Limited public Minecraft content catalogue broker.
   - name: system
     description: Health and dynamic configuration (mirrors).
   - name: skins
@@ -34,11 +36,39 @@ tags:
     description: Global chat, direct messages, friends, privacy, moderation and admin tools (docs/plans/chat.md).
 
 paths:
+  /catalog/curseforge/mods:
+    $ref: './curseforge.json#/paths/~1mods'
+  /catalog/curseforge/files:
+    $ref: './curseforge.json#/paths/~1files'
+  /catalog/curseforge/mods/search:
+    $ref: './curseforge.json#/paths/~1mods~1search'
+  /catalog/curseforge/mods/{modId}:
+    $ref: './curseforge.json#/paths/~1mods~1{modId}'
+  /catalog/curseforge/mods/{modId}/files:
+    $ref: './curseforge.json#/paths/~1mods~1{modId}~1files'
+  /catalog/curseforge/mods/{modId}/files/{fileId}:
+    $ref: './curseforge.json#/paths/~1mods~1{modId}~1files~1{fileId}'
+  /catalog/curseforge/files/{fileId}:
+    $ref: './curseforge.json#/paths/~1files~1{fileId}'
+  /catalog/curseforge/mods/{modId}/files/{fileId}/download-url:
+    $ref: './curseforge.json#/paths/~1mods~1{modId}~1files~1{fileId}~1download-url'
+  /chat/me:
+    get:
+      tags: [chat]
+      operationId: chatMe
+      summary: Register or refresh the authenticated caller and return SocialUser with server-verified role
+      responses:
+        "200": { description: SocialUser, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
   /chat/ws:
     get:
       tags: [chat]
       operationId: chatSocket
       summary: WebSocket upgrade; server pushes SocialEvent JSON frames, client sends presence/typing
+      description: |
+        Native clients authenticate through the Authorization Bearer header; query tokens are rejected.
+        Client frames are {"type":"presence","status":"online"|"inGame"|"inRoom"|"offline"}.
+        Status visibility is enforced per recipient using privacy settings and blocks.
       responses:
         "101": { description: Switching protocols }
         "401": { $ref: "#/components/responses/Error" }
@@ -450,12 +480,18 @@ paths:
         its room WebSocket is connected, or for 60 s after join if it never connects; `leave`,
         WS close and kick free the slot.
 
+        Replacing an existing live endpoint requires the same validated profile identity.
+        Anonymous duplicate endpoints return 409; a supplied name or UUID is not proof of
+        ownership. An invalid supplied bearer is rejected instead of treated as anonymous.
+
         `peerToken` = `<exp>.<uuid>.<mac>`: `exp` is unix seconds (join + 10 min); `uuid` is the
         undashed profile UUID from the validated bearer, or `-` for anonymous joins; `mac` is
         base64url (no padding) of HMAC-SHA256(key = hostToken, msg = "lc-peer/2|" + roomId + "|"
         + endpointId + "|" + uuid + "|" + exp). The host verifies it offline against the
         connecting iroh endpoint id (bound to that endpoint) and uses the token's `uuid` — not
         the one in `Hello` — as the identity for bans in `yggdrasil` rooms.
+        For password-protected rooms the host verifies the password over P2P. The peer token
+        alone does not grant access to the room's fallback WebSocket.
       security: [{}, { bearer: [] }]
       parameters:
         - { name: code, in: path, required: true, schema: { type: string } }
@@ -511,6 +547,9 @@ paths:
       summary: WebSocket for presence and fallback chat
       description: |
         Upgrade to WebSocket. Auth via `?token=<hostToken|peerToken>` (browsers can't set headers).
+        In password-protected rooms only the host token is accepted. Guest peer tokens return
+        403 `permissionDenied` because the hub cannot verify the host's P2P password admission.
+        Guests use the authenticated P2P connection for chat and presence instead.
         Messages are JSON objects with a `t` field:
         - server → client: `peer_joined {peerId,name}`, `peer_left {peerId}`, `kick {peerId,reason}`,
           `chat {id,fromPeer,fromName,text,sentAt}`, `host_endpoint {endpointId}`, `closed {}`
@@ -523,6 +562,8 @@ paths:
       responses:
         "101": { description: Switching protocols }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
 
 components:
   securitySchemes:

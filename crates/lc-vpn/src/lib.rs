@@ -8,6 +8,7 @@ mod controller;
 mod launch;
 mod mineded;
 mod ports;
+mod response;
 mod service;
 mod store;
 mod stub;

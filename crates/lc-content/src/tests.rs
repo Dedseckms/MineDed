@@ -49,6 +49,9 @@ impl Downloader for Dl {
                     return Err(AppError::new(ErrorCode::HashMismatch, "sha1"));
                 }
             }
+            if r.size.is_some_and(|size| size != bytes.len() as u64) {
+                return Err(AppError::new(ErrorCode::HashMismatch, "size"));
+            }
             std::fs::create_dir_all(r.dest.parent().unwrap()).unwrap();
             std::fs::write(&r.dest, bytes).unwrap();
         }
@@ -426,21 +429,13 @@ async fn shader_loader_choice_per_loader() {
     assert_eq!(manual[0].project_id, "optifine");
 }
 
-fn is_cf_disabled(err: &AppError) -> bool {
-    err.code == ErrorCode::InvalidInput
-        && err
-            .details
-            .as_ref()
-            .is_some_and(|d| d.get("reason").map(String::as_str) == Some("curseforgeDisabled"))
-}
-
 #[tokio::test]
-async fn curseforge_is_disabled_modrinth_works() {
+async fn modrinth_search_still_works() {
     let e = env();
     let q = SearchQuery {
-        source: ContentSourceKind::CurseForge,
-        kind: ContentKind::Modpack,
-        text: "jei".into(),
+        source: ContentSourceKind::Modrinth,
+        kind: ContentKind::Mod,
+        text: "test".into(),
         mc: None,
         loader: None,
         categories: vec![],
@@ -448,65 +443,6 @@ async fn curseforge_is_disabled_modrinth_works() {
         offset: 0,
         limit: 10,
     };
-    assert!(is_cf_disabled(&e.svc.search(q.clone()).await.unwrap_err()));
-    let err = e
-        .svc
-        .versions(ContentSourceKind::CurseForge, "238222", Default::default())
-        .await
-        .unwrap_err();
-    assert!(is_cf_disabled(&err));
-    let sink = NullSink::default();
-    let err = e
-        .svc
-        .install_remote(ContentSourceKind::CurseForge, "900", None, &sink)
-        .await
-        .unwrap_err();
-    assert!(is_cf_disabled(&err));
-    let id = e.add_instance("1.20.1", LoaderKind::Forge);
-    let err = e
-        .svc
-        .resolve(
-            id,
-            vec![ContentVersionRef {
-                source: ContentSourceKind::CurseForge,
-                project_id: "1001".into(),
-                version_id: None,
-            }],
-        )
-        .await
-        .unwrap_err();
-    assert!(is_cf_disabled(&err));
-
-    // A CurseForge zip from disk: same clear error, no instance created.
-    let zip = e._dir.path().join("cf.zip");
-    std::fs::write(
-        &zip,
-        zip_bytes(
-            e._dir.path(),
-            &[(
-                "manifest.json",
-                include_bytes!("../tests/fixtures/packs/manifest.json").to_vec(),
-            )],
-        ),
-    )
-    .unwrap();
-    let err = e
-        .svc
-        .import(zip.to_str().unwrap(), &sink)
-        .await
-        .unwrap_err();
-    assert!(is_cf_disabled(&err));
-    // Only `id` from above.
-    assert_eq!(e.inst.map.lock().unwrap().len(), 1);
-    // CurseForge is never contacted.
-    assert!(e
-        .http
-        .calls
-        .lock()
-        .unwrap()
-        .iter()
-        .all(|c| !c.contains("curseforge")));
-
     e.http.route(
         &format!("{MR}/search"),
         r#"{"hits":[{"project_id":"P","slug":"p","title":"P","project_type":"mod"}],"offset":0,"limit":10,"total_hits":1}"#,
@@ -607,6 +543,75 @@ fn zip_bytes(dir: &std::path::Path, entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
         .collect();
     crate::packs::write_zip(&out, &entries, &[]).unwrap();
     std::fs::read(out).unwrap()
+}
+
+#[tokio::test]
+async fn mrpack_rejects_download_quota_before_creating_an_instance() {
+    let e = env();
+    let file = |name: &str, size: u64| {
+        serde_json::json!({
+            "path": name, "fileSize": size,
+            "hashes": {"sha1": "00".repeat(20), "sha512": "00".repeat(64)},
+            "downloads": ["https://cdn.modrinth.com/any"]
+        })
+    };
+    let files = vec![
+        vec![
+            file("mods/a.jar", 2 * 1024 * 1024 * 1024 + 1),
+            file("mods/b.jar", 2 * 1024 * 1024 * 1024),
+        ],
+        vec![file("mods/a.jar", 0); 20_001],
+        vec![file("mods/a.jar", u64::MAX)],
+    ];
+    for files in files {
+        let manifest = serde_json::json!({
+            "formatVersion": 1, "game": "minecraft", "versionId": "1", "name": "quota",
+            "files": files, "dependencies": {"minecraft": "1.21.1"}
+        });
+        let bytes = zip_bytes(
+            e._dir.path(),
+            &[("modrinth.index.json", manifest.to_string().into_bytes())],
+        );
+        let path = e._dir.path().join("quota.mrpack");
+        std::fs::write(&path, bytes).unwrap();
+        let err = e
+            .svc
+            .import(&path.to_string_lossy(), &NullSink::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidInput);
+        assert!(e.inst.list().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn mrpack_zero_size_cannot_disable_download_size_validation() {
+    let e = env();
+    let url = "https://cdn.modrinth.com/data/empty";
+    let payload = b"unexpected nonempty payload";
+    e.dl.files
+        .lock()
+        .unwrap()
+        .insert(url.into(), payload.to_vec());
+    let manifest = serde_json::json!({
+        "formatVersion": 1, "game": "minecraft", "versionId": "1", "name": "zero",
+        "files": [{"path": "config/empty.txt", "fileSize": 0,
+            "hashes": {"sha1": sha1_hex(payload), "sha512": sha512_hex(payload)}, "downloads": [url]}],
+        "dependencies": {"minecraft": "1.21.1"}
+    });
+    let bytes = zip_bytes(
+        e._dir.path(),
+        &[("modrinth.index.json", manifest.to_string().into_bytes())],
+    );
+    let path = e._dir.path().join("zero.mrpack");
+    std::fs::write(&path, bytes).unwrap();
+    let err = e
+        .svc
+        .import(&path.to_string_lossy(), &NullSink::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::HashMismatch);
+    assert!(e.inst.list().await.unwrap().is_empty());
 }
 
 fn sha512_hex(b: &[u8]) -> String {
@@ -989,4 +994,389 @@ async fn check_local_reports_and_suggests() {
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::NotFound);
+}
+
+const CF: &str = "https://relay.dedseckms.ru/api/v1/catalog/curseforge";
+
+impl Env {
+    fn cf_project(&self, project: u32, class: u32, allow: bool) -> serde_json::Value {
+        let value = serde_json::json!({"id":project,"gameId":432,"classId":class,"slug":format!("p{project}"),"name":format!("Project {project}"),"allowModDistribution":allow});
+        self.http.route(
+            &format!("{CF}/mods/{project}"),
+            serde_json::json!({"data":value}).to_string(),
+        );
+        value
+    }
+    fn cf_file(&self, project: u32, file: u32, deps: serde_json::Value) -> serde_json::Value {
+        let bytes = format!("file:{file}").into_bytes();
+        let url = format!("https://edge.forgecdn.net/files/1/1/{file}.jar");
+        self.dl
+            .files
+            .lock()
+            .unwrap()
+            .insert(url.clone(), bytes.clone());
+        let value = serde_json::json!({"id":file,"modId":project,"gameId":432,"displayName":format!("v{file}"),"fileName":format!("{file}.jar"),"fileDate":"2026-01-01T00:00:00Z","fileLength":bytes.len(),"isAvailable":true,"releaseType":1,"downloadUrl":url,"hashes":[{"algo":1,"value":sha1_hex(&bytes)}],"gameVersions":["1.20.1","Forge"],"dependencies":deps});
+        self.cf_register(project, &value);
+        value
+    }
+    fn cf_register(&self, project: u32, value: &serde_json::Value) {
+        self.http.route(
+            &format!("{CF}/files/{}", value["id"]),
+            serde_json::json!({"data":value}).to_string(),
+        );
+        self.http.route(
+            &format!("{CF}/mods/{project}/files"),
+            serde_json::json!({"data":[value],"pagination":{"totalCount":1}}).to_string(),
+        );
+    }
+}
+fn cf_pick(project: &str) -> ContentVersionRef {
+    ContentVersionRef {
+        source: ContentSourceKind::CurseForge,
+        project_id: project.into(),
+        version_id: None,
+    }
+}
+#[tokio::test]
+async fn curseforge_search_versions_dependencies_install_and_update() {
+    let e = env();
+    let p = e.cf_project(1, 6, true);
+    e.cf_project(2, 6, true);
+    e.cf_project(3, 6, true);
+    e.cf_file(
+        1,
+        11,
+        serde_json::json!([{"modId":2,"relationType":3},{"modId":3,"relationType":5}]),
+    );
+    e.cf_file(2, 22, serde_json::json!([]));
+    e.cf_file(3, 33, serde_json::json!([]));
+    e.http.route(
+        &format!("{CF}/mods/search"),
+        serde_json::json!({"data":[p],"pagination":{"index":0,"totalCount":1}}).to_string(),
+    );
+    let page = e
+        .svc
+        .search(SearchQuery {
+            source: ContentSourceKind::CurseForge,
+            kind: ContentKind::Mod,
+            text: "jei".into(),
+            mc: Some("1.20.1".into()),
+            loader: Some(LoaderKind::Forge),
+            categories: vec!["423".into()],
+            sort: SortBy::Downloads,
+            offset: 0,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items[0].project_id, "1");
+    let calls = e.http.calls.lock().unwrap().clone();
+    assert!(calls[0].contains("pageSize=50"));
+    assert!(calls[0].contains("modLoaderType=1"));
+    assert!(calls[0].contains("categoryId=423"));
+    let id = e.add_instance("1.20.1", LoaderKind::Forge);
+    let plan = e.svc.resolve(id, vec![cf_pick("1")]).await.unwrap();
+    assert_eq!(plan.install.len(), 2);
+    assert!(plan.conflicts.is_empty());
+    let conflict = e
+        .svc
+        .resolve(id, vec![cf_pick("1"), cf_pick("3")])
+        .await
+        .unwrap();
+    assert!(!conflict.conflicts.is_empty());
+    e.svc.install(id, plan, &NullSink::default()).await.unwrap();
+    assert!(e.inst.game_dir(id).join("mods/11.jar").exists());
+    e.svc.set_enabled(id, "11.jar", false).await.unwrap();
+    e.cf_file(1, 12, serde_json::json!([]));
+    e.svc.update_all(id, &NullSink::default()).await.unwrap();
+    assert!(e.inst.game_dir(id).join("mods/12.jar.disabled").exists());
+    let none = e
+        .svc
+        .versions(
+            ContentSourceKind::CurseForge,
+            "2",
+            lc_types::content::ContentFilter {
+                mc: Some("1.19.4".into()),
+                loader: Some(LoaderKind::Fabric),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+}
+#[tokio::test]
+async fn curseforge_distribution_null_hashes_and_untrusted_cdn() {
+    let e = env();
+    e.cf_project(1, 6, false);
+    let mut f = e.cf_file(1, 11, serde_json::json!([]));
+    let id = e.add_instance("1.20.1", LoaderKind::Forge);
+    let plan = e.svc.resolve(id, vec![cf_pick("1")]).await.unwrap();
+    assert_eq!(plan.manual.len(), 1);
+    assert!(plan.install.is_empty());
+    e.cf_project(1, 6, true);
+    f["downloadUrl"] = serde_json::Value::Null;
+    e.cf_register(1, &f);
+    let cat = &e.svc.inner.curseforge;
+    use crate::contract::ContentSource;
+    use crate::source::Catalog;
+    let v = cat.version("11").await.unwrap();
+    assert!(v.manual_download);
+    assert!(cat.file(&v).await.unwrap().url.is_none());
+    f["downloadUrl"] = serde_json::json!("https://evil.example/file.jar");
+    e.cf_register(1, &f);
+    let v = cat.version("11").await.unwrap();
+    assert_eq!(
+        cat.file(&v).await.unwrap_err().code,
+        ErrorCode::InvalidInput
+    );
+    f["hashes"] = serde_json::json!([{"algo":2,"value":"00000000000000000000000000000000"}]);
+    e.cf_register(1, &f);
+    assert!(cat.version("11").await.unwrap().manual_download);
+    assert!(cat.version("../11").await.is_err());
+    // Distribution permission changes are honored even after successful metadata reads.
+    e.cf_project(1, 6, false);
+    assert!(cat.file(&v).await.unwrap().url.is_none());
+}
+fn cf_manifest(overrides: &str) -> serde_json::Value {
+    serde_json::json!({"minecraft":{"version":"1.20.1","modLoaders":[{"id":"forge-47.2.0","primary":true}]},"manifestType":"minecraftModpack","manifestVersion":1,"name":"CF Pack","files":[{"projectID":1,"fileID":11,"required":true}],"overrides":overrides})
+}
+#[tokio::test]
+async fn curseforge_pack_import_remote_and_manual() {
+    let e = env();
+    e.cf_project(1, 6, true);
+    e.cf_file(1, 11, serde_json::json!([]));
+    let manifest = cf_manifest("overrides");
+    let bytes = zip_bytes(
+        e._dir.path(),
+        &[
+            ("manifest.json", serde_json::to_vec(&manifest).unwrap()),
+            ("overrides/config/test.txt", b"setting".to_vec()),
+        ],
+    );
+    let path = e._dir.path().join("cf.zip");
+    std::fs::write(&path, &bytes).unwrap();
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    assert_eq!(inst.loader.version.as_deref(), Some("47.2.0"));
+    assert!(e.inst.game_dir(inst.id).join("mods/11.jar").exists());
+    assert!(e.inst.game_dir(inst.id).join("config/test.txt").exists());
+    assert_eq!(
+        e.svc.list(inst.id).await.unwrap()[0].source,
+        ContentSourceKind::CurseForge
+    );
+    e.cf_project(9, 4471, true);
+    let mut pack = e.cf_file(9, 99, serde_json::json!([]));
+    pack["fileName"] = serde_json::json!("pack.zip");
+    pack["fileLength"] = serde_json::json!(bytes.len());
+    pack["hashes"] = serde_json::json!([{"algo":1,"value":sha1_hex(&bytes)}]);
+    let url = pack["downloadUrl"].as_str().unwrap().to_owned();
+    e.dl.files.lock().unwrap().insert(url, bytes);
+    e.cf_register(9, &pack);
+    e.svc
+        .install_remote(
+            ContentSourceKind::CurseForge,
+            "9",
+            Some("99"),
+            &NullSink::default(),
+        )
+        .await
+        .unwrap();
+    e.cf_project(1, 6, false);
+    let before = e.inst.map.lock().unwrap().len();
+    let error = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::ManualDownloadRequired);
+    assert_eq!(e.inst.map.lock().unwrap().len(), before);
+}
+#[tokio::test]
+async fn curseforge_pack_rejects_override_traversal_and_hash_mismatch() {
+    let e = env();
+    e.cf_project(1, 6, true);
+    let f = e.cf_file(1, 11, serde_json::json!([]));
+    for (prefix, entry) in [
+        ("../escape", "overrides/a"),
+        ("overrides", "overrides/../../escape.txt"),
+    ] {
+        let path = e._dir.path().join("bad.zip");
+        std::fs::write(
+            &path,
+            zip_bytes(
+                e._dir.path(),
+                &[
+                    (
+                        "manifest.json",
+                        serde_json::to_vec(&cf_manifest(prefix)).unwrap(),
+                    ),
+                    (entry, b"x".to_vec()),
+                ],
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            e.svc
+                .import(path.to_str().unwrap(), &NullSink::default())
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidInput
+        );
+        assert!(e.inst.map.lock().unwrap().is_empty());
+    }
+    let path = e._dir.path().join("hash.zip");
+    std::fs::write(
+        &path,
+        zip_bytes(
+            e._dir.path(),
+            &[(
+                "manifest.json",
+                serde_json::to_vec(&cf_manifest("overrides")).unwrap(),
+            )],
+        ),
+    )
+    .unwrap();
+    e.dl.files.lock().unwrap().insert(
+        f["downloadUrl"].as_str().unwrap().to_owned(),
+        b"corrupt".to_vec(),
+    );
+    assert_eq!(
+        e.svc
+            .import(path.to_str().unwrap(), &NullSink::default())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::HashMismatch
+    );
+    assert!(e.inst.map.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn curseforge_pack_rejects_compressed_manifest_and_total_download_quota() {
+    let e = env();
+    let path = e._dir.path().join("bomb.zip");
+    std::fs::write(
+        &path,
+        zip_bytes(
+            e._dir.path(),
+            &[("manifest.json", vec![b' '; 8 * 1024 * 1024 + 1])],
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        e.svc
+            .import(path.to_str().unwrap(), &NullSink::default())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidInput
+    );
+    e.cf_project(1, 6, true);
+    let mut f = e.cf_file(1, 11, serde_json::json!([]));
+    f["fileLength"] = serde_json::json!(4u64 * 1024 * 1024 * 1024 + 1);
+    e.cf_register(1, &f);
+    std::fs::write(
+        &path,
+        zip_bytes(
+            e._dir.path(),
+            &[(
+                "manifest.json",
+                serde_json::to_vec(&cf_manifest("overrides")).unwrap(),
+            )],
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        e.svc
+            .import(path.to_str().unwrap(), &NullSink::default())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidInput
+    );
+    assert!(e.inst.map.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn curseforge_large_pack_batches_are_bounded_and_fail_closed() {
+    let e = env();
+    let mut manifest = cf_manifest("overrides");
+    let mut entries = Vec::new();
+    for project in 1..=65 {
+        e.cf_project(project, 6, true);
+        e.cf_file(project, project + 100, serde_json::json!([]));
+        entries.push(serde_json::json!({"projectID":project,"fileID":project+100,"required":true}));
+    }
+    manifest["files"] = serde_json::json!(entries);
+    let path = e._dir.path().join("large.zip");
+    std::fs::write(
+        &path,
+        zip_bytes(
+            e._dir.path(),
+            &[("manifest.json", serde_json::to_vec(&manifest).unwrap())],
+        ),
+    )
+    .unwrap();
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        e.svc
+            .inner
+            .scan(&e.inst.game_dir(inst.id))
+            .await
+            .unwrap()
+            .len(),
+        65
+    );
+    let calls = e.http.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 4);
+    for call in &calls {
+        assert!(call.starts_with("POST "));
+        let body: serde_json::Value =
+            serde_json::from_str(call.splitn(3, ' ').nth(2).unwrap()).unwrap();
+        assert!(
+            body.as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+                <= 50
+        );
+    }
+    // Successful previous responses must never mask missing files or changed permissions.
+    e.http
+        .routes
+        .lock()
+        .unwrap()
+        .remove(&format!("{CF}/files/165"));
+    assert_eq!(
+        e.svc
+            .import(path.to_str().unwrap(), &NullSink::default())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    assert_eq!(e.inst.map.lock().unwrap().len(), 1);
+    e.cf_file(65, 165, serde_json::json!([]));
+    e.cf_project(65, 6, false);
+    assert_eq!(
+        e.svc
+            .import(path.to_str().unwrap(), &NullSink::default())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::ManualDownloadRequired
+    );
+    assert_eq!(e.inst.map.lock().unwrap().len(), 1);
 }

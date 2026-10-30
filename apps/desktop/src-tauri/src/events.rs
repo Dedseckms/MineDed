@@ -65,3 +65,7 @@ pub struct VoiceStatusEvent(pub lc_types::voice::VoiceStatus);
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[tauri_specta(event_name = "update://available")]
 pub struct UpdateAvailableEvent(pub UpdateInfo);
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+#[tauri_specta(event_name = "social://event")]
+pub struct SocialChangedEvent(pub lc_types::social::SocialEvent);

@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Main window only: toggle translucent window effects (Settings.translucent).",
   "windows": ["main"],
-  "permissions": ["core:window:allow-set-effects"]
+  "permissions": ["core:window:allow-set-effects", "dialog:allow-save"]
 }

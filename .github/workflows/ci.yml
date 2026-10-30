@@ -18,7 +18,7 @@ jobs:
         os: [windows-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Linux system deps (Tauri)
         if: runner.os == 'Linux'
@@ -32,10 +32,8 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 12
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -48,6 +46,10 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+      - name: Optimized GLib variant iteration regression
+        if: runner.os == 'Linux'
+        run: cargo test -p lc-runtime --release --test glib_variant_iter
 
       - name: bindings.ts is up to date
         shell: bash

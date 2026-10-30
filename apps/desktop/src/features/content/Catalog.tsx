@@ -1,3 +1,4 @@
+import { SEARCH_SOURCES, type SearchSource } from "../../lib/content";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
@@ -66,7 +67,7 @@ function ResultCard({
 const RESULT_ROW = 148;
 const RESULT_VIEWPORT = 640;
 
-/** Modrinth search with instance-aware filters and infinite scroll. */
+/** Provider search with instance-aware filters and infinite scroll. */
 export function Catalog({
   instance,
   installed,
@@ -83,6 +84,7 @@ export function Catalog({
   const store = useContentStore(
     useShallow((s) => ({
       setKind: s.setKind,
+      setSource: s.setSource,
       setText: s.setText,
       setSort: s.setSort,
       setCompatibleOnly: s.setCompatibleOnly,
@@ -97,7 +99,7 @@ export function Catalog({
   const search = useContentSearch(query);
   const items = search.data?.pages.flatMap((p) => p.items) ?? [];
   const total = search.data?.pages[0]?.total ?? 0;
-  const installedIds = new Set(installed.map((c) => c.projectId).filter((x): x is string => x !== null));
+  const installedIds = new Set(installed.filter((c) => c.projectId !== null).map((c) => `${c.source}:${c.projectId}`));
 
   // Infinite scroll: the windowed list asks for more when its last rows show up.
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = search;
@@ -109,6 +111,10 @@ export function Catalog({
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
         <div className="flex flex-wrap items-center gap-2">
+          <Select aria-label={t("content.filters.source")} className="w-auto" value={filters.source}
+            onChange={(e) => store.setSource(e.target.value as SearchSource)}>
+            {SEARCH_SOURCES.map((source) => <option key={source} value={source}>{t(`content.source.${source}`)}</option>)}
+          </Select>
           <Select
             aria-label={t("content.filters.kind")}
             className="w-auto"
@@ -186,7 +192,7 @@ export function Catalog({
                 <div className="h-full pb-3">
                   <ResultCard
                     project={p}
-                    installed={installedIds.has(p.projectId)}
+                    installed={installedIds.has(`${p.source}:${p.projectId}`)}
                     onOpen={() => onOpen(p)}
                     onInstall={() => onInstall(p)}
                   />

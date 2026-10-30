@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SearchQuery, TaskEvent } from "../bindings";
 import { unwrap } from "../api/client";
-import { errorView } from "../lib/errors";
 import { createMockCommands } from "./index";
 
 const channel = (events: TaskEvent[] = []) =>
@@ -56,11 +55,15 @@ describe("mock modpacks", () => {
     expect((await api.modpackInstall("modrinth", "1KVo5zza", "bad-version", channel())).status).toBe("error");
   });
 
-  it("refuses CurseForge (turned off) with a known reason", async () => {
-    const api = createMockCommands();
-    const res = await api.modpackInstall("curseForge", "452013", null, channel());
-    expect(res.status === "error" && errorView(res.error).messageKey).toBe("errors.reason.curseforgeDisabled");
-    const v = await api.contentVersions("curseForge", "452013", { mc: null, loader: null });
-    expect(v.status).toBe("error");
+  it("installs the selected CurseForge pack using numeric IDs", async () => {
+    const api = createMockCommands({}, { tickMs: 5 });
+    const versions = unwrap(await api.contentVersions("curseForge", "447315", { mc: null, loader: null }));
+    expect(versions[0]?.source).toBe("curseForge");
+    expect(versions[0]?.versionId).toMatch(/^\d+$/);
+    const events: TaskEvent[] = [];
+    unwrap(await api.modpackInstall("curseForge", "447315", versions[0]?.versionId ?? null, channel(events)));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(events.find((e) => e.type === "finished")).toMatchObject({ error: null });
+    expect(unwrap(await api.instanceList()).some((i) => i.name === "Better MC (CurseForge)")).toBe(true);
   });
 });

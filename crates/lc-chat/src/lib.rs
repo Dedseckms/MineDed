@@ -6,3 +6,6 @@ pub mod stub;
 
 pub use contract::{default_privacy, ChatService, SocialObserver};
 pub use stub::StubChat;
+
+mod service;
+pub use service::ChatClient;

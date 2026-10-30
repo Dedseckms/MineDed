@@ -1,5 +1,4 @@
-//! Modpack import/export: Modrinth `.mrpack`, launcher zip; CurseForge zip is
-//! export-only (importing one needs the CurseForge API, which is turned off).
+//! Modpack import/export: Modrinth `.mrpack`, CurseForge and launcher zip.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -18,8 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::contract::PackIo;
 use crate::index::{key, ContentIndex, IndexEntry};
-use crate::service::{curseforge_disabled, ContentServices, Inner};
-use crate::util::{file_hashes, io_err, join, parse_url, safe_join, CONTENT_DIRS};
+use crate::service::{ContentServices, Inner};
+use crate::util::{
+    ensure_no_links, file_hashes, io_err, is_link, join, parse_url, safe_join, CONTENT_DIRS,
+};
 
 pub(crate) const MRPACK_INDEX: &str = "modrinth.index.json";
 pub(crate) const CF_MANIFEST: &str = "manifest.json";
@@ -36,6 +37,7 @@ const ALLOWED_HOSTS: [&str; 4] = [
 /// Unpacking limits for untrusted archives.
 const MAX_ENTRIES: usize = 20_000;
 const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 
 /// `-XX:` options a foreign pack may set: GC / JIT / memory tuning only.
 /// Anything that reads files or runs commands (`Flags`, `VMOptionsFile`,
@@ -374,8 +376,6 @@ pub(crate) fn mrpack_loader_key(kind: LoaderKind) -> Option<&'static str> {
 }
 
 /// `forge-47.2.0` / `neoforge-21.1.77` / `fabric-0.16.9` / `quilt-0.26.0`.
-/// Test-only: checks exported CurseForge manifests (import is turned off).
-#[cfg(test)]
 pub(crate) fn cf_target(m: &CfManifest) -> AppResult<(String, LoaderRef)> {
     let mc = m.minecraft.version.clone();
     let primary = m
@@ -470,26 +470,43 @@ fn zip_err(e: zip::result::ZipError) -> AppError {
 
 fn open_zip(path: &Path) -> AppResult<zip::ZipArchive<std::fs::File>> {
     let f = std::fs::File::open(path).map_err(|e| io_err(path, e))?;
-    zip::ZipArchive::new(f).map_err(zip_err)
+    let zip = zip::ZipArchive::new(f).map_err(zip_err)?;
+    if zip.len() > MAX_ENTRIES {
+        return Err(bad_pack("archive has too many entries"));
+    }
+    Ok(zip)
 }
 
 fn read_entry(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> AppResult<Vec<u8>> {
-    let mut e = zip.by_name(name).map_err(zip_err)?;
+    let e = zip.by_name(name).map_err(zip_err)?;
+    if e.size() > MAX_MANIFEST_BYTES {
+        return Err(bad_pack("pack manifest is too large").detail("entry", name));
+    }
     let mut buf = Vec::new();
-    e.read_to_end(&mut buf)
+    e.take(MAX_MANIFEST_BYTES + 1)
+        .read_to_end(&mut buf)
         .map_err(|e| bad_pack(format!("read {name}: {e}")))?;
+    if buf.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(bad_pack("pack manifest is too large").detail("entry", name));
+    }
     Ok(buf)
 }
 
 /// Extracts entries under `prefix/` into `dest` (paths sanitized).
 fn extract_prefix(path: &Path, prefix: &str, dest: &Path) -> AppResult<usize> {
+    let mut remaining = MAX_TOTAL_BYTES;
+    extract_prefix_limited(path, prefix, dest, &mut remaining)
+}
+
+fn extract_prefix_limited(
+    path: &Path,
+    prefix: &str,
+    dest: &Path,
+    remaining: &mut u64,
+) -> AppResult<usize> {
     let mut zip = open_zip(path)?;
     let prefix = format!("{}/", prefix.trim_end_matches('/'));
-    if zip.len() > MAX_ENTRIES {
-        return Err(bad_pack("archive has too many entries"));
-    }
     let mut n = 0;
-    let mut total: u64 = 0;
     for i in 0..zip.len() {
         let mut e = zip.by_index(i).map_err(zip_err)?;
         let name = e.name().to_owned();
@@ -505,15 +522,15 @@ fn extract_prefix(path: &Path, prefix: &str, dest: &Path) -> AppResult<usize> {
         }
         let mut f = std::fs::File::create(&out).map_err(|e| io_err(&out, e))?;
         // Real bytes are counted (declared sizes can lie).
-        let left = MAX_TOTAL_BYTES - total;
+        let left = *remaining;
         let copied =
             std::io::copy(&mut (&mut e).take(left + 1), &mut f).map_err(|e| io_err(&out, e))?;
-        total += copied;
         if copied > left {
             drop(f);
             let _ = std::fs::remove_file(&out);
             return Err(bad_pack("archive is too large when unpacked"));
         }
+        *remaining -= copied;
         n += 1;
     }
     Ok(n)
@@ -526,6 +543,7 @@ fn entry_names(path: &Path) -> AppResult<Vec<String>> {
 
 /// Relative (`/`-separated) files under `root`, skipping export junk.
 fn walk(root: &Path, skip_saves: bool) -> AppResult<Vec<String>> {
+    ensure_no_links(root)?;
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, rel)) = stack.pop() {
@@ -542,7 +560,11 @@ fn walk(root: &Path, skip_saves: bool) -> AppResult<Vec<String>> {
             } else {
                 format!("{rel}/{name}")
             };
-            let ft = e.file_type().map_err(|err| io_err(&e.path(), err))?;
+            let meta = std::fs::symlink_metadata(e.path()).map_err(|err| io_err(&e.path(), err))?;
+            if is_link(&meta) {
+                continue;
+            }
+            let ft = meta.file_type();
             if ft.is_dir() {
                 if rel.is_empty()
                     && EXPORT_SKIP
@@ -570,12 +592,14 @@ pub(crate) fn write_zip(
     entries: &[(String, Vec<u8>)],
     files: &[(String, PathBuf)],
 ) -> AppResult<()> {
+    ensure_no_links(out)?;
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
     }
     let mut tmp = out.as_os_str().to_owned();
     tmp.push(".part");
     let tmp = PathBuf::from(tmp);
+    ensure_no_links(&tmp)?;
     let f = std::fs::File::create(&tmp).map_err(|e| io_err(&tmp, e))?;
     let mut z = zip::ZipWriter::new(f);
     let opts = zip::write::SimpleFileOptions::default()
@@ -587,6 +611,7 @@ pub(crate) fn write_zip(
         z.write_all(bytes).map_err(|e| io_err(&tmp, e))?;
     }
     for (name, path) in files {
+        ensure_no_links(path)?;
         z.start_file(name.as_str(), opts).map_err(zerr)?;
         let mut src = std::fs::File::open(path).map_err(|e| io_err(path, e))?;
         std::io::copy(&mut src, &mut z).map_err(|e| io_err(path, e))?;
@@ -634,6 +659,8 @@ pub(crate) fn image_ext(b: &[u8]) -> Option<&'static str> {
 
 /// Moves every file under `src` into `dst`, merging folders and replacing files.
 pub(crate) fn move_tree(src: &Path, dst: &Path) -> AppResult<()> {
+    ensure_no_links(src)?;
+    ensure_no_links(dst)?;
     let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
     while let Some((from_dir, to_dir)) = stack.pop() {
         std::fs::create_dir_all(&to_dir).map_err(|e| io_err(&to_dir, e))?;
@@ -642,7 +669,13 @@ pub(crate) fn move_tree(src: &Path, dst: &Path) -> AppResult<()> {
             let e = e.map_err(|e| io_err(&from_dir, e))?;
             let from = e.path();
             let to = to_dir.join(e.file_name());
-            let ft = e.file_type().map_err(|err| io_err(&from, err))?;
+            ensure_no_links(&to)?;
+            let meta = std::fs::symlink_metadata(&from).map_err(|err| io_err(&from, err))?;
+            if is_link(&meta) {
+                return Err(bad_pack("linked pack entry is not allowed")
+                    .detail("path", from.to_string_lossy()));
+            }
+            let ft = meta.file_type();
             if ft.is_dir() {
                 stack.push((from, to));
             } else if ft.is_file() {
@@ -770,6 +803,128 @@ impl Inner {
         Some(name)
     }
 
+    async fn import_curseforge(
+        &self,
+        path: &Path,
+        meta: &PackMeta,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<Instance> {
+        sink.check_cancelled()?;
+        let p = path.to_path_buf();
+        let bytes = join(
+            tokio::task::spawn_blocking(move || read_entry(&mut open_zip(&p)?, CF_MANIFEST)).await,
+        )?;
+        let manifest: CfManifest = parse(&bytes, CF_MANIFEST)?;
+        if manifest.manifest_type != "minecraftModpack" || manifest.manifest_version != 1 {
+            return Err(bad_pack("unsupported CurseForge manifest"));
+        }
+        if manifest.files.len() > MAX_ENTRIES {
+            return Err(bad_pack("too many CurseForge files"));
+        }
+        // Check the override prefix itself, before any API request or download.
+        safe_join(Path::new("game"), &manifest.overrides)?;
+        if manifest.overrides.contains('\\') || manifest.overrides.starts_with('/') {
+            return Err(bad_pack("invalid CurseForge override prefix"));
+        }
+        let (mc, loader) = cf_target(&manifest)?;
+        let staging = self.staging_dir().await?;
+        let result = async {
+            let mut remaining = MAX_TOTAL_BYTES;
+            let mut planned = Vec::new();
+            let mut used = std::collections::HashSet::new();
+            let entries: Vec<_> = manifest
+                .files
+                .iter()
+                .filter(|f| f.required)
+                .map(|entry| (entry.project_id, entry.file_id))
+                .collect();
+            for (v, project, remote) in self.curseforge.pack_entries(&entries, sink).await? {
+                sink.check_cancelled()?;
+                let url = remote.url.ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::ManualDownloadRequired,
+                        "pack file requires manual download",
+                    )
+                    .detail("file", &v.file_name)
+                    .detail("url", remote.manual_url)
+                })?;
+                let sha1 = remote
+                    .sha1
+                    .ok_or_else(|| bad_pack("CurseForge pack file has no SHA-1"))?;
+                remaining = remaining
+                    .checked_sub(v.size)
+                    .ok_or_else(|| bad_pack("CurseForge downloads are too large"))?;
+                let dir = crate::util::kind_dir(project.kind)?;
+                let rel = format!("{dir}/{}", v.file_name);
+                if !used.insert(rel.to_ascii_lowercase()) {
+                    return Err(bad_pack("duplicate CurseForge pack file"));
+                }
+                let dest = safe_join(&staging, &rel)?;
+                planned.push((v, project, url, sha1, dest));
+            }
+            // Same path, byte, link and entry-count guards as the other pack formats.
+            let (p, prefix, dest) = (
+                path.to_path_buf(),
+                manifest.overrides.clone(),
+                staging.clone(),
+            );
+            join(
+                tokio::task::spawn_blocking(move || {
+                    extract_prefix_limited(&p, &prefix, &dest, &mut remaining)
+                })
+                .await,
+            )?;
+            sink.check_cancelled()?;
+            let requests = planned
+                .iter()
+                .map(|(v, _, url, sha1, dest)| {
+                    Ok(DownloadReq {
+                        urls: vec![parse_url(url)?],
+                        sha1: Some(sha1.clone()),
+                        size: Some(v.size),
+                        dest: dest.clone(),
+                        kind: ResourceKind::Content,
+                    })
+                })
+                .collect::<AppResult<Vec<_>>>()?;
+            if !requests.is_empty() {
+                self.dl.fetch_many(requests, sink).await?;
+            }
+            let mut index = ContentIndex::default();
+            for (v, project, url, sha1, dest) in planned {
+                sink.check_cancelled()?;
+                let (actual, sha512) = file_hashes(&dest).await?;
+                if actual != sha1 {
+                    return Err(AppError::new(
+                        ErrorCode::HashMismatch,
+                        "CurseForge pack SHA-1 mismatch",
+                    ));
+                }
+                let dir = crate::util::kind_dir(project.kind)?;
+                index.files.insert(
+                    key(dir, &v.file_name),
+                    IndexEntry {
+                        kind: project.kind,
+                        source: ContentSourceKind::CurseForge,
+                        project_id: v.project_id,
+                        version_id: v.version_id,
+                        title: Some(project.title),
+                        version_number: Some(v.version_number),
+                        sha1: Some(sha1),
+                        sha512: Some(sha512),
+                        size: Some(v.size),
+                        url: Some(url),
+                    },
+                );
+            }
+            self.finish_pack(&staging, &manifest.name, mc, loader, index, meta, sink)
+                .await
+        }
+        .await;
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        result
+    }
+
     async fn import_mrpack(
         &self,
         path: &Path,
@@ -786,8 +941,12 @@ impl Inner {
             return Err(bad_pack("mrpack is not for minecraft"));
         }
         let (mc, loader) = mrpack_target(&idx)?;
+        if idx.files.len() > MAX_ENTRIES {
+            return Err(bad_pack("mrpack has too many files"));
+        }
         // Validate everything before downloading anything.
         let mut planned: Vec<Planned> = Vec::new();
+        let mut download_bytes = 0u64;
         for f in &idx.files {
             if f.env
                 .as_ref()
@@ -797,6 +956,10 @@ impl Inner {
             {
                 continue;
             }
+            download_bytes = download_bytes
+                .checked_add(f.file_size)
+                .filter(|&size| size <= MAX_TOTAL_BYTES)
+                .ok_or_else(|| bad_pack("mrpack downloads are too large"))?;
             let url = f
                 .downloads
                 .iter()
@@ -844,7 +1007,7 @@ impl Inner {
                 Ok(DownloadReq {
                     urls: vec![parse_url(url)?],
                     sha1: Some(sha1.clone()),
-                    size: (f.file_size > 0).then_some(f.file_size),
+                    size: Some(f.file_size),
                     dest: safe_join(staging, &f.path)?,
                     kind: ResourceKind::Content,
                 })
@@ -889,10 +1052,12 @@ impl Inner {
         sink.check_cancelled()?;
         sink.progress(0, None, "stages.packOverrides");
         let (p, g) = (path.to_path_buf(), staging.to_path_buf());
+        let mut remaining =
+            MAX_TOTAL_BYTES - planned.iter().map(|(f, _, _)| f.file_size).sum::<u64>();
         join(
             tokio::task::spawn_blocking(move || -> AppResult<()> {
-                extract_prefix(&p, "overrides", &g)?;
-                extract_prefix(&p, "client-overrides", &g)?;
+                extract_prefix_limited(&p, "overrides", &g, &mut remaining)?;
+                extract_prefix_limited(&p, "client-overrides", &g, &mut remaining)?;
                 Ok(())
             })
             .await,
@@ -908,16 +1073,26 @@ impl Inner {
         version_id: Option<&str>,
         sink: &dyn ProgressSink,
     ) -> AppResult<Instance> {
-        match source {
-            ContentSourceKind::Modrinth => {}
-            ContentSourceKind::CurseForge => return Err(curseforge_disabled()),
-            ContentSourceKind::Local => {
-                return Err(bad_pack("local files have no remote catalogue"));
-            }
-        }
+        sink.check_cancelled()?;
         sink.progress(0, None, "stages.packDownload");
-        let pf = self.modrinth.pack_file(project_id, version_id).await?;
-        if !allowed_download(&pf.url) {
+        let pf = match source {
+            ContentSourceKind::Modrinth => self.modrinth.pack_file(project_id, version_id).await?,
+            ContentSourceKind::CurseForge => {
+                self.curseforge.pack_file(project_id, version_id).await?
+            }
+            ContentSourceKind::Local => {
+                return Err(bad_pack("local files have no remote catalogue"))
+            }
+        };
+        if pf.size > MAX_TOTAL_BYTES {
+            return Err(bad_pack("modpack archive is too large"));
+        }
+        let permitted = if source == ContentSourceKind::CurseForge {
+            crate::curseforge::allowed_cdn(&pf.url)
+        } else {
+            allowed_download(&pf.url)
+        };
+        if !permitted {
             return Err(bad_pack("modpack download host is not allowed").detail("url", &pf.url));
         }
         let sha1 = pf.sha1.to_ascii_lowercase();
@@ -957,7 +1132,13 @@ impl Inner {
         sink.check_cancelled()?;
         let d = dest.clone();
         let names = join(tokio::task::spawn_blocking(move || entry_names(&d)).await)?;
-        if detect(&names) != Some(Detected::Mrpack) {
+        if detect(&names)
+            != Some(if source == ContentSourceKind::CurseForge {
+                Detected::CurseForge
+            } else {
+                Detected::Mrpack
+            })
+        {
             let _ = tokio::fs::remove_file(&dest).await;
             return Err(bad_pack("downloaded modpack has an unexpected format"));
         }
@@ -965,7 +1146,11 @@ impl Inner {
             name: Some(pf.title.clone()),
             icon_url: pf.icon_url.clone(),
         };
-        let r = self.import_mrpack(&dest, &meta, sink).await;
+        let r = if source == ContentSourceKind::CurseForge {
+            self.import_curseforge(&dest, &meta, sink).await
+        } else {
+            self.import_mrpack(&dest, &meta, sink).await
+        };
         // Kept on failure: a retry reuses the verified download.
         if r.is_ok() {
             let _ = tokio::fs::remove_file(&dest).await;
@@ -1162,8 +1347,11 @@ impl PackIo for ContentServices {
                     .import_mrpack(&p, &PackMeta::default(), sink)
                     .await
             }
-            // Its mods can only be resolved through the CurseForge API.
-            Some(Detected::CurseForge) => Err(curseforge_disabled()),
+            Some(Detected::CurseForge) => {
+                self.inner
+                    .import_curseforge(&p, &PackMeta::default(), sink)
+                    .await
+            }
             Some(Detected::Launcher) => self.inner.import_launcher(&p, sink).await,
             None => Err(bad_pack("unknown modpack format")),
         }
@@ -1346,5 +1534,77 @@ mod tests {
         )
         .unwrap();
         assert!(extract_prefix(&out, "overrides", &dir.path().join("g")).is_err());
+    }
+
+    #[test]
+    fn compressed_manifest_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("bomb.zip");
+        write_zip(
+            &out,
+            &[(
+                MRPACK_INDEX.into(),
+                vec![b' '; MAX_MANIFEST_BYTES as usize + 1],
+            )],
+            &[],
+        )
+        .unwrap();
+        assert!(std::fs::metadata(&out).unwrap().len() < 64 * 1024);
+        let error = read_entry(&mut open_zip(&out).unwrap(), MRPACK_INDEX).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidInput);
+        assert!(error.message.contains("too large"));
+        // A lying central directory must not bypass the real-byte limit.
+        let mut bytes = std::fs::read(&out).unwrap();
+        let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&1u32.to_le_bytes());
+        std::fs::write(&out, bytes).unwrap();
+        assert!(read_entry(&mut open_zip(&out).unwrap(), MRPACK_INDEX).is_err());
+    }
+
+    #[test]
+    fn overrides_share_an_actual_byte_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("pack.zip");
+        write_zip(
+            &out,
+            &[
+                ("overrides/a.txt".into(), b"aaa".to_vec()),
+                ("client-overrides/b.txt".into(), b"bbb".to_vec()),
+            ],
+            &[],
+        )
+        .unwrap();
+        let game = dir.path().join("game");
+        let mut remaining = 5;
+        extract_prefix_limited(&out, "overrides", &game, &mut remaining).unwrap();
+        assert_eq!(remaining, 2);
+        assert!(extract_prefix_limited(&out, "client-overrides", &game, &mut remaining).is_err());
+        assert!(!game.join("b.txt").exists());
+    }
+
+    #[test]
+    fn redirected_pack_destinations_do_not_overwrite_external_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "private").unwrap();
+        let game = dir.path().join("game");
+        std::fs::create_dir(&game).unwrap();
+        crate::util::link_dir(outside.path(), &game.join("config"));
+        let out = dir.path().join("evil.zip");
+        write_zip(
+            &out,
+            &[("overrides/config/secret.txt".into(), b"overwrite".to_vec())],
+            &[],
+        )
+        .unwrap();
+        assert!(extract_prefix(&out, "overrides", &game).is_err());
+
+        let staging = dir.path().join("staging");
+        std::fs::create_dir_all(staging.join("config")).unwrap();
+        std::fs::write(staging.join("config/secret.txt"), "overwrite").unwrap();
+        assert!(move_tree(&staging, &game).is_err());
+        assert_eq!(std::fs::read_to_string(secret).unwrap(), "private");
+        assert!(walk(&game, false).unwrap().is_empty());
     }
 }

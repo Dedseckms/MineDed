@@ -2,6 +2,8 @@
 //! (CONTRACT, lead). Implemented: health, rooms (+WS), VPN access. Mirrors and skins are 501 stubs.
 
 pub mod auth;
+pub mod chat;
+pub mod curseforge;
 pub mod error;
 pub mod ratelimit;
 pub mod rfc3339;
@@ -14,8 +16,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
+use axum::extract::rejection::BytesRejection;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
-use axum::extract::{ConnectInfo, FromRequestParts, Path, Query, State, WebSocketUpgrade};
+use axum::extract::{
+    ConnectInfo, DefaultBodyLimit, FromRequestParts, Path, Query, State, WebSocketUpgrade,
+};
 use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -74,6 +79,8 @@ struct Limiters {
     vpn_provision: RateLimiter<String>,
     /// `GET /me/vpn` per profile.
     vpn_get: RateLimiter<String>,
+    /// Limits unauthenticated VPN requests before they reach Drasl.
+    vpn_request: RateLimiter<IpAddr>,
 }
 
 #[derive(Clone)]
@@ -83,9 +90,24 @@ pub struct AppState {
     rooms: Arc<RoomStore>,
     limiters: Arc<Limiters>,
     vpn: Option<Arc<VpnService>>,
+    ws_connections: Arc<tokio::sync::Semaphore>,
+    chat: Option<Arc<chat::Chat>>,
+    curseforge: Option<Arc<curseforge::Broker>>,
 }
 
 impl AppState {
+    /// Enables the restricted public catalogue with a server-only credential.
+    pub fn with_curseforge(mut self, broker: curseforge::Broker) -> Self {
+        self.curseforge = Some(Arc::new(broker));
+        self
+    }
+
+    /// Enables durable chat after its database and attachment directory are opened.
+    pub fn with_chat(mut self, chat: chat::Chat) -> Self {
+        self.chat = Some(Arc::new(chat));
+        self
+    }
+
     pub fn new(cfg: Config, validator: Arc<dyn TokenValidator>) -> Self {
         let rooms = Arc::new(RoomStore::new(cfg.limits));
         let vpn = cfg.vpn.clone().map(|v| Arc::new(VpnService::new(v)));
@@ -101,8 +123,12 @@ impl AppState {
                 close: RateLimiter::per_minute(30, 10),
                 vpn_provision: RateLimiter::per_hour(10, 3),
                 vpn_get: RateLimiter::per_minute(30, 10),
+                vpn_request: RateLimiter::per_minute(60, 20),
             }),
             vpn,
+            ws_connections: Arc::new(tokio::sync::Semaphore::new(128)),
+            chat: None,
+            curseforge: None,
         }
     }
 
@@ -121,6 +147,13 @@ impl AppState {
                 s.limiters.close.sweep();
                 s.limiters.vpn_provision.sweep();
                 s.limiters.vpn_get.sweep();
+                s.limiters.vpn_request.sweep();
+                if let Some(broker) = &s.curseforge {
+                    broker.sweep();
+                }
+                if let Some(chat) = &s.chat {
+                    chat.poll_health().await;
+                }
             }
         })
     }
@@ -129,6 +162,15 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
+        .merge(chat::router(state.clone()))
+        .route(
+            "/catalog/curseforge",
+            axum::routing::any(curseforge::handle),
+        )
+        .route(
+            "/catalog/curseforge/{*path}",
+            axum::routing::any(curseforge::handle),
+        )
         .route("/mirrors", get(not_implemented))
         .route("/skins", get(not_implemented).post(not_implemented))
         .route("/skins/{id}", delete(not_implemented))
@@ -139,6 +181,17 @@ pub fn router(state: AppState) -> Router {
         .route("/rooms/{room_id}", delete(close_room))
         .route("/rooms/{room_id}/ws", get(room_socket))
         .fallback(|| async { ApiError::not_found("no such route") })
+        .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(axum::middleware::map_response(
+            |mut response: Response| async move {
+                // Room credentials and personal subscription URLs must not be cached.
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                );
+                response
+            },
+        ))
         .with_state(state);
     Router::new().nest(API_PREFIX, api)
 }
@@ -186,18 +239,39 @@ fn limit(rl: &RateLimiter<IpAddr>, ip: IpAddr) -> Result<(), ApiError> {
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
+    if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
+        return None;
+    }
     let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, token) = v.split_once(' ')?;
     let token = token.trim();
-    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
+    (scheme.eq_ignore_ascii_case("bearer")
+        && !token.is_empty()
+        && token.len() <= auth::MAX_BEARER_BYTES
+        && !token
+            .bytes()
+            .any(|b| b.is_ascii_whitespace() || b.is_ascii_control()))
+    .then_some(token)
 }
 
 async fn require_identity(s: &AppState, headers: &HeaderMap) -> Result<Identity, ApiError> {
     let token = bearer(headers).ok_or_else(ApiError::auth_required)?;
-    s.validator
+    let who = s
+        .validator
         .validate(token)
         .await?
-        .ok_or_else(ApiError::auth_expired)
+        .ok_or_else(ApiError::auth_expired)?;
+    if Uuid::parse_str(&who.user_id)
+        .ok()
+        .is_none_or(|id| id.is_nil())
+    {
+        return Err(ApiError::auth_expired());
+    }
+    Ok(who)
+}
+
+fn request_body(body: Result<Bytes, BytesRejection>) -> Result<Bytes, ApiError> {
+    body.map_err(|_| ApiError::invalid_input("request body is unavailable or too large"))
 }
 
 fn parse_json<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, ApiError> {
@@ -209,18 +283,18 @@ async fn create_room(
     State(s): State<AppState>,
     ClientIp(ip): ClientIp,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, ApiError> {
     limit(&s.limiters.create, ip)?;
-    let mut req: CreateRoom = parse_json(&body)?;
+    let mut req: CreateRoom = parse_json(&request_body(body)?)?;
     req.validate()?;
-    let c = match (bearer(&headers), req.auth_mode) {
-        (Some(_), _) | (None, AuthMode::Yggdrasil) => {
+    let c = match (headers.contains_key(header::AUTHORIZATION), req.auth_mode) {
+        (true, _) | (false, AuthMode::Yggdrasil) => {
             let who = require_identity(&s, &headers).await?;
             s.rooms.create(req, &who)?
         }
         // Offline host: anonymous `open` room, strict per-IP limits.
-        (None, AuthMode::Open) => {
+        (false, AuthMode::Open) => {
             limit(&s.limiters.anon_create, ip)?;
             let who = Identity {
                 user_id: format!("ip:{ip}"),
@@ -259,10 +333,10 @@ async fn join_room(
     ClientIp(ip): ClientIp,
     Path(code): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Result<Json<Value>, ApiError> {
     limit(&s.limiters.join, ip)?;
-    let req: JoinReq = parse_json(&body)?;
+    let req: JoinReq = parse_json(&request_body(body)?)?;
     validate_endpoint_id(&req.endpoint_id)?;
     let body_name = req.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
     if body_name
@@ -279,16 +353,11 @@ async fn join_room(
         .auth_mode_by_code(&code)
         .ok_or_else(|| ApiError::not_found("room not found"))?;
     // Auth is optional for open rooms (offline-account friends), required otherwise.
-    let who = match (mode, bearer(&headers)) {
-        (AuthMode::Yggdrasil, None) => return Err(ApiError::auth_required()),
-        (AuthMode::Yggdrasil, Some(t)) => Some(
-            s.validator
-                .validate(t)
-                .await?
-                .ok_or_else(ApiError::auth_expired)?,
-        ),
-        (AuthMode::Open, Some(t)) => s.validator.validate(t).await.ok().flatten(),
-        (AuthMode::Open, None) => None,
+    let who = match (mode, headers.contains_key(header::AUTHORIZATION)) {
+        (AuthMode::Yggdrasil, _) | (AuthMode::Open, true) => {
+            Some(require_identity(&s, &headers).await?)
+        }
+        (AuthMode::Open, false) => None,
     };
     let uuid = rooms::profile_uuid(who.as_ref().map(|w| w.user_id.as_str()));
     let name = who.map(|w| w.name).or(body_name).unwrap_or_else(|| {
@@ -362,7 +431,12 @@ async fn vpn_caller(
     Ok((svc, key))
 }
 
-async fn get_vpn(State(s): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
+async fn get_vpn(
+    State(s): State<AppState>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    limit(&s.limiters.vpn_request, ip)?;
     let (svc, key) = vpn_caller(&s, &headers, &s.limiters.vpn_get).await?;
     svc.get(&key)
         .await?
@@ -372,8 +446,10 @@ async fn get_vpn(State(s): State<AppState>, headers: HeaderMap) -> Result<Json<V
 
 async fn provision_vpn(
     State(s): State<AppState>,
+    ClientIp(ip): ClientIp,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
+    limit(&s.limiters.vpn_request, ip)?;
     let (svc, key) = vpn_caller(&s, &headers, &s.limiters.vpn_provision).await?;
     svc.provision(&key).await.map(Json)
 }
@@ -387,23 +463,30 @@ async fn room_socket(
     State(s): State<AppState>,
     ClientIp(ip): ClientIp,
     Path(room_id): Path<String>,
-    Query(q): Query<WsQuery>,
+    query: Result<Query<WsQuery>, axum::extract::rejection::QueryRejection>,
     upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Result<Response, ApiError> {
     limit(&s.limiters.ws, ip)?;
+    let Query(q) = query.map_err(|_| ApiError::auth_required())?;
     let token = q
         .token
-        .filter(|t| !t.is_empty())
+        .filter(|t| !t.is_empty() && t.len() <= 256)
         .ok_or_else(ApiError::auth_required)?;
     let room_id = Uuid::parse_str(&room_id).map_err(|_| ApiError::auth_expired())?;
-    let me = s
-        .rooms
-        .member(room_id, &token)
-        .ok_or_else(ApiError::auth_expired)?;
+    let me = s.rooms.websocket_member(room_id, &token)?;
+    let permit = s
+        .ws_connections
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ApiError::rate_limited(5))?;
     let upgrade = upgrade.map_err(|_| ApiError::invalid_input("WebSocket upgrade required"))?;
     Ok(upgrade
         .max_message_size(16 * 1024)
-        .on_upgrade(move |socket| ws::run(socket, s, room_id, me)))
+        .max_frame_size(16 * 1024)
+        .on_upgrade(move |socket| async move {
+            let _permit = permit;
+            ws::run(socket, s, room_id, me).await;
+        }))
 }
 
 #[cfg(test)]

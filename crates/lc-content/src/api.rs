@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use lc_http::{Downloader, ResourceKind, Route};
+use lc_runtime::ProgressSink;
 use lc_types::{AppError, AppResult, ErrorCode};
 use serde::de::DeserializeOwned;
 
@@ -104,7 +105,14 @@ impl DlHttp {
                     }
                     return Ok(b);
                 }
-                Err(e) if e.code == ErrorCode::Network => {
+                Err(e)
+                    if e.code == ErrorCode::Network
+                        && e.details
+                            .as_ref()
+                            .and_then(|d| d.get("status"))
+                            .map(String::as_str)
+                            != Some("429") =>
+                {
                     first.get_or_insert(e.detail("route", format!("{route:?}")));
                 }
                 Err(e) => return Err(e),
@@ -137,11 +145,13 @@ fn status_err(status: reqwest::StatusCode, url: &str) -> AppError {
         _ => ErrorCode::Network,
     };
     // Never put request headers (API key) into the error.
-    AppError::new(code, format!("http status {status}")).detail("url", url)
+    AppError::new(code, format!("http status {status}"))
+        .detail("url", url)
+        .detail("status", status.as_u16().to_string())
 }
 
 async fn send(req: reqwest::RequestBuilder, url: &str) -> AppResult<Vec<u8>> {
-    let resp = req
+    let mut resp = req
         .timeout(Duration::from_secs(30))
         .send()
         .await
@@ -153,16 +163,38 @@ async fn send(req: reqwest::RequestBuilder, url: &str) -> AppResult<Vec<u8>> {
             .detail("url", url)
         })?;
     if !resp.status().is_success() {
-        return Err(status_err(resp.status(), url));
+        let mut error = status_err(resp.status(), url);
+        if let Some(seconds) = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            error = error.detail("retryAfter", seconds.to_string());
+        }
+        return Err(error);
     }
-    let bytes = resp.bytes().await.map_err(|e| {
+    let limit = if url.contains("/catalog/curseforge/") {
+        4 * 1024 * 1024
+    } else {
+        16 * 1024 * 1024
+    };
+    let mut bytes = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| {
         AppError::new(
             ErrorCode::Network,
             format!("read failed: {}", e.without_url()),
         )
         .detail("url", url)
-    })?;
-    Ok(bytes.to_vec())
+    })? {
+        if chunk.len() > limit - bytes.len() {
+            return Err(
+                AppError::new(ErrorCode::Network, "API response is too large").detail("url", url),
+            );
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 #[async_trait]
@@ -279,6 +311,49 @@ impl Api {
         decode(&bytes, url)
     }
 
+    /// Fetch current distribution permissions without offline/stale fallback.
+    pub async fn get_uncached<T: DeserializeOwned>(&self, url: &str) -> AppResult<T> {
+        decode(&self.http.get(url, &[]).await?, url)
+    }
+
+    /// Current broker metadata, with at most three attempts and cancellable rate-limit waits.
+    pub async fn post_uncached<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        sink: &dyn ProgressSink,
+    ) -> AppResult<T> {
+        for attempt in 0..3 {
+            sink.check_cancelled()?;
+            let result = tokio::select! {
+                biased;
+                _ = sink.cancel_token().cancelled() => return Err(AppError::new(ErrorCode::Cancelled, "cancelled by user")),
+                result = self.http.post_json(url, &[], body) => result,
+            };
+            match result {
+                Ok(bytes) => return decode(&bytes, url),
+                Err(error) => {
+                    let details = error.details.as_ref();
+                    let rate_limited =
+                        details.and_then(|d| d.get("status")).map(String::as_str) == Some("429");
+                    let wait = details
+                        .and_then(|d| d.get("retryAfter"))
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(1);
+                    if !rate_limited || attempt == 2 || wait > 60 {
+                        return Err(error);
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = sink.cancel_token().cancelled() => return Err(AppError::new(ErrorCode::Cancelled, "cancelled by user")),
+                        _ = tokio::time::sleep(Duration::from_secs(wait.max(1))) => {}
+                    }
+                }
+            }
+        }
+        Err(AppError::internal("broker retry limit reached"))
+    }
+
     pub async fn post<T: DeserializeOwned>(
         &self,
         url: &str,
@@ -348,8 +423,31 @@ pub(crate) mod fake {
             _h: &[(&'static str, String)],
             body: &serde_json::Value,
         ) -> AppResult<Vec<u8>> {
-            self.answer(&format!("POST {url} {body}"))
-                .or_else(|_| self.answer(&format!("POST {url}")))
+            let result = self.answer(&format!("POST {url} {body}"));
+            if result.is_ok() {
+                return result;
+            }
+            if url.contains("/catalog/curseforge/") {
+                let (field, prefix) = if let Some(base) = url.strip_suffix("/mods") {
+                    ("modIds", format!("{base}/mods/"))
+                } else if let Some(base) = url.strip_suffix("/files") {
+                    ("fileIds", format!("{base}/files/"))
+                } else {
+                    return result;
+                };
+                let ids = body[field].as_array().unwrap();
+                let routes = self.routes.lock().unwrap();
+                let data: Vec<serde_json::Value> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        routes.get(&format!("{prefix}{id}")).map(|v| {
+                            serde_json::from_slice::<serde_json::Value>(v).unwrap()["data"].clone()
+                        })
+                    })
+                    .collect();
+                return Ok(serde_json::to_vec(&serde_json::json!({"data":data})).unwrap());
+            }
+            self.answer(&format!("POST {url}"))
         }
     }
 
@@ -511,5 +609,93 @@ mod route_tests {
         assert_eq!(e.details.unwrap()["hint"], "useProxy");
         // Both routes were tried.
         assert_eq!(*d.routes.lock().unwrap(), vec![Route::Auto, Route::Proxied]);
+    }
+}
+
+#[cfg(test)]
+mod broker_retry_tests {
+    use super::*;
+    use lc_runtime::NullSink;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RateLimited {
+        calls: AtomicUsize,
+        seconds: u64,
+    }
+    #[async_trait]
+    impl Http for RateLimited {
+        async fn get(&self, _url: &str, _headers: &[(&'static str, String)]) -> AppResult<Vec<u8>> {
+            unreachable!()
+        }
+        async fn post_json(
+            &self,
+            _url: &str,
+            _headers: &[(&'static str, String)],
+            _body: &serde_json::Value,
+        ) -> AppResult<Vec<u8>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(AppError::new(ErrorCode::Network, "rate limited")
+                .detail("status", "429")
+                .detail("retryAfter", self.seconds.to_string()))
+        }
+    }
+    #[tokio::test]
+    async fn broker_retries_at_most_three_times_and_honors_delay_bound() {
+        let http = Arc::new(RateLimited {
+            calls: AtomicUsize::new(0),
+            seconds: 1,
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let api = Api::new(http.clone(), dir.path().to_path_buf());
+        let result: AppResult<serde_json::Value> = api
+            .post_uncached(
+                "https://broker/files",
+                &serde_json::json!({"fileIds":[1]}),
+                &NullSink::default(),
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(http.calls.load(Ordering::SeqCst), 3);
+        let http = Arc::new(RateLimited {
+            calls: AtomicUsize::new(0),
+            seconds: 61,
+        });
+        let api = Api::new(http.clone(), dir.path().to_path_buf());
+        let result: AppResult<serde_json::Value> = api
+            .post_uncached(
+                "https://broker/files",
+                &serde_json::json!({"fileIds":[1]}),
+                &NullSink::default(),
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(http.calls.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test]
+    async fn broker_rate_limit_wait_is_cancelable() {
+        let http = Arc::new(RateLimited {
+            calls: AtomicUsize::new(0),
+            seconds: 60,
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let api = Api::new(http.clone(), dir.path().to_path_buf());
+        let sink = NullSink::default();
+        let token = sink.cancel_token().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            token.cancel();
+        });
+        let result: AppResult<serde_json::Value> = tokio::time::timeout(
+            Duration::from_secs(1),
+            api.post_uncached(
+                "https://broker/files",
+                &serde_json::json!({"fileIds":[1]}),
+                &sink,
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.unwrap_err().code, ErrorCode::Cancelled);
+        assert_eq!(http.calls.load(Ordering::SeqCst), 1);
     }
 }

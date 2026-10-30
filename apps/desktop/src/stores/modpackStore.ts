@@ -1,9 +1,11 @@
 import { create } from "zustand";
+import type { SearchSource } from "../lib/content";
 
 import type { SortBy } from "../bindings";
 import { DEFAULT_MODPACK_FILTERS, type ModpackFilters, type ModpackLoader } from "../lib/modpacks";
 
 interface ModpackState extends ModpackFilters {
+  setSource: (source: SearchSource) => void;
   setText: (text: string) => void;
   setMc: (mc: string | null) => void;
   setLoader: (loader: ModpackLoader | null) => void;
@@ -11,9 +13,10 @@ interface ModpackState extends ModpackFilters {
   reset: () => void;
 }
 
-/** Modpack catalog filters (Modrinth only); kept across tab switches and instance pages. */
+/** Modpack catalog filters (Modrinth and CurseForge); kept across tab switches and instance pages. */
 export const useModpackStore = create<ModpackState>()((set) => ({
   ...DEFAULT_MODPACK_FILTERS,
+  setSource: (source) => set({ source }),
   setText: (text) => set({ text }),
   setMc: (mc) => set({ mc }),
   setLoader: (loader) => set({ loader }),

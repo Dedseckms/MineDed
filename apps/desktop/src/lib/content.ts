@@ -40,8 +40,8 @@ export function suggestedPicks(issues: LocalDepIssue[]): { picks: ContentVersion
   return { picks, titles };
 }
 
-/** Catalog sources the user can search: Modrinth only (CurseForge is turned off). */
-export const SEARCH_SOURCES = ["modrinth"] as const satisfies readonly ContentSourceKind[];
+/** Catalog sources supported by the content service. */
+export const SEARCH_SOURCES = ["modrinth", "curseForge"] as const satisfies readonly ContentSourceKind[];
 export type SearchSource = (typeof SEARCH_SOURCES)[number];
 
 export const SEARCH_KINDS = ["mod", "resourcePack", "shader", "dataPack"] as const satisfies readonly ContentKind[];

@@ -375,7 +375,7 @@ impl AccountService for AccountsService {
         let client = self.http();
         let (root, _meta) = ygg::discover(&client, api_root).await?;
         let (session, profile) =
-            ygg::authenticate(&client, &root, username, password, &random_access_token()).await?;
+            ygg::authenticate(&client, &root, username, password, &random_access_token()?).await?;
         self.upsert_yggdrasil(&root, &session, &profile).await
     }
 
@@ -469,7 +469,7 @@ impl AuthProvider for AccountsService {
             AccountKind::Offline => Ok(LaunchAuth {
                 name: acc.name.clone(),
                 uuid: acc.uuid.clone(),
-                access_token: Secret::new(random_access_token()),
+                access_token: Secret::new(random_access_token()?),
                 user_type: UserType::Legacy,
                 authlib: None,
             }),

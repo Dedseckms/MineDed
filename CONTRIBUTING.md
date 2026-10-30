@@ -40,7 +40,7 @@ cargo test --workspace
   Ошибки — через `lc_types::AppError`. Комментарии — на английском, по делу.
 - **TypeScript:** strict, без `any`; все строки интерфейса — ключи i18n в `ru.json` и `en.json`.
   `apps/desktop/src/bindings.ts` генерируется (`cargo test -p desktop export_bindings`), руками не правится.
-- **Коммиты:** `<область>(<часть>): <что сделано>` по-английски, например `ui(vpn): show quota usage`.
+- **Коммиты:** `<область>(<часть>): <что сделано>` по-английски, например `ui(skins): show 3D cape preview`.
 - Новая логика — с тестами. Один PR — одна задача.
 
 ## Лицензия

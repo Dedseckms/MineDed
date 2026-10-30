@@ -9,7 +9,7 @@ node_modules/
 # Tauri generated
 /apps/desktop/src-tauri/gen/
 
-# Agent worktrees
+# Parallel worktrees
 /.worktrees/
 
 # Secrets and local env (never commit)
@@ -28,9 +28,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
-
-# Local Claude settings
-.claude/settings.local.json
 
 # Skin server runtime (never commit)
 /server/skinserver/.secrets

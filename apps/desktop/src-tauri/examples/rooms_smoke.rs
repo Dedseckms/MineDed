@@ -21,6 +21,10 @@ use lc_types::TaskId;
 
 struct Obs;
 
+impl lc_chat::SocialObserver for Obs {
+    fn on_event(&self, _: lc_types::social::SocialEvent) {}
+}
+
 impl GameObserver for Obs {
     fn on_state(&self, _p: InstanceStatePayload) {}
     fn on_log(&self, _p: InstanceLogPayload) {}
@@ -72,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Paths::new(&root),
         store,
         &settings,
+        obs.clone(),
         obs.clone(),
         obs.clone(),
         obs,

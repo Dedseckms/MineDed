@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use chacha20poly1305::aead::{Aead, Generate, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use lc_runtime::Paths;
 use lc_types::{AppError, AppResult, ErrorCode};
@@ -114,12 +114,15 @@ impl EncryptedFileTokenStore {
     fn load_key(&self, create: bool) -> AppResult<Option<XChaCha20Poly1305>> {
         match read_optional(&self.key_file)? {
             Some(bytes) if bytes.len() == KEY_LEN => {
-                Ok(Some(XChaCha20Poly1305::new(Key::from_slice(&bytes))))
+                let key = Key::try_from(bytes.as_slice())
+                    .map_err(|_| internal("token store key file is corrupted"))?;
+                Ok(Some(XChaCha20Poly1305::new(&key)))
             }
             Some(_) => Err(internal("token store key file is corrupted")
                 .detail("path", self.key_file.display().to_string())),
             None if create => {
-                let key = XChaCha20Poly1305::generate_key(&mut OsRng);
+                let key = Key::try_generate()
+                    .map_err(|_| internal("token store key generation failed"))?;
                 write_atomic(&self.key_file, key.as_slice(), true)?;
                 Ok(Some(XChaCha20Poly1305::new(&key)))
             }
@@ -148,9 +151,10 @@ impl EncryptedFileTokenStore {
             return Err(corrupted());
         }
         let (nonce, ct) = data[MAGIC.len()..].split_at(NONCE_LEN);
+        let nonce = XNonce::try_from(nonce).map_err(|_| corrupted())?;
         let plain = cipher
             .decrypt(
-                XNonce::from_slice(nonce),
+                &nonce,
                 Payload {
                     msg: ct,
                     aad: MAGIC,
@@ -168,7 +172,8 @@ impl EncryptedFileTokenStore {
     ) -> AppResult<()> {
         let plain =
             serde_json::to_vec(map).map_err(|_| internal("token store serialization failed"))?;
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let nonce =
+            XNonce::try_generate().map_err(|_| internal("token store nonce generation failed"))?;
         let ct = cipher
             .encrypt(
                 &nonce,
@@ -419,6 +424,49 @@ mod tests {
         let facade = KeyringTokenStore::file_only(&paths);
         assert!(facade.is_fallback());
         assert_eq!(facade.get("b").await.unwrap(), Some(Secret::new("two")));
+    }
+
+    #[tokio::test]
+    async fn file_store_reads_legacy_0_10_ciphertext_and_preserves_it_on_update() {
+        let dir = TempDir::new();
+        // Generated with chacha20poly1305 0.10.1, key [0x42; 32], nonce [0x24; 24],
+        // AAD b"LCT1", plaintext {"legacy-account":"dummy-refresh-token"}.
+        let ciphertext = [
+            222, 124, 187, 0, 9, 69, 47, 223, 143, 78, 92, 89, 97, 253, 99, 190, 16, 203, 172, 222,
+            9, 114, 25, 228, 12, 19, 131, 43, 25, 117, 168, 165, 57, 229, 231, 179, 81, 245, 121,
+            225, 52, 51, 176, 242, 18, 227, 19, 14, 45, 90, 42, 243, 234, 92, 213, 44,
+        ];
+        let mut legacy_file = b"LCT1".to_vec();
+        legacy_file.extend_from_slice(&[0x24; 24]);
+        legacy_file.extend_from_slice(&ciphertext);
+        std::fs::write(dir.path().join(FALLBACK_KEY_FILE), [0x42; 32]).unwrap();
+        std::fs::write(dir.path().join(FALLBACK_FILE), &legacy_file).unwrap();
+
+        let store = EncryptedFileTokenStore::new(dir.path());
+        assert_eq!(
+            store.get("legacy-account").await.unwrap(),
+            Some(Secret::new("dummy-refresh-token"))
+        );
+        store
+            .set("new-account", &Secret::new("dummy-new-token"))
+            .await
+            .unwrap();
+        let reopened = EncryptedFileTokenStore::new(dir.path());
+        assert_eq!(
+            reopened.get("legacy-account").await.unwrap(),
+            Some(Secret::new("dummy-refresh-token"))
+        );
+        assert_eq!(
+            reopened.get("new-account").await.unwrap(),
+            Some(Secret::new("dummy-new-token"))
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join(FALLBACK_KEY_FILE)).unwrap(),
+            [0x42; 32]
+        );
+        assert!(std::fs::read(dir.path().join(FALLBACK_FILE))
+            .unwrap()
+            .starts_with(b"LCT1"));
     }
 
     #[tokio::test]

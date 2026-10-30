@@ -1,3 +1,4 @@
+import { SEARCH_SOURCES, type SearchSource } from "../../lib/content";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
@@ -66,12 +67,13 @@ function ModpackCard({
 const ROW = 148;
 const VIEWPORT = 640;
 
-/** Ready-made modpacks from Modrinth; each installs as a new instance. */
+/** Provider modpacks; each installs as a new instance. */
 export function ModpackCatalog() {
   const { t } = useTranslation();
   const filters = useModpackStore(useShallow(selectModpackFilters));
   const store = useModpackStore(
     useShallow((s) => ({
+      setSource: s.setSource,
       setText: s.setText,
       setMc: s.setMc,
       setLoader: s.setLoader,
@@ -112,6 +114,10 @@ export function ModpackCatalog() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
         <div className="flex flex-wrap items-center gap-2">
+          <Select aria-label={t("content.filters.source")} className="w-auto" value={filters.source}
+            onChange={(e) => store.setSource(e.target.value as SearchSource)}>
+            {SEARCH_SOURCES.map((source) => <option key={source} value={source}>{t(`content.source.${source}`)}</option>)}
+          </Select>
           <Select
             aria-label={t("modpacks.filters.mc")}
             className="w-auto"
@@ -189,7 +195,7 @@ export function ModpackCatalog() {
                 <div className="h-full pb-3">
                   <ModpackCard
                     project={p}
-                    installing={installingId === p.projectId}
+                    installing={installingId === p.projectId && installer.variables?.source === p.source}
                     onOpen={() => setOpen(p)}
                     onInstall={() => {
                       // Progress is shown in the dialog and in the task center.

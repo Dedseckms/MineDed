@@ -39,9 +39,9 @@ describe("mock catalog", () => {
     expect(text.items[0]?.title).toBe("Sodium");
     const shaders = unwrap(await api.contentSearch(query({ kind: "shader" })));
     expect(shaders.items.every((p) => p.kind === "shader" && p.source === "modrinth")).toBe(true);
-    // CurseForge is turned off: requests fail with a known reason.
-    const cf = await api.contentSearch(query({ source: "curseForge" }));
-    expect(cf.status === "error" && cf.error.details?.reason).toBe("curseforgeDisabled");
+    // Provider identity is preserved, including numeric CurseForge IDs.
+    const cf = unwrap(await api.contentSearch(query({ source: "curseForge" })));
+    expect(cf.items[0]).toMatchObject({ source: "curseForge", projectId: "306612" });
     expect((await api.contentSearch(query({ limit: 0 }))).status).toBe("error");
   });
 

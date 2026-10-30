@@ -3,12 +3,17 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VirtualList } from "../../components/ui/VirtualList";
-import { skinSrc } from "./skinSrc";
+import { localSkinSrc, skinSrc } from "./skinSrc";
 
 afterEach(cleanup);
 
 describe("skinSrc", () => {
   const toAsset = (p: string) => `asset://localhost/${encodeURIComponent(p)}`;
+
+  it("uses the asset protocol for cape library paths and preserves HTTPS textures", () => {
+    expect(localSkinSrc("C:\\library\\cape.png", toAsset)).toBe(`asset://localhost/${encodeURIComponent("C:\\library\\cape.png")}`);
+    expect(localSkinSrc("https://example.com/cape.png", toAsset)).toBe("https://example.com/cape.png");
+  });
 
   it("prefers the texture URL", () => {
     expect(skinSrc({ url: "https://t/skin.png", localPath: "C:\\s.png" }, toAsset)).toBe("https://t/skin.png");

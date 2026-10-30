@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/glib"]
 members = [
     "crates/lc-types",
     "crates/lc-runtime",
@@ -17,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.2.1"
+version = "1.3.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 rust-version = "1.85"
@@ -41,15 +42,15 @@ async-trait = "0.1.92"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
-tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-util = "0.7.20"
-uuid = { version = "1.28.0", features = ["v4", "serde"] }
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
 url = { version = "2.5.8", features = ["serde"] }
 reqwest = { version = "0.13.5", features = ["json"] }
 specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid", "url"] }
 specta-typescript = "=0.0.12"
-tauri = { version = "2.12.4", features = ["protocol-asset"] }
-tauri-build = { version = "2.7.3", features = [] }
+tauri = { version = "2.12.5", features = ["protocol-asset"] }
+tauri-build = { version = "2.7.4", features = [] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 axum = { version = "0.8.9", features = ["ws"] }
 tower = { version = "0.5.3", features = ["util"] }
@@ -66,3 +67,7 @@ expect_used = "warn"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+# GTK 0.18 needs this compatible backport; see vendor/glib/PATCHES.md.
+glib = { path = "vendor/glib" }

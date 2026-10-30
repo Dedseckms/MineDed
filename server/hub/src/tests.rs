@@ -100,14 +100,15 @@ fn is_code(c: &str) -> bool {
 }
 
 async fn create(app: &Router, mode: &str, max_peers: u8) -> Value {
+    create_configured(app, mode, max_peers, true).await
+}
+
+async fn create_configured(app: &Router, mode: &str, max_peers: u8, protected: bool) -> Value {
+    let mut body = room_body(mode, max_peers);
+    body["passwordProtected"] = json!(protected);
     let (st, _, v) = call(
         app,
-        post_json(
-            "/api/v1/rooms",
-            Some("alice"),
-            "10.0.0.1",
-            room_body(mode, max_peers),
-        ),
+        post_json("/api/v1/rooms", Some("alice"), "10.0.0.1", body),
     )
     .await;
     assert_eq!(st, StatusCode::CREATED, "{v}");
@@ -374,6 +375,47 @@ async fn join_room_flow() {
 }
 
 #[tokio::test]
+async fn open_rooms_never_downgrade_supplied_credentials() {
+    let app = app();
+    let room = create(&app, "open", 8).await;
+    let uri = format!("/api/v1/rooms/{}/join", room["code"].as_str().unwrap());
+    for (i, auth) in ["Basic bad", "Bearer bad", "Bearer", "Bearer alice extra"]
+        .into_iter()
+        .enumerate()
+    {
+        for target in ["/api/v1/rooms", uri.as_str()] {
+            let body = if target == "/api/v1/rooms" {
+                room_body("open", 8)
+            } else {
+                json!({"endpointId": "g"})
+            };
+            let mut req = post_json(target, None, &format!("10.22.{i}.1"), body);
+            req.headers_mut()
+                .insert(header::AUTHORIZATION, auth.parse().unwrap());
+            let (status, _, v) = call(&app, req).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{v}");
+        }
+    }
+    let mut req = post_json(&uri, Some("bob"), "10.22.7.1", json!({"endpointId": "g"}));
+    req.headers_mut()
+        .append(header::AUTHORIZATION, "Bearer alice".parse().unwrap());
+    assert_eq!(call(&app, req).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn oversized_room_requests_use_app_errors() {
+    let req = post_json(
+        "/api/v1/rooms",
+        None,
+        "10.23.0.1",
+        json!({"padding": "x".repeat(20 * 1024)}),
+    );
+    let (status, _, v) = call(&app(), req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_app_error(&v, "invalidInput");
+}
+
+#[tokio::test]
 async fn voice_room_without_sig() {
     let app = app();
     // Game rooms (explicit or default kind) still require sig.
@@ -512,12 +554,60 @@ async fn ws_rejects_bad_token() {
     let id = room["roomId"].as_str().unwrap();
     for uri in [
         format!("/api/v1/rooms/{id}/ws?token=nope"),
+        format!("/api/v1/rooms/{id}/ws?token=one&token=two"),
         format!("/api/v1/rooms/{id}/ws"),
     ] {
         let (st, _, v) = call(&app, Request::get(uri).body(Body::empty()).unwrap()).await;
         assert_eq!(st, StatusCode::UNAUTHORIZED);
         assert!(v["code"].is_string());
     }
+}
+
+#[tokio::test]
+async fn protected_room_guest_cannot_bypass_password_over_hub_ws() {
+    let app = app();
+    let room = create(&app, "open", 4).await;
+    let uri = format!("/api/v1/rooms/{}/join", room["code"].as_str().unwrap());
+    let (_, _, j) = call(
+        &app,
+        post_json(&uri, None, "10.24.0.1", json!({"endpointId": "guest"})),
+    )
+    .await;
+    let guest_url = format!(
+        "/api/v1/rooms/{}/ws?token={}",
+        room["roomId"].as_str().unwrap(),
+        j["peerToken"].as_str().unwrap()
+    );
+    let (status, _, v) = call(&app, Request::get(guest_url).body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_app_error(&v, "permissionDenied");
+    // The host still upgrades successfully to manage its own signaling connection.
+    let addr = serve(&app).await;
+    let host_url = format!(
+        "ws://{addr}/api/v1/rooms/{}/ws?token={}",
+        room["roomId"].as_str().unwrap(),
+        room["hostToken"].as_str().unwrap()
+    );
+    let (mut host, _) = tokio_tungstenite::connect_async(host_url).await.unwrap();
+    next_of(&mut host, "host_endpoint").await;
+    host.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn global_websocket_limit_fails_closed() {
+    let state = state();
+    let _permits = state.ws_connections.acquire_many(128).await.unwrap();
+    let app = router(state.clone());
+    let room = create(&app, "open", 4).await;
+    let url = format!(
+        "/api/v1/rooms/{}/ws?token={}",
+        room["roomId"].as_str().unwrap(),
+        room["hostToken"].as_str().unwrap()
+    );
+    let (status, headers, v) = call(&app, Request::get(url).body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_app_error(&v, "rateLimited");
+    assert!(headers.contains_key("retry-after"));
 }
 
 async fn next_json(
@@ -562,7 +652,7 @@ async fn ws_presence_chat_and_close() {
         .into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(l, svc).await.unwrap() });
 
-    let room = create(&app, "open", 4).await;
+    let room = create_configured(&app, "open", 4, false).await;
     let id = room["roomId"].as_str().unwrap();
     let uri = format!("/api/v1/rooms/{}/join", room["code"].as_str().unwrap());
     let (_, _, j) = call(
@@ -631,7 +721,7 @@ async fn ws_join_leave_x10_and_kick_free_slots() {
     let app = app();
     let addr = serve(&app).await;
     // maxPeers=2: host + one live guest.
-    let room = create(&app, "open", 2).await;
+    let room = create_configured(&app, "open", 2, false).await;
     let id = room["roomId"].as_str().unwrap();
     let uri = format!("/api/v1/rooms/{}/join", room["code"].as_str().unwrap());
     let url = |t: &str| format!("ws://{addr}/api/v1/rooms/{id}/ws?token={t}");

@@ -12,7 +12,8 @@
     "settings": "Settings",
     "skins": "Skins",
     "multiplayer": "Multiplayer",
-    "vpn": "VPN"
+    "vpn": "VPN",
+    "chat": "Chat"
   },
   "header": {
     "accountHint": "Go to accounts",
@@ -30,7 +31,8 @@
     "optional": "Optional",
     "close": "Close",
     "copyLink": "Copy link",
-    "retry": "Retry"
+    "retry": "Retry",
+    "search": "Search"
   },
   "play": {
     "play": "Play",
@@ -261,7 +263,10 @@
     "accountLogin": "Signing in",
     "vpnUpdate": "Updating VPN",
     "appUpdate": "Updating launcher",
-    "modpackInstall": "Installing modpack"
+    "modpackInstall": "Installing modpack",
+    "chatSendFile": "Sending chat file",
+    "chatSaveFile": "Saving chat file",
+    "chatTransfer": "Chat file"
   },
   "taskStatus": {
     "running": "Running",
@@ -384,12 +389,13 @@
       "relayUnreachable": "The relay server is unreachable. Check your internet or turn on the VPN.",
       "rateLimited": "Too many attempts. Wait a little and try again.",
       "rateLimitedRetry": "Too many attempts. Try again in {{seconds}} s.",
-      "curseforgeDisabled": "CurseForge is turned off: the launcher works with Modrinth only. Look for the pack or mod on Modrinth.",
+      "curseforgeDisabled": "CurseForge is currently unavailable. Try again later or choose another provider.",
       "vpnUnavailable": "MineDed VPN is temporarily unavailable. Try again later.",
       "uacDeclined": "Administrator rights were not granted, and the “Selected programs” mode needs them. Allow the request or pick another mode.",
       "helperFailed": "Couldn't start the VPN helper with administrator rights.",
       "vpnNotRunning": "The VPN is off. Turn on the VPN to check the ping.",
-      "hostTooOld": "The host has an old launcher version — ask them to update."
+      "hostTooOld": "The host has an old launcher version — ask them to update.",
+      "packRoomBusy": "Leave the current room before downloading a shared pack."
     }
   },
   "dialog": {
@@ -511,7 +517,7 @@
       "newest": "Newest"
     },
     "filters": {
-      "source": "Source",
+      "source": "Provider",
       "kind": "Content type",
       "sort": "Sort",
       "search": "Search",
@@ -618,7 +624,15 @@
     "noAccounts": "Add an account to apply skins",
     "selectHint": "Select a skin",
     "removeTitle": "Delete skin?",
-    "removeMessage": "“{{name}}” will be removed from the library."
+    "removeMessage": "“{{name}}” will be removed from the library.",
+    "capeHint": "Import a 64×32 PNG or HTTPS link to preview it locally. Apply explicitly to wear it.",
+    "capePreview": "Cape preview",
+    "addCapeFile": "Import cape PNG…",
+    "capeUrl": "Cape HTTPS URL",
+    "capeUrlPlaceholder": "https://example.com/cape.png",
+    "addCapeUrl": "Import cape link",
+    "removeCape": "Remove cape",
+    "applyCape": "Apply cape"
   },
   "net": {
     "blocked": "{{host}} is unreachable — it looks blocked",
@@ -933,5 +947,114 @@
       "noVersion": "No suitable mod for this version and loader. Use windowed mode and maximize the window.",
       "vanilla": "Vanilla instance: turn off fullscreen (F11 or Options → Video Settings), then maximize the game window."
     }
+  },
+  "social": {
+    "title": "Chat",
+    "login": "Sign in with a My server account to open chat.",
+    "connected": "Connected",
+    "reconnecting": "Reconnecting…",
+    "search": "Find players",
+    "channels": "Conversations",
+    "global": "Global chat",
+    "message": "Message",
+    "send": "Send",
+    "attach": "Attach file",
+    "fileLimit": "Files up to 10 MiB. Progress appears in the task center.",
+    "rules": "Profanity and insults are prohibited. Newest messages appear first.",
+    "directHint": "Direct conversation. Newest messages appear first.",
+    "history": "Message history",
+    "older": "Load older messages",
+    "empty": "No messages yet",
+    "markRead": "Mark as read",
+    "deleted": "Message deleted",
+    "report": "Report",
+    "moderateDelete": "Remove as moderator",
+    "saveFile": "Save {{name}} · {{size}} KiB",
+    "roomInvite": "Invitation to room {{code}}",
+    "join": "Join",
+    "pack": "{{loader}} {{mc}} · {{mods}} mods",
+    "senderOffline": "Sender is offline. Try again later.",
+    "packUnavailable": "This older card has no transfer code. Ask the sender to share the pack again.",
+    "profile": "Player profile",
+    "write": "Message",
+    "invite": "Invite to room",
+    "addFriend": "Add friend",
+    "removeFriend": "Remove friend",
+    "block": "Block",
+    "unblock": "Unblock",
+    "accept": "Accept",
+    "decline": "Decline",
+    "reports": "Reports",
+    "noReports": "No open reports",
+    "attachment": "Attachment",
+    "resolve": "Resolve report",
+    "moderateUser": "Moderate player",
+    "mute": "Mute for {{hours}} h",
+    "unmute": "Unmute",
+    "ban": "Ban from chat",
+    "unban": "Unban",
+    "server": "Server health",
+    "disk": "Disk: {{used}} / {{total}} GiB",
+    "diskFull": "Server disk is full. New files are paused; text still works. Conversation history is preserved.",
+    "backup": "Last backup: {{date}}",
+    "noBackup": "No information",
+    "backupError": "Backup failed. Check the server.",
+    "migrating": "Moving storage: {{percent}}%",
+    "storageHint": "The new disk or external storage must be configured on the server first.",
+    "showPreview": "Show preview",
+    "hidePreview": "Hide preview",
+    "expandPreview": "Expand or collapse preview",
+    "tabs": {
+      "chat": "Chats",
+      "friends": "Friends",
+      "privacy": "Privacy",
+      "admin": "Administration"
+    },
+    "role": {
+      "user": "Player",
+      "moderator": "Moderator",
+      "admin": "Administrator"
+    },
+    "friend": {
+      "friends": "Friends",
+      "incoming": "Incoming request",
+      "outgoing": "Request sent"
+    },
+    "privacy": {
+      "whoCanMessage": "Who can message me",
+      "whoCanInvite": "Who can invite me to rooms",
+      "whoSeesStatus": "Who can see my status",
+      "whoCanAddFriend": "Who can send friend requests"
+    },
+    "audience": {
+      "everyone": "Everyone",
+      "friends": "Friends only",
+      "nobody": "Nobody"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "inGame": "In game",
+      "inRoom": "In a room",
+      "hidden": "Status hidden"
+    },
+    "setRole": {
+      "moderator": "Assign moderator",
+      "user": "Remove moderator role"
+    },
+    "storage": {
+      "newDisk": "Move to new disk",
+      "objectStorage": "Move to object storage"
+    },
+    "sharePack": "Share modpack",
+    "sharePackConfirm": "Share selected instance",
+    "packHostOnline": "The host must keep the launcher and room online during transfer. The pack imports as a new instance.",
+    "downloadPack": "Download modpack",
+    "packImported": "Modpack imported",
+    "unreadBadge": "Unread messages: {{n}}"
+  },
+  "chat": {
+    "upload": "Uploading file",
+    "download": "Downloading file"
   }
 }

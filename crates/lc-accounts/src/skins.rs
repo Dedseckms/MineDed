@@ -18,6 +18,8 @@ use crate::remote::{self, RemoteEndpoints};
 use crate::service::AccountsService;
 use crate::yggdrasil::{self as ygg, TextureKind};
 
+mod capes;
+
 /// Library index inside `<root>/skins`.
 pub const SKINS_INDEX: &str = "skins.json";
 /// Upper bound for a skin file; real skins are a few KB.
@@ -275,48 +277,16 @@ impl SkinService for SkinsService {
         Ok(())
     }
 
-    /// The Yggdrasil API has no cape catalog: only the active cape (if any)
-    /// from the signed profile textures is listed.
-    async fn capes(&self, account: AccountId) -> AppResult<Vec<Cape>> {
-        let t = self.accounts.ygg_target(Some(account)).await?;
-        let tex = ygg::fetch_textures(&self.accounts.http(), &t.root, &t.uuid).await?;
-        Ok(tex
-            .cape_url
-            .map(|url| {
-                let id = url.rsplit('/').next().unwrap_or_default().to_owned();
-                vec![Cape {
-                    id,
-                    name: "Cape".into(),
-                    url,
-                    active: true,
-                }]
-            })
-            .unwrap_or_default())
+    async fn add_cape(&self, source: &str) -> AppResult<Cape> {
+        self.import_cape(source).await
     }
 
-    /// `None` removes the cape (`DELETE .../cape`); `Some(id)` must be the
-    /// currently active cape (no catalog to choose from).
+    async fn capes(&self, account: AccountId) -> AppResult<Vec<Cape>> {
+        self.list_capes(account).await
+    }
+
     async fn set_cape(&self, account: AccountId, cape_id: Option<String>) -> AppResult<()> {
-        match cape_id {
-            None => {
-                let t = self.accounts.ygg_target(Some(account)).await?;
-                ygg::delete_texture(
-                    &self.accounts.http(),
-                    &t.root,
-                    &t.session,
-                    &t.uuid,
-                    TextureKind::Cape,
-                )
-                .await
-            }
-            Some(id) => {
-                if self.capes(account).await?.iter().any(|c| c.id == id) {
-                    Ok(())
-                } else {
-                    Err(AppError::new(ErrorCode::NotFound, "cape not available").detail("id", id))
-                }
-            }
-        }
+        self.select_cape(account, cape_id).await
     }
 }
 

@@ -54,7 +54,17 @@ async fn main() -> std::io::Result<()> {
     };
     eprintln!("vpn: {}", if cfg.vpn.is_some() { "on" } else { "off" });
 
-    let state = AppState::new(cfg, Arc::new(DraslValidator::new(&drasl)));
+    let mut state = AppState::new(cfg, Arc::new(DraslValidator::new(&drasl)));
+    if let Some(key) = env_nonempty("CURSEFORGE_API_KEY") {
+        let broker = hub::curseforge::Broker::new(lc_types::Secret::new(key))
+            .map_err(|_| std::io::Error::other("could not configure catalogue broker"))?;
+        state = state.with_curseforge(broker);
+    }
+    if let Some(path) = env_nonempty("HUB_CHAT_DIR") {
+        let chat = hub::chat::Chat::open(path)
+            .map_err(|_| std::io::Error::other("could not open chat storage"))?;
+        state = state.with_chat(chat);
+    }
     state.spawn_reaper();
     let listener = tokio::net::TcpListener::bind(addr).await?;
     eprintln!("hub {} listening on {addr}", env!("CARGO_PKG_VERSION"));

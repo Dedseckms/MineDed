@@ -144,8 +144,9 @@ async fn provision_is_idempotent_and_get_reports_usage() {
     assert_eq!(st, StatusCode::NOT_FOUND);
     assert_app_error(&v, "notFound");
 
-    let (st, _, a1) = call(&app, req("POST", Some("alice"))).await;
+    let (st, headers, a1) = call(&app, req("POST", Some("alice"))).await;
     assert_eq!(st, StatusCode::OK, "{a1}");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
     assert_vpn_access(&a1);
     assert_eq!(a1["quotaBytes"], 256 * GIB);
     assert_eq!(a1["usedBytes"], 0);
@@ -221,4 +222,77 @@ async fn provision_is_rate_limited_per_profile() {
     // Another profile is unaffected.
     let (st, _, _) = call(&app, req("POST", Some("bob"))).await;
     assert_eq!(st, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn panel_errors_are_sanitized_and_malformed_lists_never_provision() {
+    for payload in [
+        json!({"success": false, "msg": "secret-panel-token-and-client-password", "obj": null}),
+        json!({"success": true, "obj": {}}),
+        json!({"success": true, "obj": {"clients": null}}),
+        json!({"success": true, "obj": {"clients": [{"id": 1, "name": "ufoo", "remark": "mc-0000000000000000000000000000000a"}]}}),
+    ] {
+        let backend = Router::new().route(
+            "/panel/apiv2/clients",
+            get(move || {
+                let payload = payload.clone();
+                async move { Json(payload) }
+            }),
+        );
+        let addr = serve(&backend).await;
+        let app = vpn_app(format!("http://{addr}/panel/apiv2"), TOKEN);
+        for method in ["GET", "POST"] {
+            let (status, _, v) = call(&app, req(method, Some("alice"))).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+            assert!(!v.to_string().contains("secret-panel-token"));
+            assert!(v["details"].is_null());
+        }
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_clients_and_subscription_path_injection_are_rejected() {
+    for name in ["../../another-user", "uvalid"] {
+        let p = Shared::default();
+        let client = json!({"id": 1, "enable": true, "name": name, "remark": "mc-0000000000000000000000000000000a", "volume": 1, "up": 0, "down": 0});
+        p.lock().unwrap().clients.push(client.clone());
+        if name == "uvalid" {
+            let mut other = client;
+            other["id"] = json!(2);
+            p.lock().unwrap().clients.push(other);
+        }
+        let app = vpn_app(fake_sui(p.clone()).await, TOKEN);
+        assert_eq!(
+            call(&app, req("POST", Some("alice"))).await.0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(p.lock().unwrap().creates, 0);
+    }
+}
+
+#[tokio::test]
+async fn oversized_panel_response_is_rejected() {
+    let backend = Router::new().route(
+        "/panel/apiv2/clients",
+        get(|| async { "x".repeat(1024 * 1024 + 1) }),
+    );
+    let addr = serve(&backend).await;
+    let app = vpn_app(format!("http://{addr}/panel/apiv2"), TOKEN);
+    let (status, _, v) = call(&app, req("POST", Some("alice"))).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_app_error(&v, "network");
+}
+
+#[tokio::test]
+async fn invalid_vpn_requests_are_limited_before_profile_validation() {
+    let app = vpn_app("http://127.0.0.1:1/panel/apiv2".into(), TOKEN);
+    for _ in 0..20 {
+        assert_eq!(
+            call(&app, req("GET", Some("bad"))).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let (status, _, v) = call(&app, req("POST", Some("bad"))).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_app_error(&v, "rateLimited");
 }

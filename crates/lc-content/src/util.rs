@@ -28,6 +28,37 @@ pub(crate) fn join<T>(r: Result<AppResult<T>, tokio::task::JoinError>) -> AppRes
     r.map_err(|e| AppError::internal(format!("blocking task failed: {e}")))?
 }
 
+/// Includes Windows junctions and other reparse points, not only symlinks.
+pub(crate) fn is_link(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    meta.file_type().is_symlink()
+}
+
+/// Reject existing links in a path before reading, writing or traversing it.
+/// This protects against pre-existing redirects, not concurrent local replacement.
+pub(crate) fn ensure_no_links(path: &Path) -> AppResult<()> {
+    for part in path.ancestors() {
+        match std::fs::symlink_metadata(part) {
+            Ok(meta) if is_link(&meta) => {
+                return Err(
+                    AppError::new(ErrorCode::InvalidInput, "linked path is not allowed")
+                        .detail("path", part.to_string_lossy()),
+                );
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_err(part, e)),
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn sha1_hex(bytes: &[u8]) -> String {
     hex::encode(Sha1::digest(bytes))
 }
@@ -104,6 +135,7 @@ pub(crate) fn safe_join(root: &Path, rel: &str) -> AppResult<PathBuf> {
         any = true;
     }
     if any {
+        ensure_no_links(&out)?;
         Ok(out)
     } else {
         Err(bad())
@@ -148,6 +180,22 @@ pub(crate) fn loader_compatible(file_loaders: &[LoaderKind], target: LoaderKind)
 }
 
 #[cfg(test)]
+pub(crate) fn link_dir(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let result = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{:?}", result);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -172,5 +220,14 @@ mod tests {
     fn quilt_runs_fabric() {
         assert!(loader_compatible(&[LoaderKind::Fabric], LoaderKind::Quilt));
         assert!(!loader_compatible(&[LoaderKind::Quilt], LoaderKind::Fabric));
+    }
+
+    #[test]
+    fn rejects_redirected_parent_even_when_leaf_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        link_dir(outside.path(), &dir.path().join("config"));
+        assert!(safe_join(dir.path(), "config/new/file.txt").is_err());
+        assert!(!outside.path().join("new").exists());
     }
 }
