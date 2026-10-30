@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { SocialChannel, SocialUser } from "../../bindings";
 import { Icon } from "../../components/ui/Icon";
 import { Badge } from "../../components/ui/feedback";
+import { displayNameOf } from "../../lib/socialProfile";
 import { ChatAvatar } from "./ChatAvatar";
 import { clockLabel, previewOf } from "./chat";
 
@@ -75,7 +76,7 @@ export function ChatChannelList({
               >
                 <ChatAvatar user={user} size="sm" />
                 <span className="min-w-0 flex-1 truncate text-sm">
-                  {user.name}
+                  {displayNameOf(user)}
                 </span>
                 <span className="shrink-0 text-[11px] text-muted">
                   {t(`social.status.${user.status ?? "hidden"}`)}
@@ -130,7 +131,7 @@ function titleOf(
   t: (key: string) => string,
 ): string {
   if (channel.kind === "global") return t("social.global");
-  return channel.peer?.name ?? t("social.directChat");
+  return channel.peer ? displayNameOf(channel.peer) : t("social.directChat");
 }
 
 function ChannelRow({
