@@ -1194,7 +1194,9 @@
     "packImported": "Сборка импортирована",
     "unreadBadge": "Непрочитанных сообщений: {{n}}",
     "reportSent": "Жалоба отправлена",
-    "friendRequestSent": "Заявка отправлена"
+    "friendRequestSent": "Заявка отправлена",
+    "friendRequestAccepted": "Заявка принята",
+    "friendRequestDeclined": "Заявка отклонена"
   },
   "chat": {
     "upload": "Отправка файла",

@@ -553,11 +553,25 @@ export function ChatScreen() {
                         onClick={() =>
                           run(async () => {
                             unwrap(await api.socialAddFriend(friend.user.uuid));
-                            useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestSent" });
+                            useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestAccepted" });
                           })
                         }
                       >
                         {t("social.accept")}
+                      </Button>
+                    ) : null}
+                    {friend.state === "incoming" ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          run(async () => {
+                            unwrap(await api.socialRemoveFriend(friend.user.uuid));
+                            useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestDeclined" });
+                          })
+                        }
+                      >
+                        {t("social.decline")}
                       </Button>
                     ) : null}
                     <Button

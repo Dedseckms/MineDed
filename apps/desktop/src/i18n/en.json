@@ -1186,7 +1186,9 @@
     "packImported": "Modpack imported",
     "unreadBadge": "Unread messages: {{n}}",
     "reportSent": "Report sent",
-    "friendRequestSent": "Friend request sent"
+    "friendRequestSent": "Friend request sent",
+    "friendRequestAccepted": "Friend request accepted",
+    "friendRequestDeclined": "Friend request declined"
   },
   "chat": {
     "upload": "Uploading file",
