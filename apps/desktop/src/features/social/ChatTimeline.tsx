@@ -1,9 +1,10 @@
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { SocialMessage } from "../../bindings";
 import { Button } from "../../components/ui/Button";
 import type { TimelineRow } from "./chat";
+import { imageOnly, segmentsOf } from "./chat";
 
 const OVERSCAN_PX = 600;
 const FALLBACK_VIEWPORT = 480;
@@ -16,18 +17,32 @@ function estimateMessage(message: SocialMessage): number {
   if (content.type === "text") {
     const lines = content.text
       .split("\n")
-      .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 46)), 0);
-    return 38 + lines * 19;
+      .reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 40)), 0);
+    return 26 + lines * 19;
   }
-  if (content.type === "attachment") return content.caption ? 104 : 82;
+  if (content.type === "attachment") {
+    if (imageOnly(message)) return 232;
+    return content.caption ? 104 : 82;
+  }
   if (content.type === "roomInvite") return 74;
   return 118;
 }
 
+/** Consecutive images share one grid bubble, so their cells are counted once. */
+function estimateImages(count: number): number {
+  const columns = count === 1 ? 1 : count <= 4 ? 2 : 3;
+  return Math.ceil(count / columns) * (columns === 1 ? 236 : 150) + 8;
+}
+
 export function estimateRow(row: TimelineRow): number {
   if (row.kind === "day") return 34;
-  const body = row.group.messages.reduce((h, m) => h + estimateMessage(m), 0);
-  return body + 6 + row.group.messages.length * 3;
+  let height = 6;
+  for (const segment of segmentsOf(row.group.messages))
+    height +=
+      segment.kind === "images"
+        ? estimateImages(segment.messages.length)
+        : estimateMessage(segment.message) + 3;
+  return height;
 }
 
 export interface ChatTimelineProps {
@@ -37,6 +52,8 @@ export interface ChatTimelineProps {
   hasOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
+  /** The viewport sits on the newest message (the reader is not browsing history). */
+  onAtBottomChange?: (value: boolean) => void;
   renderRow: (row: TimelineRow) => ReactNode;
   empty: ReactNode;
 }
@@ -51,6 +68,7 @@ export function ChatTimeline({
   hasOlder,
   loadingOlder,
   onLoadOlder,
+  onAtBottomChange,
   renderRow,
   empty,
 }: ChatTimelineProps) {
@@ -59,9 +77,20 @@ export function ChatTimeline({
   const heights = useRef(new Map<string, number>());
   const previous = useRef({ height: 0, firstKey: "" });
   const atBottom = useRef(true);
+  const bottomListener = useRef(onAtBottomChange);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(0);
   const [, setVersion] = useState(0);
+
+  useEffect(() => {
+    bottomListener.current = onAtBottomChange;
+  }, [onAtBottomChange]);
+
+  const setBottom = (value: boolean) => {
+    if (atBottom.current === value) return;
+    atBottom.current = value;
+    bottomListener.current?.(value);
+  };
 
   const measure = (key: string, value: number) => {
     if (value <= 0) return;
@@ -107,7 +136,7 @@ export function ChatTimeline({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     setScrollTop(el.scrollTop);
-    atBottom.current = true;
+    setBottom(true);
   }, [channel]);
 
   useLayoutEffect(() => {
@@ -145,8 +174,9 @@ export function ChatTimeline({
       onScroll={(e) => {
         const el = e.currentTarget;
         setScrollTop(el.scrollTop);
-        atBottom.current =
-          el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+        setBottom(
+          el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX,
+        );
         if (el.scrollTop < LOAD_OLDER_PX && hasOlder && !loadingOlder)
           onLoadOlder();
       }}

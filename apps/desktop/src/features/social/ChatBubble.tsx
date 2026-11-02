@@ -12,10 +12,10 @@ import { useResolvedTheme } from "../../hooks/useAppearance";
 import { userColor } from "../../lib/social";
 import { accentColor, displayNameOf } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
-import { AttachmentPreview } from "./AttachmentPreview";
+import { AttachmentGrid, isImage } from "./AttachmentPreview";
 import { ChatAvatar } from "./ChatAvatar";
 import { ReceivePack } from "./PackShare";
-import { clockLabel, dayLabel, type MessageGroup } from "./chat";
+import { clockLabel, dayLabel, type MessageGroup, segmentsOf } from "./chat";
 
 export interface ChatMessageActions {
   selfUuid: string;
@@ -51,13 +51,14 @@ export function MessageGroupView({
   actions: ChatMessageActions;
 }) {
   const theme = useResolvedTheme();
+  const segments = segmentsOf(group.messages);
   return (
     <div
       className={`flex items-end gap-2 px-3 py-0.5 ${group.own ? "flex-row-reverse" : ""}`}
     >
       {group.own ? null : <ChatAvatar user={group.author} size="sm" />}
       <div
-        className={`flex min-w-0 max-w-[min(100%,32rem)] flex-col ${group.own ? "items-end" : "items-start"}`}
+        className={`flex min-w-0 max-w-[70%] flex-col ${group.own ? "items-end" : "items-start"}`}
       >
         {actions.showAuthors && !group.own ? (
           <button
@@ -73,17 +74,48 @@ export function MessageGroupView({
             {displayNameOf(group.author)}
           </button>
         ) : null}
-        {group.messages.map((message, index) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            own={group.own}
-            last={index === group.messages.length - 1}
-            actions={actions}
-          />
-        ))}
+        {segments.map((segment, index) =>
+          segment.kind === "images" ? (
+            <ImageBubble
+              key={segment.key}
+              messages={segment.messages}
+              own={group.own}
+              last={index === segments.length - 1}
+              actions={actions}
+            />
+          ) : (
+            <MessageBubble
+              key={segment.key}
+              message={segment.message}
+              own={group.own}
+              last={index === segments.length - 1}
+              actions={actions}
+            />
+          ),
+        )}
       </div>
     </div>
+  );
+}
+
+/** Bubble shell: shrink-wraps its content, accent for own messages, one tail. */
+function bubbleClass(own: boolean, last: boolean, padding: string): string {
+  return `group/bubble relative mt-0.5 w-fit max-w-full min-w-0 rounded-2xl ${padding} text-sm leading-snug shadow-sm ${
+    own ? "bg-accent text-accent-fg" : "bg-surface-2 text-text"
+  } ${last ? (own ? "rounded-br-sm" : "rounded-bl-sm") : ""}`;
+}
+
+function Tail({ own, background }: { own: boolean; background: string }) {
+  return (
+    <span
+      aria-hidden
+      className={`absolute bottom-0 size-2 ${own ? "-right-1" : "-left-1"} ${background}`}
+      style={{
+        clipPath: own
+          ? "polygon(0 0, 100% 100%, 0 100%)"
+          : "polygon(100% 0, 100% 100%, 0 100%)",
+      }}
+    />
   );
 }
 
@@ -98,59 +130,112 @@ function MessageBubble({
   last: boolean;
   actions: ChatMessageActions;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   return (
     <article
       data-own={own}
-      className={`group/bubble relative mt-0.5 max-w-full min-w-0 rounded-2xl px-2.5 py-1.5 text-sm shadow-sm ${
-        own ? "bg-accent text-accent-fg" : "bg-surface-2 text-text"
-      } ${last ? (own ? "rounded-br-sm" : "rounded-bl-sm") : ""}`}
+      data-kind="text"
+      className={bubbleClass(own, last, "px-2.5 py-1")}
     >
-      {last ? (
-        <span
-          aria-hidden
-          className={`absolute bottom-0 size-2 ${own ? "-right-1 bg-accent" : "-left-1 bg-surface-2"}`}
-          style={{
-            clipPath: own
-              ? "polygon(0 0, 100% 100%, 0 100%)"
-              : "polygon(100% 0, 100% 100%, 0 100%)",
-          }}
-        />
-      ) : null}
-      {message.deleted ? (
-        <p className="py-0.5 italic opacity-70">{t("social.deleted")}</p>
-      ) : (
-        <MessageContent message={message} save={actions.onSave} />
-      )}
-      <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] opacity-70">
-        {message.editedAt ? <span>{t("social.edited")}</span> : null}
-        <time dateTime={message.createdAt}>
-          {clockLabel(message.createdAt, i18n.language)}
-        </time>
-      </div>
-      {message.deleted ? null : (
-        <div
-          role="group"
-          aria-label={t("social.messageActions")}
-          className="mt-0.5 flex flex-wrap justify-end gap-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover/bubble:opacity-100"
-        >
-          {message.author.uuid === actions.selfUuid ? (
-            <BubbleAction onClick={() => actions.onDelete(message)}>
-              {t("common.delete")}
-            </BubbleAction>
+      {last ? <Tail own={own} background={own ? "bg-accent" : "bg-surface-2"} /> : null}
+      <div className="flex items-end gap-2">
+        <div className="min-w-0">
+          {message.deleted ? (
+            <p className="italic opacity-70">{t("social.deleted")}</p>
           ) : (
-            <BubbleAction onClick={() => actions.onReport(message)}>
-              {t("social.report")}
-            </BubbleAction>
+            <MessageContent message={message} save={actions.onSave} />
           )}
-          {actions.canModerate && message.channel === "global" ? (
-            <BubbleAction onClick={() => actions.onModerateDelete(message)}>
-              {t("social.moderateDelete")}
-            </BubbleAction>
-          ) : null}
         </div>
-      )}
+        <BubbleMeta message={message} />
+      </div>
+      <MessageActions message={message} actions={actions} />
     </article>
+  );
+}
+
+/** Run of captionless images: one framed preview grid instead of N bubbles. */
+function ImageBubble({
+  messages,
+  own,
+  last,
+  actions,
+}: {
+  messages: SocialMessage[];
+  own: boolean;
+  last: boolean;
+  actions: ChatMessageActions;
+}) {
+  const attachments = messages.flatMap((message) =>
+    message.content.type === "attachment" ? [message.content.attachment] : [],
+  );
+  const latest = messages[messages.length - 1];
+  if (!latest || attachments.length === 0) return null;
+  return (
+    <article
+      data-own={own}
+      data-kind="images"
+      className={bubbleClass(own, last, "p-1")}
+    >
+      {last ? <Tail own={own} background={own ? "bg-accent" : "bg-surface-2"} /> : null}
+      <AttachmentGrid attachments={attachments} onSave={actions.onSave} />
+      <BubbleMeta message={latest} className="justify-end px-1 pt-0.5" />
+      <MessageActions message={latest} actions={actions} />
+    </article>
+  );
+}
+
+/** Compact time line trailing the last line of the bubble. */
+function BubbleMeta({
+  message,
+  className = "",
+}: {
+  message: SocialMessage;
+  className?: string;
+}) {
+  const { t, i18n } = useTranslation();
+  return (
+    <span
+      className={`flex shrink-0 items-center gap-1 text-[10px] leading-4 whitespace-nowrap opacity-60 ${className}`}
+    >
+      {message.editedAt ? <span>{t("social.edited")}</span> : null}
+      <time dateTime={message.createdAt}>
+        {clockLabel(message.createdAt, i18n.language)}
+      </time>
+    </span>
+  );
+}
+
+/** Hover/focus toolbar floating above the bubble, so it costs no height. */
+function MessageActions({
+  message,
+  actions,
+}: {
+  message: SocialMessage;
+  actions: ChatMessageActions;
+}) {
+  const { t } = useTranslation();
+  if (message.deleted) return null;
+  return (
+    <div
+      role="group"
+      aria-label={t("social.messageActions")}
+      className="absolute -top-3 right-0 z-10 hidden items-center gap-1 rounded-lg bg-surface px-1.5 py-0.5 text-[11px] text-text shadow-sm ring-1 ring-border group-focus-within/bubble:flex group-hover/bubble:flex"
+    >
+      {message.author.uuid === actions.selfUuid ? (
+        <BubbleAction onClick={() => actions.onDelete(message)}>
+          {t("common.delete")}
+        </BubbleAction>
+      ) : (
+        <BubbleAction onClick={() => actions.onReport(message)}>
+          {t("social.report")}
+        </BubbleAction>
+      )}
+      {actions.canModerate && message.channel === "global" ? (
+        <BubbleAction onClick={() => actions.onModerateDelete(message)}>
+          {t("social.moderateDelete")}
+        </BubbleAction>
+      ) : null}
+    </div>
   );
 }
 
@@ -164,7 +249,7 @@ function BubbleAction({
   return (
     <button
       type="button"
-      className="cursor-pointer rounded px-1 text-[11px] underline-offset-2 hover:underline"
+      className="cursor-pointer rounded px-1 underline-offset-2 hover:underline"
       onClick={onClick}
     >
       {children}
@@ -184,36 +269,36 @@ function MessageContent({
   const content: SocialContent = message.content;
   if (content.type === "text")
     return <p className="whitespace-pre-wrap break-words">{content.text}</p>;
-  if (content.type === "attachment")
+  if (content.type === "attachment") {
+    // Images render as previews only; saving lives in the full-screen viewer.
     return (
       <div className="min-w-0">
+        {isImage(content.attachment) ? (
+          <AttachmentGrid attachments={[content.attachment]} onSave={save} />
+        ) : (
+          <div className="min-w-0 rounded-lg bg-surface p-2 text-text ring-1 ring-border">
+            <p className="truncate text-xs font-medium">
+              {content.attachment.fileName}
+            </p>
+            <p className="text-[11px] text-muted">
+              {(content.attachment.size / 1024).toFixed(0)} KiB
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="mt-1"
+              onClick={() => save(content.attachment)}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        )}
         {content.caption ? (
-          <p className="whitespace-pre-wrap break-words">{content.caption}</p>
+          <p className="mt-1 whitespace-pre-wrap break-words">{content.caption}</p>
         ) : null}
-        <div className="mt-1 min-w-0 rounded-lg bg-surface p-2 text-text ring-1 ring-border">
-          <p className="truncate text-xs font-medium">
-            {content.attachment.fileName}
-          </p>
-          <p className="text-[11px] text-muted">{content.attachment.mime}</p>
-          <Button
-            size="sm"
-            variant="secondary"
-            className="mt-1"
-            onClick={() => save(content.attachment)}
-          >
-            {t("social.saveFile", {
-              size: (content.attachment.size / 1024).toFixed(0),
-            })}
-          </Button>
-          {content.attachment.mime.startsWith("image/") ? (
-            <AttachmentPreview
-              attachment={content.attachment}
-              onSave={save}
-            />
-          ) : null}
-        </div>
       </div>
     );
+  }
   if (content.type === "roomInvite")
     return (
       <div className="mt-1 rounded-lg bg-surface p-2 text-text ring-1 ring-border">
