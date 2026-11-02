@@ -201,7 +201,40 @@ impl Inner {
     /// The same mod version from Modrinth for a file that may not be
     /// redistributed. Best effort: `None` (with a log line) when nothing matches
     /// confidently or the network fails.
-    pub(crate) async fn modrinth_stand_in(
+    /// Same lookup, remembering negative and positive answers for the lifetime
+    /// of one pack import: several opt-out files of one mod cost one search.
+    pub(crate) async fn modrinth_stand_in_cached(
+        &self,
+        missing: &Missing,
+        target: &Target,
+        sink: &dyn ProgressSink,
+        cache: &std::sync::Mutex<std::collections::HashMap<String, Option<StandIn>>>,
+    ) -> Option<StandIn> {
+        let key = format!(
+            "{:?}|{}|{}",
+            missing.kind,
+            missing.slug.to_ascii_lowercase(),
+            missing.version_number
+        );
+        let empty = cache
+            .lock()
+            .ok()
+            .map(|c| c.contains_key(&key))
+            .unwrap_or(false);
+        if empty {
+            return cache
+                .lock()
+                .ok()
+                .and_then(|c| c.get(&key).cloned().flatten());
+        }
+        let found = self.stand_in_lookup(missing, target, sink).await;
+        if let Ok(mut c) = cache.lock() {
+            c.insert(key, found.clone());
+        }
+        found
+    }
+
+    async fn stand_in_lookup(
         &self,
         missing: &Missing,
         target: &Target,

@@ -862,6 +862,9 @@ impl Inner {
                 .filter(|f| f.required)
                 .map(|entry| (entry.project_id, entry.file_id))
                 .collect();
+            let stand_ins: std::sync::Mutex<
+                std::collections::HashMap<String, Option<fallback::StandIn>>,
+            > = Default::default();
             for (v, project, remote) in self.curseforge.pack_entries(&entries, sink).await? {
                 sink.check_cancelled()?;
                 let dir = kind_dir(project.kind)?;
@@ -869,7 +872,10 @@ impl Inner {
                     // Opt-out: only the same mod version from Modrinth may be
                     // installed; otherwise the file is listed for the user.
                     let missing = Missing::of(&v, &project);
-                    match self.modrinth_stand_in(&missing, &target, sink).await {
+                    match self
+                        .modrinth_stand_in_cached(&missing, &target, sink, &stand_ins)
+                        .await
+                    {
                         Some(s) => (s.version, s.title, s.url, s.sha1, s.sha512),
                         None => {
                             manual.push(ManualFile {
