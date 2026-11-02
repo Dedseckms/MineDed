@@ -82,6 +82,32 @@ describe("social service mock", () => {
       (await api.socialSetRole!(SOCIAL_PEER.uuid, "moderator")).status,
     ).toBe("ok");
   });
+  it("lets a server account post to the global chat and open a direct chat", async () => {
+    const api = mock();
+    await api.socialConnect!("own");
+    const text = { type: "text" as const, text: "привет всем" };
+    const sent = await api.socialSend!("global", text);
+    expect(sent).toMatchObject({ status: "ok", data: { channel: "global", content: text } });
+
+    const direct = await api.socialOpenDirect!(SOCIAL_PEER.uuid);
+    if (direct.status !== "ok") throw new Error("expected a direct chat");
+    expect(direct.data.kind).toBe("direct");
+    const reply = await api.socialSend!(direct.data.id, {
+      type: "text",
+      text: "привет, Alex",
+    });
+    expect(reply.status).toBe("ok");
+
+    const global = await api.socialHistory!("global", null);
+    if (global.status !== "ok") throw new Error("expected history");
+    expect(global.data.messages.map((m) => m.content)).toContainEqual(text);
+    const dm = await api.socialHistory!(direct.data.id, null);
+    if (dm.status !== "ok") throw new Error("expected history");
+    expect(dm.data.messages.map((m) => m.content)).toContainEqual({
+      type: "text",
+      text: "привет, Alex",
+    });
+  });
   it("edits the own profile and rejects values outside the limits", async () => {
     const api = mock();
     await api.socialConnect!("own");
