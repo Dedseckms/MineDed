@@ -10,6 +10,7 @@ import { useGameStore } from "../stores/gameStore";
 const fixture = vi.hoisted(() => ({
   account: "first",
   room: false,
+  guest: false,
   order: [] as string[],
 }));
 const connect = vi.hoisted(() =>
@@ -34,6 +35,45 @@ const connect = vi.hoisted(() =>
 const presence = vi.hoisted(() =>
   vi.fn(async () => ({ status: "ok" as const, data: null })),
 );
+const guestLogin = vi.hoisted(() =>
+  vi.fn(async (name: string) => {
+    fixture.order.push(`guest:${name}`);
+    return {
+      status: "ok" as const,
+      data: {
+        uuid: `guest-${name}`,
+        name,
+        skinUrl: null,
+        status: "online" as const,
+        role: "guest" as const,
+        isBlocked: false,
+        isFriend: false,
+        canMessage: false,
+        canInvite: false,
+        guest: true,
+      },
+    };
+  }),
+);
+const session = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ status: "ok"; data: unknown }> => ({
+    status: "ok",
+    data: fixture.guest
+      ? {
+          uuid: "guest-saved",
+          name: "saved",
+          skinUrl: null,
+          status: "online",
+          role: "guest",
+          isBlocked: false,
+          isFriend: false,
+          canMessage: false,
+          canInvite: false,
+          guest: true,
+        }
+      : null,
+  })),
+);
 vi.mock("../api/queries", () => ({
   useAccounts: () => ({
     data: [
@@ -53,6 +93,8 @@ vi.mock("../api/client", () => ({
     },
     socialChannels: async () => ({ status: "ok", data: [] }),
     socialSetPresence: presence,
+    socialSession: session,
+    socialGuestLogin: guestLogin,
   },
 }));
 function wrapper({ children }: { children: ReactNode }) {
@@ -64,8 +106,11 @@ function wrapper({ children }: { children: ReactNode }) {
 beforeEach(() => {
   fixture.account = "first";
   fixture.room = false;
+  fixture.guest = false;
   fixture.order = [];
   connect.mockClear();
+  guestLogin.mockClear();
+  localStorage.clear();
   presence.mockClear();
   useSocialStore.getState().reset();
   useGameStore.getState().reset();
@@ -88,6 +133,24 @@ describe("social connection synchronization", () => {
     expect(useSocialStore.getState().blocked).toEqual([]);
     const second = fixture.order.indexOf("connect:second");
     expect(fixture.order[second - 1]).toBe("disconnect");
+  });
+  it("keeps a live guest session and never touches the game account", async () => {
+    fixture.guest = true;
+    renderHook(() => useSocialSync(), { wrapper });
+    await waitFor(() =>
+      expect(useSocialStore.getState().self?.uuid).toBe("guest-saved"),
+    );
+    expect(fixture.order).not.toContain("disconnect");
+    expect(fixture.order.some((x) => x.startsWith("connect:"))).toBe(false);
+  });
+  it("resumes the saved guest session from localStorage without a game account", async () => {
+    localStorage.setItem("mineded.guestSession", "OldNick");
+    renderHook(() => useSocialSync(), { wrapper });
+    await waitFor(() =>
+      expect(useSocialStore.getState().self?.uuid).toBe("guest-OldNick"),
+    );
+    expect(guestLogin).toHaveBeenCalledWith("OldNick");
+    expect(fixture.order).not.toContain("disconnect");
   });
   it("publishes actual game and room presence", async () => {
     const view = renderHook(() => useSocialSync(), { wrapper });

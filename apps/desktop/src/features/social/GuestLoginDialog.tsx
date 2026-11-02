@@ -9,6 +9,7 @@ import { Modal } from "../../components/ui/Modal";
 import { Field, TextInput } from "../../components/ui/form";
 import { ErrorMessage } from "../../components/ui/feedback";
 import { NICK_MAX, validateNick } from "../../lib/validation";
+import { rememberGuest } from "../../lib/guestSession";
 
 /**
  * "Enter as a guest": an offline nickname gets a limited hub session. Guests
@@ -30,6 +31,7 @@ export function GuestLoginDialog({
     mutationFn: async (nick: string) =>
       unwrap(await api.socialGuestLogin(nick.trim())),
     onSuccess: (user) => {
+      rememberGuest(user.name);
       setName("");
       setTouched(false);
       onLogin(user);
