@@ -148,14 +148,16 @@ describe("telegram layout", () => {
   it("sends on Enter and keeps Shift+Enter for a line break", async () => {
     await connect();
     const { container } = mount();
-    await screen.findByText(i18n.t("social.empty"));
+    // The mock global chat already holds other players' messages.
+    await screen.findByLabelText(i18n.t("social.message"));
     const field = (await screen.findByLabelText(
       i18n.t("social.message"),
     )) as HTMLTextAreaElement;
+    const ownBefore = container.querySelectorAll('[data-own="true"]').length;
     fireEvent.change(field, { target: { value: "hello" } });
     fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
     expect(field.value).toBe("hello");
-    expect(container.querySelectorAll('[data-own="true"]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-own="true"]')).toHaveLength(ownBefore);
     fireEvent.keyDown(field, { key: "Enter" });
     await waitFor(() =>
       expect(container.querySelectorAll('[data-own="true"]')).toHaveLength(1),
