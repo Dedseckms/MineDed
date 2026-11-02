@@ -19,6 +19,7 @@ import { ConfirmDialog } from "../../components/ui/Modal";
 import { Field, Segmented, TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { extractInviteCode } from "../../lib/deepLink";
+import { requestedLogin } from "../../lib/guestSession";
 import { isNotImplemented } from "../../lib/errors";
 import { useNavStore } from "../../stores/navStore";
 import { NICK_MAX, type RegisterDraft, hasErrors, validateNick, validateRegister } from "../../lib/validation";
@@ -227,7 +228,7 @@ function YggdrasilForm() {
   const { t } = useTranslation();
   const { server, servers } = useAccountServer();
   const login = useYggdrasilLogin();
-  const [username, setUsername] = useState("");
+  const [username, setUsername] = useState(() => requestedLogin() ?? "");
   const [password, setPassword] = useState("");
   const unavailable = isNotImplemented(servers.error) || isNotImplemented(login.error);
   const canSubmit = !!server && username.trim() !== "" && password !== "" && !unavailable;
