@@ -874,11 +874,6 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                     ("GET", ["admin", "audit"]) => Ok(serde_json::to_value(self.audit_page()?)?),
                     // Every launcher account the hub knows: joined players,
                     // guests and guests who asked for an account.
-                    ("POST", ["admin", "invite", request])
-                        if self.has_account_request(request)? =>
-                    {
-                        return Ok(serde_json::json!({ "request": request }));
-                    }
                     ("GET", ["admin", "accounts"]) => {
                         Ok(serde_json::to_value(self.admin_accounts()?)?)
                     }
