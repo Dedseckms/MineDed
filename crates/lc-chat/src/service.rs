@@ -1404,9 +1404,9 @@ impl ChatService for ChatClient {
         decode(checked(response, &cancel).await?, &cancel).await
     }
     async fn request_account(&self, note: &str) -> AppResult<()> {
-        // Guests only: `current_session` (not `full_session`) keeps the guest
-        // token, and the hub answers 204, so nothing is decoded here.
-        let s = self.current_session().await?;
+        // Guests only: the guest session must exist; the hub answers 204, so
+        // nothing is decoded here.
+        self.current_session().await?;
         self.empty(
             Method::POST,
             &["account-request"],
