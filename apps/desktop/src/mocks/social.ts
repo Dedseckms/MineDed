@@ -15,7 +15,7 @@ import type {
   commands,
 } from "../bindings";
 import type { NetMockContext } from "./net";
-import { canModerate, initials, privacyOptions, userHue } from "../lib/social";
+import { canModerate, initials, isGuest as isGuestUser, privacyOptions, userHue } from "../lib/social";
 import { ACCENTS, MAX_BIO, MAX_DISPLAY_NAME } from "../lib/socialProfile";
 
 export const MOCK_ONLINE = 12;
@@ -555,17 +555,11 @@ export function createSocialMocks(
       return ok(mockAvatarDataUrl(user));
     },
     socialPresence: async () => ok({ online: 12 }),
-    socialRequestAccount: async (note, ...rest) => {
-      // 1.5.1 shape: (login, password, note). The extra args arrive untyped
-      // until the bindings expose them (see lib/socialAdmin.ts).
-      const args = [note, ...rest] as unknown[];
-      const [login, password, text] =
-        args.length >= 3
-          ? [String(args[0]), String(args[1]), String(args[2])]
-          : [null, null, String(note)];
-      if (!self || (!self.guest && self.role !== "guest")) return denied();
-      if (text.length > 300) return invalid("mock: note is too long");
-      if (login !== null && (password ?? "").length < 6) return invalid("mock: short password");
+    socialRequestAccount: async (login, password, text) => {
+      if (!self || !isGuestUser(self)) return denied();
+      if ((text ?? "").length > 300) return invalid("mock: note is too long");
+      if (!/^[A-Za-z0-9_]{3,16}$/.test(login)) return invalid("mock: bad login");
+      if (password.length < 6) return invalid("mock: short password");
       if (requests.some((r) => r.id === self!.uuid) || approved.has(self!.uuid))
         return {
           status: "error" as const,
@@ -579,12 +573,11 @@ export function createSocialMocks(
         ...requests,
         {
           id: self.uuid,
-          name: login ?? self.name,
-          note: text,
+          name: login,
+          note: text ?? "",
           createdAt: new Date().toISOString(),
         },
       ];
-      self = { ...self, name: login ?? self.name };
       return ok(null);
     },
     socialAccountRequests: async () =>
@@ -616,6 +609,13 @@ export function createSocialMocks(
         };
       approved.add(requestId);
       return ok("");
+    },
+    socialCreateAccount: async (requestId) => {
+      if (self?.role !== "admin") return denied();
+      const request = requests.find((r) => r.id === requestId);
+      if (!request) return invalid("mock: unknown request");
+      approved.add(requestId);
+      return ok(null);
     },
     socialAdminAccounts: async () =>
       self?.role === "admin" ? ok(accounts()) : denied(),

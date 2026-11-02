@@ -1403,14 +1403,22 @@ impl ChatService for ChatClient {
         };
         decode(checked(response, &cancel).await?, &cancel).await
     }
-    async fn request_account(&self, note: &str) -> AppResult<()> {
+    async fn request_account(&self, login: &str, password: &str, note: &str) -> AppResult<()> {
         // Guests only: the guest session must exist; the hub answers 204, so
         // nothing is decoded here.
         self.current_session().await?;
         self.empty(
             Method::POST,
             &["account-request"],
-            Some(json!({ "note": note })),
+            Some(json!({ "username": login, "password": password, "note": note })),
+        )
+        .await
+    }
+    async fn create_account(&self, request_id: &str) -> AppResult<()> {
+        self.empty(
+            Method::POST,
+            &["admin", "create-account", request_id],
+            Some(json!({})),
         )
         .await
     }

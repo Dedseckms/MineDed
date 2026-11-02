@@ -296,9 +296,9 @@ describe("requests tab", () => {
     const created: string[] = [];
     mount(ADMIN, {
       socialAccountRequests: async () => ok(REQUESTS),
-      socialIssueInvite: async (id) => {
+      socialCreateAccount: async (id) => {
         created.push(id);
-        return ok("");
+        return ok(null);
       },
     });
     fireEvent.click(tab("requests"));
@@ -323,7 +323,7 @@ describe("requests tab", () => {
   it("shows a taken login next to the request", async () => {
     mount(ADMIN, {
       socialAccountRequests: async () => ok(REQUESTS),
-      socialIssueInvite: async () => ({
+      socialCreateAccount: async () => ({
         status: "error" as const,
         error: {
           code: "conflict" as const,

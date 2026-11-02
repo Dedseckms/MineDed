@@ -304,6 +304,7 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
             bio,
             accent,
             avatar,
+            account_created: self.account_created_state(id)?,
         })
     }
     /// Guests may only read the global chat: every writer path goes through here.
@@ -642,7 +643,6 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         match (method, path) {
             ("GET", ["me"]) => {
                 let mut user = serde_json::to_value(self.user(me, me, chat)?)?;
-                // SocialUser has no accountCreated field yet: extra JSON key.
                 if let Some(object) = user.as_object_mut() {
                     object.insert(
                         "accountCreated".into(),

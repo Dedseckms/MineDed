@@ -399,8 +399,22 @@ pub async fn social_attachment_original(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn social_request_account(state: State<'_, AppState>, note: String) -> AppResult<()> {
-    state.social.request_account(&note).await
+pub async fn social_request_account(
+    state: State<'_, AppState>,
+    login: String,
+    password: String,
+    note: String,
+) -> AppResult<()> {
+    state.social.request_account(&login, &password, &note).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_create_account(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> AppResult<()> {
+    state.social.create_account(&request_id).await
 }
 
 #[tauri::command]
