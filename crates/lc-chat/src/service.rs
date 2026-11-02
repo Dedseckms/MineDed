@@ -1403,6 +1403,34 @@ impl ChatService for ChatClient {
         };
         decode(checked(response, &cancel).await?, &cancel).await
     }
+    async fn request_account(&self, note: &str) -> AppResult<()> {
+        let s = self.current_session().await?;
+        let response = self
+            .request(
+                &s,
+                Method::POST,
+                &["account-request"],
+                Some(json!({ "note": note })),
+            )
+            .await?;
+        decode::<()>(response, &s.cancel).await
+    }
+    async fn admin_accounts(&self) -> AppResult<Vec<AdminAccount>> {
+        self.api(Method::GET, &["admin", "accounts"], None).await
+    }
+    async fn account_requests(&self) -> AppResult<Vec<AccountRequest>> {
+        self.api(Method::GET, &["admin", "requests"], None).await
+    }
+    async fn issue_invite(&self, request_id: &str) -> AppResult<String> {
+        #[derive(serde::Deserialize)]
+        struct Issued {
+            url: String,
+        }
+        let issued: Issued = self
+            .api(Method::POST, &["admin", "invite", request_id], None)
+            .await?;
+        Ok(issued.url)
+    }
     async fn admin_presence(&self) -> AppResult<AdminPresence> {
         self.api(Method::GET, &["admin", "presence"], None).await
     }

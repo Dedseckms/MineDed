@@ -72,3 +72,65 @@ impl Store {
             .collect())
     }
 }
+
+impl Store {
+    /// Records a freshly created Drasl invite for an account request.
+    pub fn store_invite(
+        &self,
+        actor: &str,
+        request: &str,
+        code: &str,
+        url: &str,
+    ) -> Result<(), ApiError> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO invites(request,code,url,created) VALUES(?1,?2,?3,?4)",
+            params![
+                request,
+                code,
+                url,
+                crate::rfc3339::format(std::time::SystemTime::now())
+            ],
+        )?;
+        self.audit(actor, "invite", Some(request), Some(code))
+    }
+
+    /// Guests waiting for an account, newest first.
+    pub(super) fn account_requests(
+        &self,
+    ) -> Result<Vec<lc_types::social::AccountRequest>, ApiError> {
+        let mut stmt = self.db.prepare(
+            "SELECT uuid,name,request,created_at FROM users WHERE request IS NOT NULL ORDER BY created_at DESC LIMIT 200",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(lc_types::social::AccountRequest {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                note: r.get(2)?,
+                created_at: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Every account the launcher knows, newest first: joined players, chat
+    /// guests and offline nicknames waiting for an account request.
+    pub(super) fn admin_accounts(&self) -> Result<Vec<lc_types::social::AdminAccount>, ApiError> {
+        let mut stmt = self.db.prepare(
+            "SELECT u.uuid,u.name,u.guest,u.display_name,u.created_at,i.code,i.url \
+             FROM users u LEFT JOIN invites i ON i.request=u.uuid \
+             ORDER BY CASE WHEN u.created_at='' THEN 1 ELSE 0 END, u.created_at DESC LIMIT 500",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(lc_types::social::AdminAccount {
+                uuid: r.get(0)?,
+                name: r.get(1)?,
+                guest: r.get::<_, i64>(2)? != 0,
+                display_name: r.get(3)?,
+                created_at: r.get(4)?,
+                invite: r.get::<_, Option<String>>(5)?,
+                invite_url: r.get::<_, Option<String>>(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+}

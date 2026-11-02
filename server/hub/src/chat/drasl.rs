@@ -90,6 +90,41 @@ impl Directory {
         .ok()
         .flatten()
     }
+    /// Creates a Drasl invite (admin API `/invites`) and returns its code and
+    /// registration link. `None` when the admin API is not configured or fails.
+    pub async fn create_invite(&self) -> Option<(String, String)> {
+        #[derive(serde::Deserialize)]
+        struct Invite {
+            code: String,
+            url: String,
+        }
+        let base = self.url.as_ref()?;
+        let token = self.token.as_ref()?;
+        let _permit = self.requests.try_acquire().ok()?;
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("{base}/invites"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from_static(b"{}")))
+            .ok()?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let response = self.client.request(req).await.ok()?;
+            if !response.status().is_success() {
+                return None;
+            }
+            let bytes = Limited::new(response.into_body(), 64 * 1024)
+                .collect()
+                .await
+                .ok()?
+                .to_bytes();
+            let invite: Invite = serde_json::from_slice(&bytes).ok()?;
+            Some((invite.code, invite.url))
+        })
+        .await
+        .ok()
+        .flatten()
+    }
     pub async fn profile(&self, id: &str) -> Option<Info> {
         let id = super::store::uuid(id).ok()?;
         if let Some((until, info)) = self.cache.lock().ok()?.get(&id) {

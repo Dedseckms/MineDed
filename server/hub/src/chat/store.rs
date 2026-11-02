@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS compression_dictionary(id INTEGER PRIMARY KEY,body BL
 CREATE TABLE IF NOT EXISTS guest_tokens(token BLOB PRIMARY KEY,uuid TEXT NOT NULL,created TEXT NOT NULL,expires INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS guest_tokens_user ON guest_tokens(uuid);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,at TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,target TEXT,note TEXT);
+CREATE TABLE IF NOT EXISTS invites(request TEXT PRIMARY KEY,code TEXT NOT NULL,url TEXT NOT NULL,created TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         // Schema v2: guest accounts, profile fields and the avatar blob.
         ensure_column(&db, "users", "guest", "INTEGER NOT NULL DEFAULT 0")?;
@@ -105,6 +106,9 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         ensure_column(&db, "users", "bio", "TEXT")?;
         ensure_column(&db, "users", "accent", "TEXT")?;
         ensure_column(&db, "users", "avatar", "TEXT")?;
+        // Schema v3: first-contact time and the guest's account request.
+        ensure_column(&db, "users", "created_at", "TEXT NOT NULL DEFAULT ''")?;
+        ensure_column(&db, "users", "request", "TEXT")?;
         // Schema v3: the uploaded original is kept for "save as" (older rows have none).
         ensure_column(&db, "attachments", "original", "TEXT")?;
         let files: Option<String> = db
@@ -138,8 +142,8 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         skin: Option<&str>,
     ) -> Result<String, ApiError> {
         let id = uuid(&who.user_id)?;
-        self.db.execute("INSERT INTO users(uuid,name,admin,skin,privacy) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,admin=excluded.admin,skin=COALESCE(excluded.skin,users.skin)",
-            params![id, who.name, admin, skin, serde_json::to_string(&privacy_default())?])?;
+        self.db.execute("INSERT INTO users(uuid,name,admin,skin,privacy,created_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,admin=excluded.admin,skin=COALESCE(excluded.skin,users.skin),created_at=CASE WHEN users.created_at='' THEN excluded.created_at ELSE users.created_at END",
+            params![id, who.name, admin, skin, serde_json::to_string(&privacy_default())?, crate::rfc3339::format(std::time::SystemTime::now())])?;
         Ok(id)
     }
     pub fn privacy(&self, id: &str) -> Result<SocialPrivacy, ApiError> {
@@ -811,6 +815,19 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                 let _ = chat.events.send(super::Notice::Message(id, true));
                 Ok(Value::Null)
             }
+            ("POST", ["account-request"]) => {
+                if !self.is_guest(me)? {
+                    return Err(invalid("only guests need an account request"));
+                }
+                let note = body["note"].as_str().unwrap_or_default();
+                validate_text(note, 300)?;
+                self.db.execute(
+                    "UPDATE users SET request=?1 WHERE uuid=?2",
+                    params![note, me],
+                )?;
+                let _ = chat.events.send(super::Notice::Admin);
+                Ok(Value::Null)
+            }
             ("POST", ["messages", id, "report"]) => {
                 self.forbid_guest(me)?;
                 let id = message_id(&json!(id))?;
@@ -855,6 +872,19 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                         super::presence::admin_presence(chat, self)?,
                     )?),
                     ("GET", ["admin", "audit"]) => Ok(serde_json::to_value(self.audit_page()?)?),
+                    // Every launcher account the hub knows: joined players,
+                    // guests and guests who asked for an account.
+                    ("POST", ["admin", "invite", request])
+                        if self.has_account_request(request)? =>
+                    {
+                        return Ok(serde_json::json!({ "request": request }));
+                    }
+                    ("GET", ["admin", "accounts"]) => {
+                        Ok(serde_json::to_value(self.admin_accounts()?)?)
+                    }
+                    ("GET", ["admin", "requests"]) => {
+                        Ok(serde_json::to_value(self.account_requests()?)?)
+                    }
                     _ => Err(ApiError::not_found("no such route")),
                 }
             }
@@ -878,6 +908,18 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                 FriendState::Incoming
             },
         })
+    }
+    /// Whether `request` is a guest waiting for an account.
+    pub(super) fn has_account_request(&self, request: &str) -> Result<bool, ApiError> {
+        Ok(self
+            .db
+            .query_row(
+                "SELECT 1 FROM users WHERE uuid=?1 AND request IS NOT NULL",
+                [request],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some())
     }
     fn moderation(
         &self,
