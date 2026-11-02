@@ -500,8 +500,9 @@ export function ChatScreen() {
             ariaLabel={t("social.tabs.friends")}
             renderRow={(friend) => (
               <div className="flex items-center gap-2 rounded-lg border border-border bg-panel p-3">
+                <ChatAvatar user={friend.user} size="sm" />
                 <button
-                  className="mr-auto"
+                  className="mr-auto text-left"
                   onClick={() => openProfile(friend.user)}
                 >
                   {friend.user.name} · {t(`social.friend.${friend.state}`)}

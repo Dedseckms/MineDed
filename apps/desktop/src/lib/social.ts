@@ -45,6 +45,19 @@ export function userColor(seed: string, theme: "light" | "dark"): string {
     : `hsl(${hue} 78% 72%)`;
 }
 
+/**
+ * Cache key of a player's avatar preview. The avatar id is part of the key, so a
+ * new upload replaces the stale image without touching the old entry.
+ */
+export function avatarQueryKey(uuid: string, avatar: string | null | undefined) {
+  return ["social", "avatar", uuid, avatar ?? null] as const;
+}
+
+/** Only inlined data URLs may be rendered: hub URLs never reach the WebView. */
+export function isImageDataUrl(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith("data:image/");
+}
+
 /** One or two letters for the avatar placeholder. */
 export function initials(name: string): string {
   const parts = name.trim().split(/[\s_-]+/).filter(Boolean);

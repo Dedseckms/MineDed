@@ -52,6 +52,10 @@ export function ProfileEditor({ self, onClose, onSaved }: ProfileEditorProps) {
     onSaved?.(user);
   };
 
+  /** The picture changed: drop every cached avatar preview so ours is re-read. */
+  const refreshAvatar = () =>
+    void qc.invalidateQueries({ queryKey: ["social", "avatar"] });
+
   const save = useMutation({
     mutationFn: async () =>
       unwrap(
@@ -72,6 +76,7 @@ export function ProfileEditor({ self, onClose, onSaved }: ProfileEditorProps) {
       setAvatarPath(null);
       apply(user);
       void qc.invalidateQueries({ queryKey: ["social"] });
+      refreshAvatar();
     },
   });
 
@@ -91,6 +96,7 @@ export function ProfileEditor({ self, onClose, onSaved }: ProfileEditorProps) {
         if (event.type === "finished") {
           if (event.error) setError(event.error);
           void qc.invalidateQueries({ queryKey: ["social"] });
+          if (!event.error) refreshAvatar();
         }
       });
       setTaskId(unwrap(await api.socialAvatarSet(path, channel)));
