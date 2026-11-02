@@ -146,7 +146,10 @@ describe("message actions", () => {
     // Hidden by default and placed by offsets only: it has no box in the flow
     // (no height, no padding on the bubble), so the bubble keeps its height.
     expect(toolbar.className).toContain("hidden");
-    expect(toolbar.className).not.toMatch(/(?:^|\s)(?:h-\d|py-\d|pt-\d|pb-\d)/);
+    // Padding lives on the absolutely positioned bridge, not in the flow.
+    expect(toolbar.className).not.toMatch(/(?:^|\s)(?:h-\d|pt-\d|pb-\d)/);
+    // Compact py-1 only; the pill sits outside and adds nothing.
+    expect(bubble.className).toMatch(/(?:^|\s)py-1(?:\s|$)/);
     unmount();
   });
 
@@ -157,9 +160,13 @@ describe("message actions", () => {
     const bubble = container.querySelector('[data-own="false"]') as HTMLElement;
     const toolbar = toolbarOf(container);
     expect(toolbar.parentElement).toBe(bubble);
-    expect(toolbar.className).toContain("bg-surface/95");
-    expect(toolbar.className).toContain("rounded-full");
-    expect(toolbar.className).toContain("p-0.5");
+    const pill = toolbar.firstElementChild as HTMLElement;
+    expect(pill.className).toContain("bg-surface/95");
+    expect(pill.className).toContain("rounded-full");
+    // Padding around the pill bridges the gap so the pointer can reach it.
+    expect(toolbar.className).toContain("px-1.5");
+    expect(toolbar.className).toContain("py-1");
+    expect(toolbar.className).toContain("pointer-events-none");
     // Peer bubbles grow rightwards: the pill sits past their left edge.
     expect(toolbar.className).toContain("left-full");
     expect(toolbar.textContent).toBe("");

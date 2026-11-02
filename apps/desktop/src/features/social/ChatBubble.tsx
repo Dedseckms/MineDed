@@ -100,7 +100,7 @@ export function MessageGroupView({
 
 /** Bubble shell: shrink-wraps its content, accent for own messages, one tail. */
 function bubbleClass(own: boolean, last: boolean, padding: string): string {
-  return `group/bubble relative mt-0.5 w-fit max-w-full min-w-0 rounded-2xl ${padding} text-sm leading-snug shadow-sm ${
+  return `group/bubble relative mt-0.5 w-fit max-w-full min-w-0 rounded-2xl ${padding} text-sm leading-snug shadow-sm hover:z-20 ${
     own ? "bg-accent text-accent-fg" : "bg-surface-2 text-text"
   } ${last ? (own ? "rounded-br-sm" : "rounded-bl-sm") : ""} ${
     // Touch has no hover: a tap (or the OS long-press menu) reveals the actions pill.
@@ -252,14 +252,18 @@ function MessageActions({
       aria-label={t("social.messageActions")}
       data-testid="message-actions"
       // Absolutely placed and transient: zero layout size, so no bubble moves.
-      className={`pointer-events-none absolute top-0 z-10 hidden items-center gap-0.5 rounded-full bg-surface/95 p-0.5 shadow-sm ring-1 ring-border group-focus-within/bubble:pointer-events-auto group-focus-within/bubble:flex group-hover/bubble:pointer-events-auto group-hover/bubble:flex ${
+      // The padding bridges the gap to the bubble, otherwise moving the pointer
+      // into the pill leaves the bubble and hides it.
+      className={`pointer-events-none absolute top-0 z-10 hidden items-center rounded-full px-1.5 py-1 group-focus-within/bubble:pointer-events-auto group-focus-within/bubble:flex group-hover/bubble:pointer-events-auto group-hover/bubble:flex ${
         // Right-aligned bubbles grow leftwards, so their outer edge is on the left.
-        own ? "right-full mr-1.5" : "left-full ml-1.5"
+        own ? "right-full" : "left-full"
       }`}
     >
-      {pinned.map((kind) => (
-        <BubbleAction key={kind} icon={icon[kind]} label={label[kind]} onClick={() => run(kind)} />
-      ))}
+      <div className="pointer-events-auto flex items-center gap-0.5 rounded-full bg-surface/95 p-0.5 shadow-sm ring-1 ring-border">
+        {pinned.map((kind) => (
+          <BubbleAction key={kind} icon={icon[kind]} label={label[kind]} onClick={() => run(kind)} />
+        ))}
+      </div>
     </div>
   );
 }
