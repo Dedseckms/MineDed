@@ -39,7 +39,7 @@ use url::Url;
 
 const MAX_FILE: usize = 10 * 1024 * 1024;
 const MAX_JSON: usize = 4 * 1024 * 1024;
-const MAX_AVATAR: u64 = 256 * 1024;
+const MAX_AVATAR: u64 = 2 * 1024 * 1024;
 /// Hub avatars are re-encoded to a 256×256 WebP; anything bigger is refused.
 const MAX_AVATAR_PREVIEW: usize = 1024 * 1024;
 /// Avatar previews kept in process memory; bytes are never written to disk.
@@ -782,8 +782,10 @@ async fn checked(response: Response, cancel: &CancelToken) -> AppResult<Response
         _ => ErrorCode::Network,
     };
     let mut error = AppError::new(code, "Chat server rejected request");
+    let mut server_message = None;
     if let Ok(bytes) = bounded(response, 16384, cancel).await {
         if let Ok(server) = serde_json::from_slice::<AppError>(&bytes) {
+            server_message = Some(server.message.clone());
             if let Some(reason) = server.details.as_ref().and_then(|d| d.get("reason")) {
                 if [
                     "filtered",
@@ -799,6 +801,9 @@ async fn checked(response: Response, cancel: &CancelToken) -> AppResult<Response
                 }
             }
         }
+    }
+    if let Some(message) = server_message {
+        error = error.detail("serverMessage", message);
     }
     if status.as_u16() == 401 {
         cancel.cancel();

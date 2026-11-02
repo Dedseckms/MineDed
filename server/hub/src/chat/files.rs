@@ -70,8 +70,8 @@ fn encode(bytes: Vec<u8>) -> Result<Encoded, ApiError> {
         .with_guessed_format()
         .map_err(|_| invalid("invalid image"))?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(4096);
-    limits.max_image_height = Some(4096);
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
     let (width, height) = image::ImageReader::new(Cursor::new(&bytes))
@@ -120,8 +120,8 @@ pub(super) fn avatar(bytes: &[u8]) -> Result<Vec<u8>, ApiError> {
         .with_guessed_format()
         .map_err(|_| invalid("invalid image"))?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(4096);
-    limits.max_image_height = Some(4096);
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
     let image = reader
@@ -132,7 +132,7 @@ pub(super) fn avatar(bytes: &[u8]) -> Result<Vec<u8>, ApiError> {
     image
         .write_to(&mut encoded, image::ImageFormat::WebP)
         .map_err(|_| invalid("image conversion failed"))?;
-    if encoded.get_ref().len() > super::MAX_AVATAR {
+    if encoded.get_ref().len() > super::MAX_AVATAR_STORED {
         return Err(super::avatar_too_large());
     }
     Ok(encoded.into_inner())
