@@ -201,13 +201,16 @@ export const commands = {
 	accent?: string | null,
 	/**  Avatar id (content hash); bytes come from `ChatService::avatar_preview`. */
 	avatar?: string | null,
+	/**  A server account was created from this guest's request. */
+	accountCreated?: boolean,
 } | null, AppError>(__TAURI_INVOKE("social_session")),
 	socialAttachmentOriginal: (id: string) => typedError<string, AppError>(__TAURI_INVOKE("social_attachment_original", { id })),
 	socialAvatarPreview: (uuid: string) => typedError<string, AppError>(__TAURI_INVOKE("social_avatar_preview", { uuid })),
-	socialRequestAccount: (note: string) => typedError<null, AppError>(__TAURI_INVOKE("social_request_account", { note })),
+	socialRequestAccount: (login: string, password: string, note: string) => typedError<null, AppError>(__TAURI_INVOKE("social_request_account", { login, password, note })),
 	socialAdminAccounts: () => typedError<AdminAccount[], AppError>(__TAURI_INVOKE("social_admin_accounts")),
 	socialAccountRequests: () => typedError<AccountRequest[], AppError>(__TAURI_INVOKE("social_account_requests")),
 	socialIssueInvite: (requestId: string) => typedError<string, AppError>(__TAURI_INVOKE("social_issue_invite", { requestId })),
+	socialCreateAccount: (requestId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_create_account", { requestId })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
@@ -973,6 +976,8 @@ export type SocialUser = {
 	accent?: string | null,
 	/**  Avatar id (content hash); bytes come from `ChatService::avatar_preview`. */
 	avatar?: string | null,
+	/**  A server account was created from this guest's request. */
+	accountCreated?: boolean,
 };
 
 export type SortBy = "relevance" | "downloads" | "updated" | "newest";

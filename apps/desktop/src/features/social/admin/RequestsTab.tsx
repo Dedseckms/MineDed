@@ -5,18 +5,21 @@ import { useTranslation } from "react-i18next";
 import type { AccountRequest } from "../../../bindings";
 import { api, unwrap } from "../../../api/client";
 import { Button } from "../../../components/ui/Button";
-import { CopyButton } from "../../../components/ui/CopyButton";
 import { Icon } from "../../../components/ui/Icon";
 import { ErrorMessage } from "../../../components/ui/feedback";
+import { createAccountFailure } from "../../../lib/accountRequest";
+import { socialAdminCreateAccount } from "../../../lib/socialAdmin";
 import { useToastStore } from "../../../stores/toastStore";
 import { AdminSplit, ListRow, useSocialAction } from "./shared";
 
-/** Guest requests for a real account: review the note, issue a Drasl invite. */
+/** Guest requests for a real account: review the login and note, create the account. */
 export function RequestsTab() {
   const { t, i18n } = useTranslation();
   const [selected, setSelected] = useState<string | null>(null);
-  /** Links issued in this session, by request id: the list query may lag behind. */
-  const [issued, setIssued] = useState<Record<string, string>>({});
+  /** Requests approved in this session: the list query may lag behind. */
+  const [created, setCreated] = useState<Record<string, true>>({});
+  /** Per-request failure of the last "create account" action. */
+  const [failed, setFailed] = useState<{ id: string; error: unknown } | null>(null);
   const requests = useQuery({
     queryKey: ["social", "accountRequests"],
     queryFn: async () => unwrap(await api.socialAccountRequests()),
@@ -27,22 +30,39 @@ export function RequestsTab() {
   const current = list.find((r) => r.id === selected) ?? list[0] ?? null;
   const when = (at: string) => new Date(at).toLocaleString(i18n.language);
 
-  const invite = (request: AccountRequest) =>
-    action.mutate(async () => {
-      const link = unwrap(await api.socialIssueInvite(request.id));
-      setIssued((prev) => ({ ...prev, [request.id]: link }));
-      useToastStore.getState().push({
-        tone: "info",
-        messageKey: "social.admin.requests.issuedToast",
-        dedupeKey: "accountInvite",
-      });
-    });
+  const create = (request: AccountRequest) =>
+    action.mutate(
+      async () => {
+        setFailed(null);
+        unwrap(await socialAdminCreateAccount(request.id));
+      },
+      {
+        onSuccess: () => {
+          setCreated((prev) => ({ ...prev, [request.id]: true }));
+          useToastStore.getState().push({
+            tone: "info",
+            messageKey: "social.admin.requests.createdToast",
+            dedupeKey: "accountCreated",
+          });
+        },
+        onError: (error) => setFailed({ id: request.id, error }),
+      },
+    );
 
-  const link = current ? (issued[current.id] ?? null) : null;
+  const inlineFailure = (id: string): string | null => {
+    if (failed?.id !== id) return null;
+    const failure = createAccountFailure(
+      (failed.error as { error?: { details?: Record<string, string> | null } } | null)?.error
+        ?.details,
+    );
+    return failure ? t(`errors.reason.${failure}`) : null;
+  };
+  const failure = current ? inlineFailure(current.id) : null;
+  const isCreated = current ? !!created[current.id] : false;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto lg:overflow-hidden">
-      <ErrorMessage error={action.error ?? requests.error} className="shrink-0" />
+      <ErrorMessage error={requests.error} className="shrink-0" />
       <AdminSplit
         list={
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -61,7 +81,7 @@ export function RequestsTab() {
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">
                     {request.name}
                   </span>
-                  {issued[request.id] ? (
+                  {created[request.id] ? (
                     <span className="text-accent" aria-hidden>
                       <Icon name="check" />
                     </span>
@@ -74,6 +94,9 @@ export function RequestsTab() {
                   <span className="line-clamp-2 text-xs text-muted">
                     {request.note}
                   </span>
+                ) : null}
+                {inlineFailure(request.id) ? (
+                  <span className="text-xs text-danger">{inlineFailure(request.id)}</span>
                 ) : null}
               </ListRow>
             ))}
@@ -90,13 +113,23 @@ export function RequestsTab() {
                 <Button
                   size="sm"
                   variant="primary"
-                  loading={action.isPending && !link}
-                  icon={<Icon name="link" />}
-                  onClick={() => invite(current)}
+                  loading={action.isPending && !isCreated}
+                  disabled={isCreated}
+                  icon={<Icon name={isCreated ? "check" : "user"} />}
+                  onClick={() => create(current)}
                 >
-                  {t("social.admin.requests.invite")}
+                  {t(
+                    isCreated
+                      ? "social.admin.requests.created"
+                      : "social.admin.requests.create",
+                  )}
                 </Button>
               </header>
+              {failure ? (
+                <p role="alert" className="text-sm text-danger">
+                  {failure}
+                </p>
+              ) : null}
               <section className="space-y-1">
                 <p className="text-[11px] font-semibold tracking-wide text-muted uppercase">
                   {t("social.admin.requests.note")}
@@ -105,18 +138,6 @@ export function RequestsTab() {
                   {current.note || t("social.admin.requests.noNote")}
                 </p>
               </section>
-              {link ? (
-                <section className="space-y-2 rounded-lg border border-border bg-surface-2 p-3">
-                  <p className="text-sm font-medium">
-                    {t("social.admin.requests.inviteLink")}
-                  </p>
-                  <p className="font-mono text-xs break-all select-all">{link}</p>
-                  <CopyButton value={link} label={t("social.admin.requests.copy")} />
-                  <p className="text-xs text-muted">
-                    {t("social.admin.requests.inviteHint")}
-                  </p>
-                </section>
-              ) : null}
             </div>
           ) : (
             <p className="text-sm text-muted">

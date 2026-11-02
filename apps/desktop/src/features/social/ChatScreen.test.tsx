@@ -85,6 +85,40 @@ afterEach(() => {
 });
 
 describe("chat access", () => {
+  it("guests load no friends, privacy or user search and see no error banner", async () => {
+    const denied = async () => ({
+      status: "error" as const,
+      error: { code: "permissionDenied" as const, message: "guest", details: null },
+    });
+    const calls: string[] = [];
+    h.api = createMockCommands(
+      {
+        socialFriends: () => {
+          calls.push("friends");
+          return denied();
+        },
+        socialPrivacy: () => {
+          calls.push("privacy");
+          return denied();
+        },
+        socialSearchUsers: () => {
+          calls.push("users");
+          return denied();
+        },
+      },
+      { bus: createMockBus(), tickMs: 5 },
+    );
+    const user = await connect();
+    act(() =>
+      useSocialStore
+        .getState()
+        .set({ self: { ...user, role: "guest", guest: true } }),
+    );
+    mount();
+    await screen.findByText(i18n.t("social.guestReadOnly"));
+    expect(calls).toEqual([]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
   it("explains the account requirement before showing conversations", () => {
     mount();
     expect(screen.getByText(i18n.t("social.login"))).toBeTruthy();

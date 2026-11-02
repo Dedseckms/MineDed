@@ -1403,17 +1403,24 @@ impl ChatService for ChatClient {
         };
         decode(checked(response, &cancel).await?, &cancel).await
     }
-    async fn request_account(&self, note: &str) -> AppResult<()> {
-        let s = self.current_session().await?;
-        let response = self
-            .request(
-                &s,
-                Method::POST,
-                &["account-request"],
-                Some(json!({ "note": note })),
-            )
-            .await?;
-        decode::<()>(response, &s.cancel).await
+    async fn request_account(&self, login: &str, password: &str, note: &str) -> AppResult<()> {
+        // Guests only: the guest session must exist; the hub answers 204, so
+        // nothing is decoded here.
+        self.current_session().await?;
+        self.empty(
+            Method::POST,
+            &["account-request"],
+            Some(json!({ "username": login, "password": password, "note": note })),
+        )
+        .await
+    }
+    async fn create_account(&self, request_id: &str) -> AppResult<()> {
+        self.empty(
+            Method::POST,
+            &["admin", "create-account", request_id],
+            Some(json!({})),
+        )
+        .await
     }
     async fn admin_accounts(&self) -> AppResult<Vec<AdminAccount>> {
         self.api(Method::GET, &["admin", "accounts"], None).await

@@ -11,6 +11,7 @@ import { subscribe } from "../api/events";
 import { useAccounts, useRoomState } from "../api/queries";
 import { useSocialStore } from "../stores/socialStore";
 import { useGameStore } from "../stores/gameStore";
+import { forgetGuest, savedGuestNick } from "../lib/guestSession";
 
 /** Update loaded pages in place; incoming traffic must not refetch an entire cloud history. */
 export function applySocialEvent(qc: QueryClient, event: SocialEvent) {
@@ -100,6 +101,28 @@ export function useSocialSync() {
     connection = connection
       .catch(() => {})
       .then(async () => {
+        // A guest session is independent of game accounts: keep it as is.
+        const existing = await api.socialSession().catch(() => null);
+        if (!alive) return;
+        if (existing?.status === "ok" && existing.data)
+          useSocialStore
+            .getState()
+            .set({ self: existing.data, connected: true, error: null });
+        const guest = existing?.status === "ok" && existing.data?.guest === true;
+        if (guest) return;
+        const nick = savedGuestNick();
+        if (nick) {
+          try {
+            const user = unwrap(await api.socialGuestLogin(nick));
+            if (alive)
+              useSocialStore
+                .getState()
+                .set({ self: user, connected: true, error: null });
+            return;
+          } catch {
+            forgetGuest();
+          }
+        }
         await api.socialDisconnect();
         if (!alive || !account) return;
         try {
@@ -118,6 +141,9 @@ export function useSocialSync() {
       connection = connection
         .catch(() => {})
         .then(async () => {
+          // Leave a guest session running: it is not tied to the game account.
+          const current = await api.socialSession().catch(() => null);
+          if (current?.status === "ok" && current.data?.guest === true) return;
           await api.socialDisconnect();
         });
     };

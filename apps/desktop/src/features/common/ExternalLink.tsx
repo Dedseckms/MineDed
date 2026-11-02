@@ -4,22 +4,22 @@ import { useTranslation } from "react-i18next";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { formatBytes } from "../../lib/content";
+import { openExternal } from "../../lib/openExternal";
 
-/** Link opened in the system browser, plus a copy button (no opener plugin yet). */
+/** Link opened in the system browser, plus a copy button. */
 export function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer noopener"
-        className="inline-flex min-w-0 items-center gap-1 text-accent underline-offset-2 hover:underline"
+      <button
+        type="button"
+        onClick={() => void openExternal(href)}
+        className="inline-flex min-w-0 cursor-pointer items-center gap-1 text-accent underline-offset-2 hover:underline"
       >
         <span className="truncate">{children}</span>
         <Icon name="external" className="size-3.5 shrink-0" />
-      </a>
+      </button>
       <Button
         size="sm"
         variant="ghost"

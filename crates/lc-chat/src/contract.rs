@@ -97,12 +97,10 @@ pub trait ChatService: Send + Sync {
     ) -> AppResult<()>;
     /// Admin only: `Moderator` or `User`.
     async fn set_role(&self, uuid: &str, role: SocialRole) -> AppResult<()>;
-    /// Admin only.
-    /// Guest only: asks the admin for a server account. The guest keeps their
-    /// token, so after the admin issues a Drasl invite they can register and
-    /// log in as a full account.
-    async fn request_account(&self, note: &str) -> AppResult<()> {
-        let _ = note;
+    /// Guest only: asks the admin for a server account with the login and
+    /// password the guest wants. The password never leaves this call.
+    async fn request_account(&self, login: &str, password: &str, note: &str) -> AppResult<()> {
+        let _ = (login, password, note);
         Err(lc_types::AppError::not_implemented(
             "ChatService::request_account",
         ))
@@ -117,6 +115,13 @@ pub trait ChatService: Send + Sync {
     async fn account_requests(&self) -> AppResult<Vec<AccountRequest>> {
         Err(lc_types::AppError::not_implemented(
             "ChatService::account_requests",
+        ))
+    }
+    /// Admin only: creates the server account from a waiting request.
+    async fn create_account(&self, request_id: &str) -> AppResult<()> {
+        let _ = request_id;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::create_account",
         ))
     }
     /// Admin only: creates a Drasl invite for a waiting request, returns its

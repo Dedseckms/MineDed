@@ -1,4 +1,4 @@
-﻿import {
+import {
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -45,6 +45,7 @@ import { useTaskStore } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 import { AdminPanel } from "./admin/AdminPanel";
 import { AccountRequestDialog } from "./AccountRequestDialog";
+import { profileAccountCreated } from "../../lib/socialAdmin";
 import { ChatAvatar } from "./ChatAvatar";
 import {
   type ChatMessageActions,
@@ -102,6 +103,13 @@ export function ChatScreen() {
     setAccountDialog(false);
   }, [self?.uuid]);
   const [taskId, setTaskId] = useState<string | null>(null);
+  // Guests can be told their server account exists; poll until the flag flips.
+  const accountCreated = useQuery({
+    queryKey: ["social", "profile", self?.uuid ?? "", "created"],
+    queryFn: async () => profileAccountCreated(unwrap(await api.socialProfile(self!.uuid))),
+    enabled: !!self && (self.guest === true || self.role === "guest"),
+    refetchInterval: 30000,
+  }).data === true;
   const task = useTaskStore((s) => (taskId ? s.tasks[taskId] : undefined));
   const room = useRoomState();
   useEffect(() => {
@@ -126,6 +134,8 @@ export function ChatScreen() {
     chatSearch.reset();
   }, [tab]);
   const enabled = !!self;
+  const guest = !!self && isGuest(self);
+  const accountEnabled = enabled && !guest;
   const channels = useQuery({
     queryKey: ["social", "channels"],
     queryFn: async () => unwrap(await api.socialChannels()),
@@ -140,20 +150,21 @@ export function ChatScreen() {
     getNextPageParam: (page) => page.before ?? undefined,
     enabled,
   });
+  // Friends and privacy are account features; a guest would only get permissionDenied.
   const friends = useQuery({
     queryKey: ["social", "friends"],
     queryFn: async () => unwrap(await api.socialFriends()),
-    enabled,
+    enabled: accountEnabled,
   });
   const privacy = useQuery({
     queryKey: ["social", "privacy"],
     queryFn: async () => unwrap(await api.socialPrivacy()),
-    enabled,
+    enabled: accountEnabled,
   });
   const users = useQuery({
     queryKey: ["social", "search", friendSearch.query],
     queryFn: async () => unwrap(await api.socialSearchUsers(friendSearch.query)),
-    enabled: enabled && !!friendSearch.query,
+    enabled: accountEnabled && !!friendSearch.query,
   });
   const action = useMutation({
     mutationFn: async (run: () => Promise<unknown>) => run(),
@@ -248,7 +259,7 @@ export function ChatScreen() {
         />
       </div>
     );
-  const guest = isGuest(self);
+  const guestMode = isGuest(self);
   const selected = channels.data?.find((c) => c.id === session.selected);
   const directChat = selected?.kind === "direct";
   const peer = directChat ? (selected?.peer ?? null) : null;
@@ -326,7 +337,7 @@ export function ChatScreen() {
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="mr-auto text-xl font-semibold">{t("social.title")}</h2>
         <OnlineBadge enabled={session.connected} />
-        {guest ? <Badge tone="info">{t("social.guestBadge")}</Badge> : null}
+        {guestMode ? <Badge tone="info">{t("social.guestBadge")}</Badge> : null}
         <Badge tone={session.connected ? "accent" : "warning"}>
           {t(session.connected ? "social.connected" : "social.reconnecting")}
         </Badge>
@@ -384,7 +395,7 @@ export function ChatScreen() {
           >
             <ChatChannelList
               channels={
-                guest
+                guestMode
                   ? (channels.data ?? []).filter((c) => c.kind === "global")
                   : channels.data ?? []
               }
@@ -392,7 +403,7 @@ export function ChatScreen() {
               onSelect={pickChannel}
               search={chatSearch.search}
               onSearch={chatSearch.setSearch}
-              showDirect={!guest}
+              showDirect={!guestMode}
             />
           </aside>
           <section
@@ -468,26 +479,44 @@ export function ChatScreen() {
                 empty={t(history.isPending ? "common.loading" : "social.empty")}
               />
             </div>
-            {guest ? (
+            {guestMode ? (
               <div
                 className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-border bg-panel px-3 py-3"
               >
-                <p role="status" className="text-center text-sm text-muted">
-                  {t("social.guestReadOnly")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={accountRequested}
-                  icon={<Icon name={accountRequested ? "check" : "user"} />}
-                  onClick={() => setAccountDialog(true)}
-                >
-                  {t(
-                    accountRequested
-                      ? "social.accountRequest.sent"
-                      : "social.accountRequest.ask",
-                  )}
-                </Button>
+                {accountCreated ? (
+                  <>
+                    <p role="status" className="text-center text-sm text-accent">
+                      {t("social.accountRequest.createdBanner")}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      icon={<Icon name="user" />}
+                      onClick={() => useNavStore.getState().go("accounts")}
+                    >
+                      {t("social.accountRequest.createdAction")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p role="status" className="text-center text-sm text-muted">
+                      {t("social.guestReadOnly")}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={accountRequested}
+                      icon={<Icon name={accountRequested ? "check" : "user"} />}
+                      onClick={() => setAccountDialog(true)}
+                    >
+                      {t(
+                        accountRequested
+                          ? "social.accountRequest.sent"
+                          : "social.accountRequest.ask",
+                      )}
+                    </Button>
+                  </>
+                )}
               </div>
             ) : (
               <ChatComposer
@@ -703,7 +732,7 @@ export function ChatScreen() {
       {editor ? (
         <ProfileEditor self={self} onClose={() => setEditor(false)} />
       ) : null}
-      {guest ? (
+      {guestMode ? (
         <AccountRequestDialog
           open={accountDialog}
           onClose={() => setAccountDialog(false)}
@@ -775,3 +804,4 @@ function Profile({
     </Modal>
   );
 }
+

@@ -36,17 +36,24 @@ struct Dl {
 impl Downloader for Dl {
     async fn fetch_many(&self, reqs: Vec<DownloadReq>, _s: &dyn ProgressSink) -> AppResult<()> {
         for r in reqs {
-            let url = r.urls[0].to_string();
-            let bytes = self
-                .files
-                .lock()
-                .unwrap()
-                .get(&url)
-                .cloned()
-                .ok_or_else(|| AppError::new(ErrorCode::NotFound, "404").detail("url", &url))?;
+            // Like the real downloader: fall through to the next candidate.
+            let (url, bytes) = r
+                .urls
+                .iter()
+                .find_map(|u| {
+                    self.files
+                        .lock()
+                        .unwrap()
+                        .get(u.as_str())
+                        .cloned()
+                        .map(|b| (u.to_string(), b))
+                })
+                .ok_or_else(|| {
+                    AppError::new(ErrorCode::NotFound, "404").detail("url", r.urls[0].as_str())
+                })?;
             if let Some(w) = &r.sha1 {
                 if &sha1_hex(&bytes) != w {
-                    return Err(AppError::new(ErrorCode::HashMismatch, "sha1"));
+                    return Err(AppError::new(ErrorCode::HashMismatch, "sha1").detail("url", url));
                 }
             }
             if r.size.is_some_and(|size| size != bytes.len() as u64) {
@@ -1051,11 +1058,14 @@ impl Env {
     fn cf_file(&self, project: u32, file: u32, deps: serde_json::Value) -> serde_json::Value {
         let bytes = format!("file:{file}").into_bytes();
         let url = format!("https://edge.forgecdn.net/files/1/1/{file}.jar");
-        self.dl
-            .files
-            .lock()
-            .unwrap()
-            .insert(url.clone(), bytes.clone());
+        {
+            let mut files = self.dl.files.lock().unwrap();
+            files.insert(url.clone(), bytes.clone());
+            // The same file on the other CDN hosts the launcher may use.
+            for alt in crate::packs::cdn_alternates(&url) {
+                files.insert(alt, bytes.clone());
+            }
+        }
         let value = serde_json::json!({"id":file,"modId":project,"gameId":432,"displayName":format!("v{file}"),"fileName":format!("{file}.jar"),"fileDate":"2026-01-01T00:00:00Z","fileLength":bytes.len(),"isAvailable":true,"releaseType":1,"downloadUrl":url,"hashes":[{"algo":1,"value":sha1_hex(&bytes)}],"gameVersions":["1.20.1","Forge"],"dependencies":deps});
         self.cf_register(project, &value);
         value
@@ -1292,19 +1302,37 @@ async fn curseforge_pack_rejects_override_traversal_and_hash_mismatch() {
         ),
     )
     .unwrap();
-    e.dl.files.lock().unwrap().insert(
-        f["downloadUrl"].as_str().unwrap().to_owned(),
-        b"corrupt".to_vec(),
-    );
+    // A corrupt body and a wrong size are decided straight away, so other CDN
+    // hosts of the file never get a chance to serve it.
+    let url = f["downloadUrl"].as_str().unwrap().to_owned();
+    let sha1 = Some(f["hashes"][0]["value"].as_str().unwrap().to_owned());
+    let req = DownloadReq {
+        urls: crate::packs::cdn_candidates(&url)
+            .iter()
+            .map(|u| Url::parse(u).unwrap())
+            .collect(),
+        sha1,
+        size: None,
+        dest: e._dir.path().join("hash/mod.jar"),
+        kind: ResourceKind::Content,
+    };
+    e.dl.files.lock().unwrap().insert(url, b"corrupt".to_vec());
     assert_eq!(
-        e.svc
-            .import(path.to_str().unwrap(), &NullSink::default())
+        e.dl.fetch_many(vec![req], &NullSink::default())
             .await
             .unwrap_err()
             .code,
         ErrorCode::HashMismatch
     );
-    assert!(e.inst.map.lock().unwrap().is_empty());
+    // Pack downloads are per file now: a hash mismatch drops that file into the
+    // manual list instead of failing the whole pack.
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    assert!(!e.inst.game_dir(inst.id).join("mods/11.jar").exists());
+    assert_eq!(e.manual_files(inst.id).len(), 1);
 }
 
 #[tokio::test]

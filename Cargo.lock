@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "lc-accounts",
@@ -1587,6 +1587,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
+ "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-specta",
@@ -2714,7 +2715,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hub"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3267,6 +3268,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "is-docker"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "928bae27f42bc99b60d9ac7334e3a21d10ad8f1835a4e12ec3ec0464765ed1b3"
+dependencies = [
+ "once_cell",
+]
+
+[[package]]
+name = "is-wsl"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "173609498df190136aa7dea1a91db051746d339e18476eed5ca40521f02d7aa5"
+dependencies = [
+ "is-docker",
+ "once_cell",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3507,7 +3527,7 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "lc-accounts"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3531,7 +3551,7 @@ dependencies = [
 
 [[package]]
 name = "lc-chat"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3553,9 +3573,10 @@ dependencies = [
 
 [[package]]
 name = "lc-content"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
+ "futures-util",
  "hex",
  "lc-accounts",
  "lc-core",
@@ -3577,7 +3598,7 @@ dependencies = [
 
 [[package]]
 name = "lc-core"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3602,7 +3623,7 @@ dependencies = [
 
 [[package]]
 name = "lc-http"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3620,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "lc-loaders"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "hex",
@@ -3639,7 +3660,7 @@ dependencies = [
 
 [[package]]
 name = "lc-p2p"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -3669,7 +3690,7 @@ dependencies = [
 
 [[package]]
 name = "lc-runtime"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "glib",
@@ -3682,7 +3703,7 @@ dependencies = [
 
 [[package]]
 name = "lc-types"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3694,7 +3715,7 @@ dependencies = [
 
 [[package]]
 name = "lc-voice"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "cpal",
@@ -3712,7 +3733,7 @@ dependencies = [
 
 [[package]]
 name = "lc-vpn"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4901,6 +4922,17 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "open"
+version = "5.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d8c8b8e725ad26404d6896eb2f064294a0a7b4f1d9120210d85544684c4ca95"
+dependencies = [
+ "dunce",
+ "is-wsl",
+ "libc",
+]
 
 [[package]]
 name = "openssl-probe"
@@ -7176,6 +7208,28 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-opener"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53810be1b4fed22bb6ac3f4cab5a2b80d9391d1af436bda145607532bc0bb219"
+dependencies = [
+ "dunce",
+ "glob",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "open",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.21",
+ "url",
+ "windows 0.62.2",
+ "zbus 5.19.0",
 ]
 
 [[package]]

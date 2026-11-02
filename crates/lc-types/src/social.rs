@@ -81,6 +81,9 @@ pub struct SocialUser {
     /// Avatar id (content hash); bytes come from `ChatService::avatar_preview`.
     #[serde(default)]
     pub avatar: Option<String>,
+    /// A server account was created from this guest's request.
+    #[serde(default)]
+    pub account_created: bool,
 }
 
 /// Own-profile edit. `None` keeps a field, `Some("")` clears it.

@@ -302,7 +302,11 @@ impl Inner {
                 }
             }
             reqs.push(DownloadReq {
-                urls: vec![parse_url(&url)?],
+                // A CurseForge CDN host that resets is tried on another CDN host.
+                urls: crate::packs::cdn_candidates(&url)
+                    .iter()
+                    .filter_map(|u| parse_url(u).ok())
+                    .collect(),
                 sha1: sha1.clone(),
                 size: (v.size > 0).then_some(v.size),
                 dest: dest.clone(),

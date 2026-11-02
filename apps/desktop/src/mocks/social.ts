@@ -15,7 +15,7 @@ import type {
   commands,
 } from "../bindings";
 import type { NetMockContext } from "./net";
-import { canModerate, initials, privacyOptions, userHue } from "../lib/social";
+import { canModerate, initials, isGuest as isGuestUser, privacyOptions, userHue } from "../lib/social";
 import { ACCENTS, MAX_BIO, MAX_DISPLAY_NAME } from "../lib/socialProfile";
 
 export const MOCK_ONLINE = 12;
@@ -162,6 +162,14 @@ export function createSocialMocks(
   };
   const targetName = (uuid: string) =>
     uuid === SOCIAL_PEER.uuid ? SOCIAL_PEER.name : uuid;
+  // Like the hub: a real account can open a direct chat with anyone it may message.
+  const directable = (user: SocialUser): SocialUser => ({
+    ...user,
+    isBlocked: blocked.has(user.uuid),
+    isFriend: friends.some((f) => f.state === "friends"),
+    canMessage: !blocked.has(user.uuid),
+    canInvite: !blocked.has(user.uuid) && (!self?.guest || user.guest === true),
+  });
   const userById = (uuid: string): SocialUser | null => {
     if (self?.uuid === uuid) return self;
     if (SOCIAL_PEER.uuid === uuid) return peer();
@@ -191,7 +199,7 @@ export function createSocialMocks(
       createdAt: minutesAgo(60 * 26),
     },
   ];
-  const invites = new Map<string, string>();
+  const approved = new Set<string>();
   const accounts = (): AdminAccount[] => [
     {
       uuid: SOCIAL_PEER.uuid,
@@ -212,15 +220,15 @@ export function createSocialMocks(
       inviteUrl: null,
     },
     ...requests
-      .filter((r) => invites.has(r.id))
+      .filter((r) => approved.has(r.id))
       .map((r) => ({
         uuid: r.id,
         name: r.name,
-        guest: true,
+        guest: false,
         displayName: null,
         createdAt: r.createdAt,
-        invite: "MINE-DED1-NV1T",
-        inviteUrl: invites.get(r.id) ?? null,
+        invite: null,
+        inviteUrl: null,
       })),
   ];
   const send = (channel: string, content: SocialContent) => {
@@ -257,13 +265,7 @@ export function createSocialMocks(
   return {
     socialConnect: async (account) => {
       const value = ctx.findAccount(account);
-      if (
-        !value ||
-        value.kind !== "yggdrasil" ||
-        !value.valid ||
-        value.server?.includes("ely.by")
-      )
-        return denied();
+      if (!value || value.valid === false) return denied();
       self = {
         uuid: value.uuid.replaceAll("-", ""),
         name: value.name,
@@ -318,21 +320,24 @@ export function createSocialMocks(
         ? remove(id)
         : denied(),
     socialOpenDirect: async (uuid) => {
-      if (!self || uuid !== SOCIAL_PEER.uuid || blocked.has(uuid))
-        return denied();
-      const id = `dm:${[self.uuid, uuid].sort().join(":")}`;
+      if (!self || uuid === self.uuid) return denied();
+      const user = userById(uuid);
+      if (!user || blocked.has(uuid)) return denied();
+      // A plain registered player may not DM another player who refuses messages.
+      if (!self.guest && !user.guest && !user.canMessage) return denied();
+      const id = `dm:${[self.uuid, user.uuid].sort().join(":")}`;
       let channel = channels.find((c) => c.id === id);
       if (!channel) {
         channel = {
           id,
           kind: "direct",
-          peer: peer(),
+          peer: directable(user),
           lastMessage: null,
           unread: 0,
         };
         channels.push(channel);
       }
-      return ok(structuredClone(channel));
+      return ok({ ...structuredClone(channel), peer: directable(user) });
     },
     socialSearchUsers: async (query) =>
       self
@@ -343,7 +348,13 @@ export function createSocialMocks(
           )
         : denied(),
     socialProfile: async (uuid) =>
-      self ? ok(uuid === self.uuid ? { ...self } : peer()) : denied(),
+      self
+        ? ok(
+            uuid === self.uuid
+              ? { ...self, accountCreated: approved.has(self.uuid) }
+              : peer(),
+          )
+        : denied(),
     socialFriends: async () => (self ? ok(structuredClone(friends)) : denied()),
     socialAddFriend: async (uuid) => {
       if (!self || blocked.has(uuid)) return denied();
@@ -544,10 +555,12 @@ export function createSocialMocks(
       return ok(mockAvatarDataUrl(user));
     },
     socialPresence: async () => ok({ online: 12 }),
-    socialRequestAccount: async (note) => {
-      if (!self || (!self.guest && self.role !== "guest")) return denied();
-      if (note.length > 300) return invalid("mock: note is too long");
-      if (requests.some((r) => r.id === self!.uuid))
+    socialRequestAccount: async (login, password, text) => {
+      if (!self || !isGuestUser(self)) return denied();
+      if ((text ?? "").length > 300) return invalid("mock: note is too long");
+      if (!/^[A-Za-z0-9_]{3,16}$/.test(login)) return invalid("mock: bad login");
+      if (password.length < 6) return invalid("mock: short password");
+      if (requests.some((r) => r.id === self!.uuid) || approved.has(self!.uuid))
         return {
           status: "error" as const,
           error: {
@@ -560,8 +573,8 @@ export function createSocialMocks(
         ...requests,
         {
           id: self.uuid,
-          name: self.name,
-          note,
+          name: login,
+          note: text ?? "",
           createdAt: new Date().toISOString(),
         },
       ];
@@ -572,14 +585,37 @@ export function createSocialMocks(
         ? ok(requests.map((r) => ({ ...r })))
         : denied(),
     socialIssueInvite: async (requestId) => {
+      // 1.5.1: creates the account with the requested login, no invite link.
       if (self?.role !== "admin") return denied();
       const request = requests.find((r) => r.id === requestId);
       if (!request) return invalid("mock: unknown request");
-      const seen = invites.get(requestId);
-      if (seen) return ok(seen);
-      const link = `https://mineded.example/register?invite=MINE-DED1-NV1T&name=${encodeURIComponent(request.name)}`;
-      invites.set(requestId, link);
-      return ok(link);
+      if (approved.has(requestId))
+        return {
+          status: "error" as const,
+          error: {
+            code: "conflict" as const,
+            message: "mock: account already created",
+            details: { reason: "usernameTaken" },
+          },
+        };
+      if ([...approved].some((id) => requests.find((r) => r.id === id)?.name === request.name))
+        return {
+          status: "error" as const,
+          error: {
+            code: "conflict" as const,
+            message: "mock: username is taken",
+            details: { reason: "usernameTaken" },
+          },
+        };
+      approved.add(requestId);
+      return ok("");
+    },
+    socialCreateAccount: async (requestId) => {
+      if (self?.role !== "admin") return denied();
+      const request = requests.find((r) => r.id === requestId);
+      if (!request) return invalid("mock: unknown request");
+      approved.add(requestId);
+      return ok(null);
     },
     socialAdminAccounts: async () =>
       self?.role === "admin" ? ok(accounts()) : denied(),
