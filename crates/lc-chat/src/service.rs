@@ -1404,16 +1404,15 @@ impl ChatService for ChatClient {
         decode(checked(response, &cancel).await?, &cancel).await
     }
     async fn request_account(&self, note: &str) -> AppResult<()> {
+        // Guests only: `current_session` (not `full_session`) keeps the guest
+        // token, and the hub answers 204, so nothing is decoded here.
         let s = self.current_session().await?;
-        let response = self
-            .request(
-                &s,
-                Method::POST,
-                &["account-request"],
-                Some(json!({ "note": note })),
-            )
-            .await?;
-        decode::<()>(response, &s.cancel).await
+        self.empty(
+            Method::POST,
+            &["account-request"],
+            Some(json!({ "note": note })),
+        )
+        .await
     }
     async fn admin_accounts(&self) -> AppResult<Vec<AdminAccount>> {
         self.api(Method::GET, &["admin", "accounts"], None).await
