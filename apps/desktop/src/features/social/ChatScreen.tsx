@@ -36,6 +36,7 @@ import {
 import { canEditProfile, displayNameOf } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
 import { useSocialStore } from "../../stores/socialStore";
+import { useToastStore } from "../../stores/toastStore";
 import { useTaskStore } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 import { AdminPanel } from "./admin/AdminPanel";
@@ -279,6 +280,7 @@ export function ChatScreen() {
     onReport: (message: SocialMessage) =>
       run(async () => {
         unwrap(await api.socialReport(message.id, null));
+        useToastStore.getState().push({ tone: "info", messageKey: "social.reportSent" });
       }),
     onModerateDelete: (message: SocialMessage) =>
       run(async () => {
@@ -527,6 +529,7 @@ export function ChatScreen() {
                       onClick={() =>
                         run(async () => {
                           unwrap(await api.socialAddFriend(friend.user.uuid));
+                          useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestSent" });
                         })
                       }
                     >
@@ -678,7 +681,10 @@ function Profile({
         onToggleFriend={() =>
           run(async () => {
             if (user.isFriend) unwrap(await api.socialRemoveFriend(user.uuid));
-            else unwrap(await api.socialAddFriend(user.uuid));
+            else {
+              unwrap(await api.socialAddFriend(user.uuid));
+              useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestSent" });
+            }
           })
         }
         onToggleBlock={() =>

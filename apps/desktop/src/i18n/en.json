@@ -1178,7 +1178,9 @@
     "packHostOnline": "The host must keep the launcher and room online during transfer. The pack imports as a new instance.",
     "downloadPack": "Download modpack",
     "packImported": "Modpack imported",
-    "unreadBadge": "Unread messages: {{n}}"
+    "unreadBadge": "Unread messages: {{n}}",
+    "reportSent": "Report sent",
+    "friendRequestSent": "Friend request sent"
   },
   "chat": {
     "upload": "Uploading file",
