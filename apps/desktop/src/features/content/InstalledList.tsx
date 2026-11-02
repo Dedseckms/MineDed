@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ContentKind, InstalledContent, Instance, LocalDepIssue } from "../../bindings";
@@ -106,10 +106,13 @@ export function InstalledList({
   items,
   onBrowse,
   onInstall,
+  extra,
 }: {
   instance: Instance;
   kind: ContentKind;
   items: InstalledContent[];
+  /** Rendered above the list, e.g. pack files that still need a manual download. */
+  extra?: ReactNode;
   onBrowse: () => void;
   /** Installs suggested dependencies through the regular plan dialog. */
   onInstall: (r: InstallRequest) => void;
@@ -140,6 +143,7 @@ export function InstalledList({
   if (items.length === 0) {
     return (
       <div className="flex flex-col gap-3">
+        {extra}
         <EmptyState title={t(`content.emptyKind.${kind}`)}>
           <div className="flex flex-wrap justify-center gap-2">
             <Button variant="primary" icon={<Icon name="search" />} onClick={onBrowse}>
@@ -156,6 +160,7 @@ export function InstalledList({
 
   return (
     <div className="flex flex-col gap-3">
+      {extra}
       <div className="flex flex-wrap items-center gap-2">
         <TextInput
           type="search"

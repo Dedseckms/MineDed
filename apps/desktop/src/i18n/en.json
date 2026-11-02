@@ -596,6 +596,10 @@
         "conflict": "Incompatible with the installed {{mod}}",
         "wrongLoader": "Built for {{mod}}, not for this instance"
       }
+    },
+    "manual": {
+      "title": "Files to download by hand: {{count}}",
+      "open": "Open the file page"
     }
   },
   "skins": {

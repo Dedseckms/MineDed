@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { ContentKind, InstalledContent, Instance, ProjectSummary } from "../../bindings";
-import { api } from "../../api/client";
+import type { ContentKind, InstalledContent, Instance, ManualDownload, ProjectSummary } from "../../bindings";
+import { api, unwrap } from "../../api/client";
+import { useQuery } from "@tanstack/react-query";
+
 import { qk, useContentList, useInstances, useStartTask } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
@@ -12,6 +14,7 @@ import { type SearchKind, hasShaderLoader, installedOfKind, shaderLoaderFor } fr
 import { useContentStore } from "../../stores/contentStore";
 import { INSTANCE_TABS, type InstanceTab, useNavStore } from "../../stores/navStore";
 import { useTaskView } from "../../stores/taskStore";
+import { ManualDownloads } from "./ManualDownloads";
 import { ExternalLink } from "../common/ExternalLink";
 import { ExportDialog } from "../instances/ExportDialog";
 import { PresetDialog } from "../instances/PresetDialog";
@@ -105,6 +108,12 @@ function InstanceContent({ instance }: { instance: Instance }) {
   const setTab = useNavStore((s) => s.setInstanceTab);
   const browseKind = useContentStore((s) => s.browse);
   const content = useContentList(instance.id);
+  // Pack files that still need a manual download (CurseForge opt-out, failed CDN).
+  const manual = useQuery({
+    queryKey: ["content", "manual", instance.id, content.dataUpdatedAt],
+    queryFn: async () => unwrap(await api.instanceManualDownloads(instance.id)),
+    enabled: tab !== "browse",
+  });
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [request, setRequest] = useState<InstallRequest | null>(null);
   const installed = content.data ?? [];
@@ -154,6 +163,13 @@ function InstanceContent({ instance }: { instance: Instance }) {
               items={installedOfKind(installed, TAB_KIND[tab])}
               onBrowse={() => browse(TAB_KIND[tab] as SearchKind)}
               onInstall={setRequest}
+              extra={
+                <ManualDownloads
+                  items={(manual.data ?? []).filter(
+                    (m: ManualDownload) => m.fileName.toLowerCase().endsWith(".jar") === (TAB_KIND[tab as Exclude<InstanceTab, "browse">] === "mod"),
+                  )}
+                />
+              }
             />
           </>
         )}
