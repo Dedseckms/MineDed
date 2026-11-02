@@ -336,7 +336,8 @@ export function ChatScreen() {
             <Button
               key={name}
               size="sm"
-              variant={chatLayout ? "primary" : "ghost"}
+              variant={tab === name ? "primary" : "ghost"}
+              aria-pressed={tab === name}
               onClick={() => setTab(name)}
             >
               {t(`social.tabs.${name}`)}
