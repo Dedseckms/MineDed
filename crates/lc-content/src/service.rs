@@ -607,12 +607,15 @@ impl ContentService for ContentServices {
         let game = self.inner.instances.game_dir(instance);
         let idx = ContentIndex::load(&self.inner.instance_dir(instance)).await?;
         let files = self.inner.scan(&game).await?;
-        // Update check is best effort (offline → no badges).
-        let updates = self
-            .inner
-            .updates(&inst, &idx, false)
-            .await
-            .unwrap_or_default();
+        // Update check is best effort: a CurseForge/Modrinth outage only drops
+        // the update badges and never empties the installed list.
+        let updates = match self.inner.updates(&inst, &idx, false).await {
+            Ok(updates) => updates,
+            Err(e) => {
+                eprintln!("content update check failed: {e}");
+                HashMap::new()
+            }
+        };
         Ok(files
             .into_iter()
             .map(|f| {
