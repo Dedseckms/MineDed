@@ -50,7 +50,7 @@ function Row({
       </div>
       {item.updateAvailable ? <Badge tone="info">{t("content.updateAvailable")}</Badge> : null}
       <Badge tone={sourceTone(item.source)}>{t(`content.source.${item.source}`)}</Badge>
-      <ProjectPageLink source={item.source} projectId={item.projectId} kind={item.kind} iconOnly />
+      <ProjectPageLink source={item.source} projectId={item.projectId} slug={item.slug} kind={item.kind} iconOnly />
       <Button size="sm" variant="ghost" className="text-danger" icon={<Icon name="trash" />} aria-label={t("content.removeNamed", { name })} onClick={onRemove} />
     </div>
   );

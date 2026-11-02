@@ -24,7 +24,10 @@ export function canContact(user: SocialUser, blocked: boolean): boolean {
 
 /** Offline nickname with a hub guest token: reads the public chat, nothing else. */
 export function isGuest(user: Pick<SocialUser, "role" | "guest">): boolean {
-  return user.guest === true || user.role === "guest";
+  // Only guests, never a verified account: `role` is server-resolved and an
+  // admin/moderator/user account is never a guest even if `guest` went stale.
+  if (user.role === "guest") return true;
+  return user.role === "user" && user.guest === true;
 }
 
 /** Stable per-player hue, so names and avatars keep their colour across screens. */

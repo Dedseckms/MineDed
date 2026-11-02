@@ -12,6 +12,9 @@
     "core:window:allow-set-always-on-top",
     "dialog:allow-open",
     "deep-link:default",
-    "opener:allow-open-url"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    }
   ]
 }

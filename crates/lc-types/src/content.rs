@@ -163,6 +163,9 @@ pub struct InstalledContent {
     pub source: ContentSourceKind,
     pub project_id: Option<String>,
     pub version_id: Option<String>,
+    /// Provider page slug, so the project link opens the real page.
+    #[serde(default)]
+    pub slug: Option<String>,
     pub title: Option<String>,
     pub version_number: Option<String>,
     pub update_available: bool,
