@@ -1,9 +1,12 @@
-//! Owner: release. Self-update (tauri-plugin-updater, mirrored manifest).
+//! Owner: release. Self-update (tauri-plugin-updater, mirrored manifest) and
+//! the system tray.
 //!
 //! Endpoints, public key and Windows install mode live in `tauri.conf.json`
 //! (`plugins.updater`). The plugin tries the endpoints in order (GitHub
 //! Releases first, then the owner's mirror) and verifies every package with
 //! the minisign public key before installing it.
+
+mod tray;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,6 +29,13 @@ use crate::tasks::spawn_task;
 #[specta::specta]
 pub fn app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+/// Builds the tray icon and makes the close button hide the window instead of
+/// quitting (see `tray.rs`). Called once from `lib.rs` after `AppState` is
+/// managed; a platform without a tray only logs a warning.
+pub fn setup_tray(app: &AppHandle) {
+    tray::setup(app);
 }
 
 // Manual check (the user pressed "check for updates"): always queries the
