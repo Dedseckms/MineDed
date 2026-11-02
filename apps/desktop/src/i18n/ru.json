@@ -1126,6 +1126,12 @@
       "direct": "Личные"
     },
     "players": "Игроки",
+    "filterChats": "Фильтр по чатам",
+    "noChatMatches": "Ничего не найдено",
+    "searchPlayers": "Найти игрока",
+    "noPlayers": "Игроки не найдены",
+    "noIncoming": "Входящих заявок нет",
+    "alreadyFriends": "Уже в друзьях",
     "noChats": "Переписок пока нет",
     "noMessages": "Нет сообщений",
     "back": "К списку чатов",

@@ -1118,6 +1118,12 @@
       "direct": "Direct"
     },
     "players": "Players",
+    "filterChats": "Filter chats",
+    "noChatMatches": "No matching chats",
+    "searchPlayers": "Find a player",
+    "noPlayers": "No players found",
+    "noIncoming": "No incoming requests",
+    "alreadyFriends": "Already friends",
     "noChats": "No conversations yet",
     "noMessages": "No messages yet",
     "back": "Back to chats",

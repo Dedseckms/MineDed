@@ -1,4 +1,4 @@
-import {
+﻿import {
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -15,9 +15,9 @@ import type {
   SocialPrivacy,
   SocialUser,
 } from "../../bindings";
-import { api, isMock, unwrap } from "../../api/client";
+import { api, unwrap } from "../../api/client";
 import { createTaskChannel } from "../../api/channel";
-import { pickFile } from "../../api/dialog";
+import { pickFile, pickSavePath } from "../../api/dialog";
 import { useRoomState } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
@@ -53,9 +53,12 @@ import { type TimelineRow, buildTimeline, chronological } from "./chat";
 import { SharePack } from "./PackShare";
 import { GuestLoginDialog } from "./GuestLoginDialog";
 import { OnlineBadge } from "./OnlineBadge";
+import { PlayerSearch } from "./PlayerSearch";
 import { ProfileCard } from "./ProfileCard";
 import { ProfileEditor } from "./ProfileEditor";
+import { saveFileName } from "./saveFileName";
 import { useAutoMarkRead } from "./useAutoMarkRead";
+import { useDebouncedSearch } from "./useDebouncedSearch";
 
 const privacyFields: (keyof SocialPrivacy)[] = [
   "whoCanMessage",
@@ -71,8 +74,6 @@ const CHAT_PATTERN: CSSProperties = {
   backgroundSize: "22px 22px, 100% 100%",
 };
 
-const SEARCH_DEBOUNCE_MS = 250;
-
 export function ChatScreen() {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -80,8 +81,8 @@ export function ChatScreen() {
   const self = session.self;
   const wide = useMediaQuery("(min-width: 768px)");
   const [text, setText] = useState("");
-  const [search, setSearch] = useState("");
-  const [query, setQuery] = useState("");
+  const chatSearch = useDebouncedSearch();
+  const friendSearch = useDebouncedSearch();
   const [profile, setProfile] = useState<SocialUser | null>(null);
   const [editor, setEditor] = useState(false);
   const [tab, setTab] = useState("chat");
@@ -94,24 +95,23 @@ export function ChatScreen() {
     setText("");
   }, [session.selected]);
   useEffect(() => {
-    const value = search.trim();
-    if (!value) {
-      setQuery("");
-      return;
-    }
-    const timer = setTimeout(() => setQuery(value), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [search]);
-  useEffect(() => {
     setProfile(null);
     setEditor(false);
-    setQuery("");
-    setSearch("");
+    chatSearch.reset();
+    friendSearch.reset();
     setText("");
     setTaskId(null);
     setTab("chat");
     setPane("list");
   }, [self?.uuid]);
+  useEffect(() => {
+    if (tab !== "friends") {
+      friendSearch.reset();
+      return;
+    }
+    if (!chatSearch.query) return;
+    chatSearch.reset();
+  }, [tab]);
   const enabled = !!self;
   const channels = useQuery({
     queryKey: ["social", "channels"],
@@ -138,9 +138,9 @@ export function ChatScreen() {
     enabled,
   });
   const users = useQuery({
-    queryKey: ["social", "search", query],
-    queryFn: async () => unwrap(await api.socialSearchUsers(query)),
-    enabled: enabled && !!query,
+    queryKey: ["social", "search", friendSearch.query],
+    queryFn: async () => unwrap(await api.socialSearchUsers(friendSearch.query)),
+    enabled: enabled && !!friendSearch.query,
   });
   const action = useMutation({
     mutationFn: async (run: () => Promise<unknown>) => run(),
@@ -258,15 +258,21 @@ export function ChatScreen() {
   };
   const saveAttachment = (attachment: SocialAttachment) =>
     run(async () => {
-      const dest = isMock
-        ? `C:/Downloads/${attachment.fileName}`
-        : await (
-            await import("@tauri-apps/plugin-dialog")
-          ).save({ defaultPath: attachment.fileName });
+      const name = saveFileName(attachment);
+      const ext = name.slice(name.lastIndexOf(".") + 1);
+      const dest = await pickSavePath({
+        defaultPath: name,
+        extensions: name.includes(".") ? [ext] : undefined,
+      });
       if (dest)
         await transfer((ch) =>
           api.socialSaveAttachment(attachment.id, dest, ch),
         );
+    });
+  const addFriend = (user: SocialUser) =>
+    run(async () => {
+      unwrap(await api.socialAddFriend(user.uuid));
+      useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestSent" });
     });
   const actions: ChatMessageActions = {
     selfUuid: self.uuid,
@@ -298,6 +304,10 @@ export function ChatScreen() {
     session.set({ selected: channel.id });
     setPane("chat");
   };
+  const chatLayout = tab === "chat";
+  const showIncoming = !!friendSearch.search.trim();
+  const friendResults = friendSearch.query ? (users.data ?? []) : [];
+  const incoming = (friends.data ?? []).filter((f) => f.state === "incoming");
   return (
     <div className="flex h-[calc(100dvh-6.5rem)] min-h-[30rem] flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -326,7 +336,7 @@ export function ChatScreen() {
             <Button
               key={name}
               size="sm"
-              variant={tab === name ? "primary" : "ghost"}
+              variant={chatLayout ? "primary" : "ghost"}
               onClick={() => setTab(name)}
             >
               {t(`social.tabs.${name}`)}
@@ -346,242 +356,256 @@ export function ChatScreen() {
         }
       />
       {task ? <TaskProgress task={task} compact /> : null}
-      {tab === "chat" ? (
-        <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-panel">
-          <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[320px_minmax(0,1fr)]">
-            <aside
-              aria-label={t("social.channels")}
-              className={`min-h-0 border-border md:border-r ${
-                wide || pane === "list" ? "flex flex-col" : "hidden"
-              }`}
-            >
-              <ChatChannelList
-                channels={
-                  guest
-                    ? (channels.data ?? []).filter((c) => c.kind === "global")
-                    : channels.data ?? []
-                }
-                selected={session.selected}
-                onSelect={pickChannel}
-                users={query ? (users.data ?? []) : []}
-                searching={!!query && users.isFetching}
-                search={search}
-                onSearch={setSearch}
-                onOpenProfile={openProfile}
-                showDirect={!guest}
+      <div
+        className={`rounded-xl border border-border bg-panel ${
+          chatLayout ? "min-h-0 flex-1 overflow-hidden" : "hidden"
+        }`}
+      >
+        <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[320px_minmax(0,1fr)]">
+          <aside
+            aria-label={t("social.channels")}
+            className={`min-h-0 border-border md:border-r ${
+              wide || pane === "list" ? "flex flex-col" : "hidden"
+            }`}
+          >
+            <ChatChannelList
+              channels={
+                guest
+                  ? (channels.data ?? []).filter((c) => c.kind === "global")
+                  : channels.data ?? []
+              }
+              selected={session.selected}
+              onSelect={pickChannel}
+              search={chatSearch.search}
+              onSearch={chatSearch.setSearch}
+              showDirect={!guest}
+            />
+          </aside>
+          <section
+            aria-label={title}
+            className={`min-h-0 flex-col ${
+              wide || pane === "chat" ? "flex" : "hidden"
+            }`}
+          >
+            <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-2">
+              {wide ? null : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={t("social.back")}
+                  title={t("social.back")}
+                  onClick={() => setPane("list")}
+                  icon={<Icon name="back" />}
+                />
+              )}
+              <ChatAvatar
+                user={peer}
+                icon={directChat ? "user" : "users"}
+                size="sm"
               />
-            </aside>
-            <section
-              aria-label={title}
-              className={`min-h-0 flex-col ${
-                wide || pane === "chat" ? "flex" : "hidden"
-              }`}
-            >
-              <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-2">
-                {wide ? null : (
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{title}</p>
+                <p className="truncate text-[11px] text-muted">
+                  {directChat
+                    ? t(`social.status.${peer?.status ?? "hidden"}`)
+                    : t("social.publicChannel")}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {directChat ? (
                   <Button
                     size="sm"
                     variant="ghost"
-                    aria-label={t("social.back")}
-                    title={t("social.back")}
-                    onClick={() => setPane("list")}
-                    icon={<Icon name="back" />}
+                    aria-label={t("social.profile.title")}
+                    title={t("social.profile.title")}
+                    onClick={() => {
+                      if (peer) openProfile(peer);
+                    }}
+                    icon={<Icon name="user" />}
                   />
-                )}
-                <ChatAvatar
-                  user={peer}
-                  icon={directChat ? "user" : "users"}
-                  size="sm"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{title}</p>
-                  <p className="truncate text-[11px] text-muted">
-                    {directChat
-                      ? t(`social.status.${peer?.status ?? "hidden"}`)
-                      : t("social.publicChannel")}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  {directChat ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      aria-label={t("social.profile.title")}
-                      title={t("social.profile.title")}
-                      onClick={() => {
-                        if (peer) openProfile(peer);
-                      }}
-                      icon={<Icon name="user" />}
-                    />
-                  ) : null}
-                  {directChat ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      aria-label={t("social.invite")}
-                      title={t("social.invite")}
-                      disabled={!canInvitePeer}
-                      onClick={() => {
-                        if (peer) invite(peer);
-                      }}
-                      icon={<Icon name="link" />}
-                    />
-                  ) : null}
-                </div>
-              </header>
-              <div
-                className="relative flex min-h-0 flex-1 flex-col"
-                style={CHAT_PATTERN}
-              >
-                <ChatTimeline
-                  rows={rows}
-                  channel={session.selected}
-                  hasOlder={!!history.hasNextPage}
-                  loadingOlder={history.isFetchingNextPage}
-                  onLoadOlder={() => void history.fetchNextPage()}
-                  onAtBottomChange={setPinned}
-                  renderRow={renderRow}
-                  empty={t(history.isPending ? "common.loading" : "social.empty")}
-                />
+                ) : null}
+                {directChat ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={t("social.invite")}
+                    title={t("social.invite")}
+                    disabled={!canInvitePeer}
+                    onClick={() => {
+                      if (peer) invite(peer);
+                    }}
+                    icon={<Icon name="link" />}
+                  />
+                ) : null}
               </div>
-              {guest ? (
-                <p
-                  role="status"
-                  className="shrink-0 border-t border-border bg-panel px-3 py-3 text-center text-sm text-muted"
-                >
-                  {t("social.guestReadOnly")}
-                </p>
-              ) : (
-                <ChatComposer
-                  value={text}
-                  onChange={setText}
-                  onSend={() => {
-                    const value = text.trim();
-                    if (value) send({ type: "text", text: value });
-                  }}
-                  onAttach={() =>
-                    run(async () => {
-                      const path = await pickFile();
-                      if (path)
-                        await transfer((ch) =>
-                          api.socialSendFile(
-                            session.selected,
-                            path,
-                            text.trim() || null,
-                            ch,
-                          ),
-                        );
-                    })
-                  }
-                  disabled={action.isPending || !session.connected}
-                  hint={t(
-                    directChat ? "social.directHint" : "social.rules",
-                  )}
-                  tools={
-                    directChat && selected ? (
-                      <SharePack
-                        key={selected.id}
-                        channel={selected.id}
-                        disabled={
-                          action.isPending ||
-                          !session.connected ||
-                          !selected.peer?.canInvite ||
-                          selected.peer?.isBlocked === true
-                        }
-                      />
-                    ) : null
-                  }
-                />
-              )}
-            </section>
-          </div>
+            </header>
+            <div
+              className="relative flex min-h-0 flex-1 flex-col"
+              style={CHAT_PATTERN}
+            >
+              <ChatTimeline
+                rows={rows}
+                channel={session.selected}
+                hasOlder={!!history.hasNextPage}
+                loadingOlder={history.isFetchingNextPage}
+                onLoadOlder={() => void history.fetchNextPage()}
+                onAtBottomChange={setPinned}
+                renderRow={renderRow}
+                empty={t(history.isPending ? "common.loading" : "social.empty")}
+              />
+            </div>
+            {guest ? (
+              <p
+                role="status"
+                className="shrink-0 border-t border-border bg-panel px-3 py-3 text-center text-sm text-muted"
+              >
+                {t("social.guestReadOnly")}
+              </p>
+            ) : (
+              <ChatComposer
+                value={text}
+                onChange={setText}
+                onSend={() => {
+                  const value = text.trim();
+                  if (value) send({ type: "text", text: value });
+                }}
+                onAttach={() =>
+                  run(async () => {
+                    const path = await pickFile();
+                    if (path)
+                      await transfer((ch) =>
+                        api.socialSendFile(
+                          session.selected,
+                          path,
+                          text.trim() || null,
+                          ch,
+                        ),
+                      );
+                  })
+                }
+                disabled={action.isPending || !session.connected}
+                hint={t(
+                  directChat ? "social.directHint" : "social.rules",
+                )}
+                tools={
+                  directChat && selected ? (
+                    <SharePack
+                      key={selected.id}
+                      channel={selected.id}
+                      disabled={
+                        action.isPending ||
+                        !session.connected ||
+                        !selected.peer?.canInvite ||
+                        selected.peer?.isBlocked === true
+                      }
+                    />
+                  ) : null
+                }
+              />
+            )}
+          </section>
         </div>
-      ) : null}
-      {tab === "friends" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <VirtualList
-            items={friends.data ?? []}
-            rowHeight={112}
-            height={480}
-            getKey={(f) => f.user.uuid}
-            ariaLabel={t("social.tabs.friends")}
-            renderRow={(friend) => (
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-panel p-3">
-                <ChatAvatar user={friend.user} size="sm" />
-                <button
-                  className="mr-auto text-left"
-                  onClick={() => openProfile(friend.user)}
-                >
+      </div>
+      <div className="flex flex-col gap-3" hidden={tab !== "friends"}>
+        <div className="min-h-0 flex-1 overflow-y-auto space-y-2 rounded-xl border border-border bg-panel p-3">
+          <PlayerSearch
+            search={friendSearch.search}
+            onSearch={friendSearch.setSearch}
+            users={friendResults}
+            searching={!!friendSearch.query && users.isFetching}
+            onOpenProfile={openProfile}
+            onAddFriend={addFriend}
+          />
+          <div className="flex flex-col" hidden={showIncoming}>
+            {incoming.length === 0 ? (
+              <p className="px-1 py-2 text-xs text-muted">
+                {t("social.noIncoming")}
+              </p>
+            ) : null}
+            <VirtualList
+              items={friends.data ?? []}
+              rowHeight={112}
+              height={480}
+              getKey={(f) => f.user.uuid}
+              ariaLabel={t("social.tabs.friends")}
+              renderRow={(friend) => (
+                <div className="flex items-center gap-2 rounded-lg border border-border bg-panel p-3">
                   <ChatAvatar user={friend.user} size="sm" />
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium">
-                      {displayNameOf(friend.user)}
+                  <button
+                    className="mr-auto text-left"
+                    onClick={() => openProfile(friend.user)}
+                  >
+                    <ChatAvatar user={friend.user} size="sm" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium">
+                        {displayNameOf(friend.user)}
+                      </span>
+                      <span className="block truncate text-xs text-muted">
+                        {t(`social.friend.${friend.state}`)}
+                      </span>
                     </span>
-                    <span className="block truncate text-xs text-muted">
-                      {t(`social.friend.${friend.state}`)}
-                    </span>
-                  </span>
-                </button>
-                <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                  {friend.state === "incoming" ? (
+                  </button>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {friend.state === "incoming" ? (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          run(async () => {
+                            unwrap(await api.socialAddFriend(friend.user.uuid));
+                            useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestSent" });
+                          })
+                        }
+                      >
+                        {t("social.accept")}
+                      </Button>
+                    ) : null}
                     <Button
                       size="sm"
+                      variant="secondary"
+                      onClick={() => direct(friend.user)}
+                    >
+                      {t("social.write")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => openProfile(friend.user)}
+                    >
+                      {t("social.openProfile")}
+                    </Button>
+                    {/* A disabled button swallows tooltips, so the hint sits on the wrapper. */}
+                    <span title={t(room.data ? "social.invite" : "social.inviteNoRoom")}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!room.data}
+                        onClick={() => invite(friend.user)}
+                      >
+                        {t("social.invite")}
+                      </Button>
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={() =>
                         run(async () => {
-                          unwrap(await api.socialAddFriend(friend.user.uuid));
-                          useToastStore.getState().push({ tone: "info", messageKey: "social.friendRequestSent" });
+                          unwrap(await api.socialRemoveFriend(friend.user.uuid));
                         })
                       }
                     >
-                      {t("social.accept")}
+                      {t(
+                        friend.state === "incoming"
+                          ? "social.decline"
+                          : "common.delete",
+                      )}
                     </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => direct(friend.user)}
-                  >
-                    {t("social.write")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => openProfile(friend.user)}
-                  >
-                    {t("social.openProfile")}
-                  </Button>
-                  {/* A disabled button swallows tooltips, so the hint sits on the wrapper. */}
-                  <span title={t(room.data ? "social.invite" : "social.inviteNoRoom")}>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={!room.data}
-                      onClick={() => invite(friend.user)}
-                    >
-                      {t("social.invite")}
-                    </Button>
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      run(async () => {
-                        unwrap(await api.socialRemoveFriend(friend.user.uuid));
-                      })
-                    }
-                  >
-                    {t(
-                      friend.state === "incoming"
-                        ? "social.decline"
-                        : "common.delete",
-                    )}
-                  </Button>
+                  </div>
                 </div>
-              </div>
-            )}
-          />
+              )}
+            />
+          </div>
         </div>
-      ) : null}
+      </div>
       {tab === "privacy" && privacy.data ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-4 rounded-xl border border-border bg-panel p-4">

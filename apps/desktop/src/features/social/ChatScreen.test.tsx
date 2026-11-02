@@ -7,11 +7,14 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Commands } from "../../api/client";
-import type { SocialMessage } from "../../bindings";
+import type { SocialAttachment, SocialChannel, SocialMessage } from "../../bindings";
+
+const SEARCH_DEBOUNCE_MS = 250;
 
 // A fresh, directly controllable mock backend per test (the app-wide `api` is a lazy proxy).
 const h = vi.hoisted(() => ({ api: null as unknown as Commands }));
@@ -32,6 +35,7 @@ const { MOCK_ONLINE, SOCIAL_PEER } = await import("../../mocks/social");
 const { unwrap } = await import("../../api/client");
 const { useSocialStore } = await import("../../stores/socialStore");
 const { ChatScreen } = await import("./ChatScreen");
+const { setMockSavePicker } = await import("../../api/dialog");
 const i18n = (await import("../../i18n")).default;
 
 // happy-dom has no Web Animations: motion falls back to instant presets.
@@ -132,17 +136,47 @@ describe("telegram layout", () => {
     expect(screen.getByText(i18n.t("social.noChats"))).toBeTruthy();
   });
 
-  it("finds players from the list search", async () => {
+  it("filters conversations by name without searching players", async () => {
+    let calls = 0;
+    const search: Commands["socialSearchUsers"] = async () => {
+      calls += 1;
+      return { status: "ok", data: [] };
+    };
+    const channel = (
+      id: string,
+      name: string,
+      kind: "global" | "direct",
+    ): SocialChannel => ({
+      id,
+      kind,
+      peer: kind === "direct" ? { ...SOCIAL_PEER, uuid: id, name } : null,
+      lastMessage: null,
+      unread: 0,
+    });
+    h.api = createMockCommands(
+      {
+        socialSearchUsers: search,
+        socialChannels: async () => ({
+          status: "ok",
+          data: [
+            channel("global", "Global", "global"),
+            channel("dm:alex", "Alex", "direct"),
+            channel("dm:steve", "Steve", "direct"),
+          ],
+        }),
+      },
+      { bus: createMockBus(), tickMs: 5 },
+    );
     await connect();
     mount();
-    const field = await screen.findByLabelText(i18n.t("social.search"));
+    const field = await screen.findByLabelText(i18n.t("social.filterChats"));
     fireEvent.change(field, { target: { value: "ale" } });
-    await waitFor(() =>
-      expect(screen.getByText(i18n.t("social.players"))).toBeTruthy(),
-    );
-    await waitFor(() =>
-      expect(screen.getAllByText(SOCIAL_PEER.name).length).toBeGreaterThan(0),
-    );
+    await waitFor(() => expect(screen.queryByText("Steve")).toBeNull());
+    expect(screen.getAllByText("Alex").length).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, SEARCH_DEBOUNCE_MS + 50));
+    // The chat list only filters channels; player lookup moved to the friends tab.
+    expect(calls).toBe(0);
+    expect(screen.queryByText(i18n.t("social.players"))).toBeNull();
   });
 
   it("sends on Enter and keeps Shift+Enter for a line break", async () => {
@@ -210,8 +244,8 @@ describe("telegram layout", () => {
     expect(screen.getByText(i18n.t("social.date.yesterday"))).toBeTruthy();
     expect(container.querySelectorAll('[data-own="true"]')).toHaveLength(1);
     expect(container.querySelectorAll('[data-own="false"]')).toHaveLength(3);
-    // Two groups by the same author: the name appears once per group.
-    expect(screen.getAllByText(SOCIAL_PEER.name)).toHaveLength(2);
+    // Two groups by the same author: two message headers plus the day split.
+    expect(screen.getAllByText(SOCIAL_PEER.name)).toHaveLength(3);
   });
 });
 
@@ -248,11 +282,45 @@ describe("guest access", () => {
     ).toBeNull();
   });
 
-  it("has no write or friend buttons in a player profile", async () => {
+  it("searches players from the friends tab and requests a friendship", async () => {
+    await connect();
+    const queries: string[] = [];
+    const added: string[] = [];
+    const search: Commands["socialSearchUsers"] = async (q) => {
+      queries.push(q);
+      return {
+        status: "ok",
+        data: [{ ...SOCIAL_PEER, uuid: SOCIAL_PEER.uuid, name: "Alex" }],
+      };
+    };
+    const add: Commands["socialAddFriend"] = async (uuid) => {
+      added.push(uuid);
+      return { status: "ok", data: { user: SOCIAL_PEER, state: "outgoing" } };
+    };
+    h.api = createMockCommands(
+      { socialSearchUsers: search, socialAddFriend: add },
+      { bus: createMockBus(), tickMs: 5 },
+    );
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: i18n.t("social.tabs.friends") }),
+    );
+    const field = await screen.findByLabelText(i18n.t("social.searchPlayers"));
+    fireEvent.change(field, { target: { value: "ale" } });
+    const result = await screen.findByTestId("player-search-result");
+    expect(queries).toContain("ale");
+    expect(within(result).getByText("Alex")).toBeTruthy();
+    fireEvent.click(
+      within(result).getByRole("button", { name: i18n.t("social.addFriend") }),
+    );
+    await waitFor(() => expect(added).toEqual([SOCIAL_PEER.uuid]));
+  });
+
+  it("has no write or friend buttons in a guest player profile", async () => {
     await loginGuest();
     mount();
-    const search = await screen.findByLabelText(i18n.t("social.search"));
-    fireEvent.change(search, { target: { value: "ale" } });
+    const field = await screen.findByLabelText(i18n.t("social.filterChats"));
+    fireEvent.change(field, { target: { value: "ale" } });
     await waitFor(() =>
       expect(screen.getAllByText(SOCIAL_PEER.name).length).toBeGreaterThan(0),
     );
@@ -318,12 +386,20 @@ describe("photo viewer", () => {
     deleted: false,
   };
 
-  function mountImage() {
+  function mountImage(attachment?: Partial<SocialAttachment>) {
+    const content = shot.content;
+    const message: SocialMessage = {
+      ...shot,
+      content:
+        content.type === "attachment" && content.attachment
+          ? { ...content, attachment: { ...content.attachment, ...attachment } }
+          : content,
+    };
     h.api = createMockCommands(
       {
         socialHistory: async () => ({
           status: "ok",
-          data: { messages: [shot], before: null },
+          data: { messages: [message], before: null },
         }),
         socialAttachmentPreview: async () => ({
           status: "ok",
@@ -360,6 +436,41 @@ describe("photo viewer", () => {
     expect(
       screen.queryByRole("button", { name: i18n.t("common.save") }),
     ).toBeNull();
+  });
+
+  /** Opens the viewer, saves and returns the path offered to the save dialog. */
+  async function savedPath() {
+    const paths: string[] = [];
+    setMockSavePicker(async (options) => {
+      paths.push(options?.defaultPath ?? "");
+      return null;
+    });
+    await connect();
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: i18n.t("social.openFullscreen") }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("common.save") }));
+    await waitFor(() => expect(paths).toHaveLength(1));
+    setMockSavePicker(null);
+    return paths[0]!;
+  }
+
+  it("offers the original name with its own extension, never the stored webp", async () => {
+    // The hub transcodes pictures to WebP but keeps the original name.
+    mountImage({ fileName: "shot.PNG", mime: "image/webp" });
+    expect(await savedPath()).toBe("shot.PNG");
+    cleanup();
+    mountImage({ fileName: "holiday.jpg", mime: "image/webp" });
+    expect(await savedPath()).toBe("holiday.jpg");
+  });
+
+  it("falls back to .png when the original extension is unknown", async () => {
+    mountImage({ fileName: "picture", mime: "image/webp" });
+    expect(await savedPath()).toBe("picture.png");
+    cleanup();
+    mountImage({ id: "a9", fileName: "", mime: "image/jpeg" });
+    expect(await savedPath()).toBe("a9.png");
   });
 });
 
