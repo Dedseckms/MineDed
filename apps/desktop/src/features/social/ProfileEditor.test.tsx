@@ -160,8 +160,46 @@ describe("profile editor", () => {
     );
   });
 
-  it("uploads a picked image through the task channel", async () => {
-    const set = vi.fn(
+  it("shows the server's reason when it rejects the avatar", async () => {
+    // The upload is accepted, then the task fails with the hub's own reason.
+    const refusal = {
+      code: "invalidInput" as const,
+      message: "hub rejected the avatar",
+      details: { serverMessage: "invalid or oversized image" },
+    };
+    mount(SELF, {
+      socialAvatarSet: async (_path, channel) => {
+        channel.onmessage?.({ type: "started", id: "task-1", kind: "chatTransfer", titleKey: "tasks.chatAvatar" });
+        channel.onmessage?.({ type: "finished", id: "task-1", error: refusal });
+        return ok("task-1");
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.profile.avatarPick") }),
+    );
+    const reason = await screen.findByTestId("server-message");
+    expect(reason.textContent).toBe(
+      i18n.t("social.profile.serverSays", { message: "invalid or oversized image" }),
+    );
+    // The generic error stays above it.
+    expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+  });
+
+  it("shows no server line without details.serverMessage", async () => {
+    mount(SELF, {
+      socialAvatarSet: async () => ({
+        status: "error",
+        error: { code: "network", message: "unreachable", details: null },
+      }),
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.profile.avatarPick") }),
+    );
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.queryByTestId("server-message")).toBeNull();
+  });
+
+  it("uploads a picked image through the task channel", async () => {    const set = vi.fn(
       async (
         _path: string,
         _channel: Parameters<Commands["socialAvatarSet"]>[1],

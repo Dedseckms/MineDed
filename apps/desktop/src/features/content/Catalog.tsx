@@ -20,6 +20,7 @@ import {
 } from "../../lib/content";
 import { selectFilters, useContentStore } from "../../stores/contentStore";
 import { ProjectIcon } from "./ProjectIcon";
+import { ProjectPageLink } from "./ProjectPageLink";
 
 function ResultCard({
   project,
@@ -59,6 +60,13 @@ function ResultCard({
         <Button size="sm" variant="ghost" onClick={onOpen}>
           {t("content.versions.title")}
         </Button>
+        <ProjectPageLink
+          source={project.source}
+          projectId={project.projectId}
+          kind={project.kind}
+          slug={project.slug}
+          className="justify-center"
+        />
       </div>
     </div>
   );

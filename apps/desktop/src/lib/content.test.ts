@@ -5,14 +5,17 @@ import { frontViewBlits, headBlits } from "../features/skins/skinRender";
 import {
   PAGE_SIZE,
   buildSearchQuery,
+  detailServerMessage,
   filterInstalled,
   formatBytes,
   hasShaderLoader,
   installedOfKind,
   nextOffset,
   pickLoaderVersion,
+  projectPageUrl,
   shaderLoaderFor,
   shaderWarning,
+  sourceTone,
   summarizePlan,
   visibleRange,
   withPackExt,
@@ -181,6 +184,46 @@ describe("formatting & helpers", () => {
     expect(visibleRange(600, 300, 60, 140, 2)).toEqual([8, 17]);
     expect(visibleRange(8000, 300, 60, 140, 2)[1]).toBe(140);
     expect(visibleRange(0, 300, 60, 0)).toEqual([0, 0]);
+  });
+});
+
+describe("project page links", () => {
+  it("builds the Modrinth page from the slug, or the id without one", () => {
+    expect(projectPageUrl("modrinth", "AANobbMI", "mod", "sodium")).toBe("https://modrinth.com/project/sodium");
+    expect(projectPageUrl("modrinth", "AANobbMI", "mod")).toBe("https://modrinth.com/project/AANobbMI");
+  });
+
+  it("builds the CurseForge page with the category of the content kind", () => {
+    expect(projectPageUrl("curseForge", "306612", "mod", "fabric-api")).toBe(
+      "https://www.curseforge.com/minecraft/mc-mods/fabric-api",
+    );
+    expect(projectPageUrl("curseForge", "1234", "modpack")).toBe(
+      "https://www.curseforge.com/minecraft/modpacks/1234",
+    );
+    expect(projectPageUrl("curseForge", "1", "resourcePack")).toContain("/minecraft/texture-packs/");
+    expect(projectPageUrl("curseForge", "1", "shader")).toContain("/minecraft/shaders/");
+  });
+
+  it("has no page for local files or an unknown project", () => {
+    expect(projectPageUrl("local", null, "mod")).toBeNull();
+    expect(projectPageUrl("modrinth", null, "mod", "  ")).toBeNull();
+  });
+});
+
+describe("install source", () => {
+  it("gives each source its own badge tone", () => {
+    expect(sourceTone("modrinth")).toBe("accent");
+    expect(sourceTone("curseForge")).toBe("info");
+    expect(sourceTone("local")).toBe("neutral");
+  });
+
+  it("reads the server's rejection text from details", () => {
+    expect(detailServerMessage({ serverMessage: " invalid or oversized image " })).toBe(
+      "invalid or oversized image",
+    );
+    expect(detailServerMessage({ serverMessage: "  " })).toBeNull();
+    expect(detailServerMessage({ path: "/x.png" })).toBeNull();
+    expect(detailServerMessage(null)).toBeNull();
   });
 });
 

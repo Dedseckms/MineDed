@@ -22,3 +22,20 @@ it("searches and passes the actual selected provider to install and details", as
   fireEvent.click(screen.getByRole("button", { name: "Install" }));
   await waitFor(() => expect(onInstall).toHaveBeenCalledWith(expect.objectContaining({ source: "curseForge", projectId: "306612" })));
 });
+
+it("links every result to its page on the matching site", async () => {
+  const instance = unwrap(await api.instanceList()).find((i) => i.id === "inst-fabric")!;
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <Catalog instance={instance} installed={[]} onOpen={() => {}} onInstall={() => {}} />
+  </QueryClientProvider>);
+  const modrinth = (await screen.findAllByTestId("project-page-link")).map((a) => (a as HTMLAnchorElement).href);
+  expect(modrinth.some((href) => href.startsWith("https://modrinth.com/project/"))).toBe(true);
+  for (const href of modrinth) expect(href).not.toContain("/minecraft/");
+
+  fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "curseForge" } });
+  await waitFor(() => {
+    const links = screen.getAllByTestId("project-page-link").map((a) => (a as HTMLAnchorElement).href);
+    expect(links.length).toBeGreaterThan(0);
+    for (const href of links) expect(href).toMatch(/^https:\/\/www\.curseforge\.com\/minecraft\/mc-mods\//);
+  });
+});

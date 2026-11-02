@@ -1,5 +1,4 @@
-import type { ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+﻿import { useTranslation } from "react-i18next";
 
 import type {
   SocialAttachment,
@@ -8,6 +7,7 @@ import type {
   SocialUser,
 } from "../../bindings";
 import { Button } from "../../components/ui/Button";
+import { Icon, type IconName } from "../../components/ui/Icon";
 import { useResolvedTheme } from "../../hooks/useAppearance";
 import { userColor } from "../../lib/social";
 import { accentColor, displayNameOf } from "../../lib/socialProfile";
@@ -102,7 +102,10 @@ export function MessageGroupView({
 function bubbleClass(own: boolean, last: boolean, padding: string): string {
   return `group/bubble relative mt-0.5 w-fit max-w-full min-w-0 rounded-2xl ${padding} text-sm leading-snug shadow-sm ${
     own ? "bg-accent text-accent-fg" : "bg-surface-2 text-text"
-  } ${last ? (own ? "rounded-br-sm" : "rounded-bl-sm") : ""}`;
+  } ${last ? (own ? "rounded-br-sm" : "rounded-bl-sm") : ""} ${
+    // Touch has no hover: a tap (or the OS long-press menu) reveals the actions pill.
+    "focus-within:z-20 focus-within:[&_[data-testid=message-actions]]:pointer-events-auto focus-within:[&_[data-testid=message-actions]]:flex"
+  }`;
 }
 
 function Tail({ own, background }: { own: boolean; background: string }) {
@@ -148,7 +151,7 @@ function MessageBubble({
         </div>
         <BubbleMeta message={message} />
       </div>
-      <MessageActions message={message} actions={actions} />
+      <MessageActions message={message} own={own} actions={actions} />
     </article>
   );
 }
@@ -179,7 +182,7 @@ function ImageBubble({
       {last ? <Tail own={own} background={own ? "bg-accent" : "bg-surface-2"} /> : null}
       <AttachmentGrid attachments={attachments} onSave={actions.onSave} />
       <BubbleMeta message={latest} className="justify-end px-1 pt-0.5" />
-      <MessageActions message={latest} actions={actions} />
+      <MessageActions message={latest} own={own} actions={actions} />
     </article>
   );
 }
@@ -205,54 +208,81 @@ function BubbleMeta({
   );
 }
 
-/** Hover/focus toolbar floating above the bubble, so it costs no height. */
+type ActionKind = "delete" | "report" | "moderateDelete";
+
+/**
+ * Hover/focus pill pinned to the bubble's outer edge, outside the text flow:
+ * absolutely positioned with no layout size, so it never shifts messages or
+ * changes the bubble height. Touch devices get it on long press instead.
+ */
 function MessageActions({
   message,
+  own,
   actions,
 }: {
   message: SocialMessage;
+  own: boolean;
   actions: ChatMessageActions;
 }) {
   const { t } = useTranslation();
   if (message.deleted) return null;
+  const ownMessage = message.author.uuid === actions.selfUuid;
+  const primary: ActionKind = ownMessage ? "delete" : "report";
+  const canModerate = actions.canModerate && message.channel === "global";
+  // At most two icon buttons: a moderator's "delete as moderator" is the second.
+  const pinned: ActionKind[] = canModerate ? [primary, "moderateDelete"] : [primary];
+  const run = (kind: ActionKind) => {
+    if (kind === "delete") actions.onDelete(message);
+    else if (kind === "report") actions.onReport(message);
+    else actions.onModerateDelete(message);
+  };
+  const label: Record<ActionKind, string> = {
+    delete: t("social.deleteMessage"),
+    report: t("social.reportMessage"),
+    moderateDelete: t("social.moderateDelete"),
+  };
+  const icon: Record<ActionKind, IconName> = {
+    delete: "trash",
+    report: "flag",
+    moderateDelete: "shield",
+  };
   return (
     <div
       role="group"
       aria-label={t("social.messageActions")}
-      className="absolute -top-3 right-0 z-10 hidden items-center gap-1 rounded-lg bg-surface px-1.5 py-0.5 text-[11px] text-text shadow-sm ring-1 ring-border group-focus-within/bubble:flex group-hover/bubble:flex"
+      data-testid="message-actions"
+      // Absolutely placed and transient: zero layout size, so no bubble moves.
+      className={`pointer-events-none absolute top-0 z-10 hidden items-center gap-0.5 rounded-full bg-surface/95 p-0.5 shadow-sm ring-1 ring-border group-focus-within/bubble:pointer-events-auto group-focus-within/bubble:flex group-hover/bubble:pointer-events-auto group-hover/bubble:flex ${
+        // Right-aligned bubbles grow leftwards, so their outer edge is on the left.
+        own ? "right-full mr-1.5" : "left-full ml-1.5"
+      }`}
     >
-      {message.author.uuid === actions.selfUuid ? (
-        <BubbleAction onClick={() => actions.onDelete(message)}>
-          {t("common.delete")}
-        </BubbleAction>
-      ) : (
-        <BubbleAction onClick={() => actions.onReport(message)}>
-          {t("social.report")}
-        </BubbleAction>
-      )}
-      {actions.canModerate && message.channel === "global" ? (
-        <BubbleAction onClick={() => actions.onModerateDelete(message)}>
-          {t("social.moderateDelete")}
-        </BubbleAction>
-      ) : null}
+      {pinned.map((kind) => (
+        <BubbleAction key={kind} icon={icon[kind]} label={label[kind]} onClick={() => run(kind)} />
+      ))}
     </div>
   );
 }
 
+/** Small round icon button: 24 px, labelled for screen readers and tooltips. */
 function BubbleAction({
+  icon,
+  label,
   onClick,
-  children,
 }: {
+  icon: IconName;
+  label: string;
   onClick: () => void;
-  children: ReactNode;
 }) {
   return (
     <button
       type="button"
-      className="cursor-pointer rounded px-1 underline-offset-2 hover:underline"
+      title={label}
+      aria-label={label}
       onClick={onClick}
+      className="grid size-6 cursor-pointer place-items-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-text focus-visible:bg-surface-2"
     >
-      {children}
+      <Icon name={icon} className="size-3.5" />
     </button>
   );
 }
