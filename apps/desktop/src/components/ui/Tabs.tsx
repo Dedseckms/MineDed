@@ -21,6 +21,7 @@ export function Tabs<T extends string>({ value, tabs, onChange, ariaLabel, idPre
             type="button"
             role="tab"
             aria-selected={active}
+            aria-controls={`${idPrefix}-panel-${tab.value}`}
             onClick={() => onChange(tab.value)}
             className={`-mb-px inline-flex h-10 shrink-0 cursor-pointer items-center gap-2 border-b-2 px-3 text-sm font-medium transition-colors ${
               active ? "border-accent text-text" : "border-transparent text-muted hover:text-text"

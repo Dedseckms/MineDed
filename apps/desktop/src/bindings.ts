@@ -204,6 +204,10 @@ export const commands = {
 } | null, AppError>(__TAURI_INVOKE("social_session")),
 	socialAttachmentOriginal: (id: string) => typedError<string, AppError>(__TAURI_INVOKE("social_attachment_original", { id })),
 	socialAvatarPreview: (uuid: string) => typedError<string, AppError>(__TAURI_INVOKE("social_avatar_preview", { uuid })),
+	socialRequestAccount: (note: string) => typedError<null, AppError>(__TAURI_INVOKE("social_request_account", { note })),
+	socialAdminAccounts: () => typedError<AdminAccount[], AppError>(__TAURI_INVOKE("social_admin_accounts")),
+	socialAccountRequests: () => typedError<AccountRequest[], AppError>(__TAURI_INVOKE("social_account_requests")),
+	socialIssueInvite: (requestId: string) => typedError<string, AppError>(__TAURI_INVOKE("social_issue_invite", { requestId })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
@@ -260,7 +264,31 @@ export type AccountKind = "offline" |
 /**  Any authlib-injector compatible server: own skin server, Ely.by... */
 "yggdrasil";
 
+/**  A guest asking the admin for a real account. */
+export type AccountRequest = {
+	/**  Stable id of the request (the requesting guest UUID). */
+	id: string,
+	name: string,
+	note: string,
+	createdAt: string,
+};
+
 export type AccountsChangedEvent = Account[];
+
+/**  One account the launcher knows, for the admin panel. */
+export type AdminAccount = {
+	/**  Undashed profile UUID (guest tokens get their own). */
+	uuid: string,
+	name: string,
+	/**  Chat guest (offline nickname), not a server account. */
+	guest: boolean,
+	displayName?: string | null,
+	/**  RFC 3339 timestamp of the first contact. */
+	createdAt: string,
+	/**  Drasl invite already issued for this account request. */
+	invite?: string | null,
+	inviteUrl?: string | null,
+};
 
 export type AdminPresence = {
 	online: number,

@@ -321,3 +321,34 @@ pub enum StorageTarget {
     /// S3-compatible object storage (credentials configured on the server).
     ObjectStorage,
 }
+
+/// One account the launcher knows, for the admin panel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAccount {
+    /// Undashed profile UUID (guest tokens get their own).
+    pub uuid: String,
+    pub name: String,
+    /// Chat guest (offline nickname), not a server account.
+    pub guest: bool,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// RFC 3339 timestamp of the first contact.
+    pub created_at: String,
+    /// Drasl invite already issued for this account request.
+    #[serde(default)]
+    pub invite: Option<String>,
+    #[serde(default)]
+    pub invite_url: Option<String>,
+}
+
+/// A guest asking the admin for a real account.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRequest {
+    /// Stable id of the request (the requesting guest UUID).
+    pub id: String,
+    pub name: String,
+    pub note: String,
+    pub created_at: String,
+}

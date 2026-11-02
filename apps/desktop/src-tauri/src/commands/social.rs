@@ -3,9 +3,10 @@
 use crate::state::AppState;
 use crate::tasks::spawn_task;
 use lc_types::social::{
-    AdminPresence, AdminServerState, AuditEntry, ModAction, PresenceSummary, ProfileUpdate,
-    SocialChannel, SocialContent, SocialFriend, SocialHistory, SocialMessage, SocialPrivacy,
-    SocialReport, SocialRole, SocialStatus, SocialUser, StorageTarget,
+    AccountRequest, AdminAccount, AdminPresence, AdminServerState, AuditEntry, ModAction,
+    PresenceSummary, ProfileUpdate, SocialChannel, SocialContent, SocialFriend, SocialHistory,
+    SocialMessage, SocialPrivacy, SocialReport, SocialRole, SocialStatus, SocialUser,
+    StorageTarget,
 };
 use lc_types::task::{TaskEvent, TaskKind};
 use lc_types::{AccountId, AppError, AppResult, ErrorCode, InstanceId, TaskId};
@@ -394,6 +395,33 @@ pub async fn social_attachment_original(
     id: String,
 ) -> AppResult<String> {
     state.social.attachment_original(&id).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_request_account(state: State<'_, AppState>, note: String) -> AppResult<()> {
+    state.social.request_account(&note).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_admin_accounts(state: State<'_, AppState>) -> AppResult<Vec<AdminAccount>> {
+    state.social.admin_accounts().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_account_requests(state: State<'_, AppState>) -> AppResult<Vec<AccountRequest>> {
+    state.social.account_requests().await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_issue_invite(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> AppResult<String> {
+    state.social.issue_invite(&request_id).await
 }
 
 #[tauri::command]

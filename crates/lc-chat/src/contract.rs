@@ -5,10 +5,10 @@
 use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::social::{
-    AdminPresence, AdminServerState, AuditEntry, ModAction, PresenceSummary, ProfileUpdate,
-    SocialAudience, SocialChannel, SocialChannelId, SocialContent, SocialEvent, SocialFriend,
-    SocialHistory, SocialMessage, SocialPrivacy, SocialReport, SocialRole, SocialStatus,
-    SocialUser, StorageTarget,
+    AccountRequest, AdminAccount, AdminPresence, AdminServerState, AuditEntry, ModAction,
+    PresenceSummary, ProfileUpdate, SocialAudience, SocialChannel, SocialChannelId, SocialContent,
+    SocialEvent, SocialFriend, SocialHistory, SocialMessage, SocialPrivacy, SocialReport,
+    SocialRole, SocialStatus, SocialUser, StorageTarget,
 };
 use lc_types::{AccountId, AppResult};
 
@@ -98,6 +98,35 @@ pub trait ChatService: Send + Sync {
     /// Admin only: `Moderator` or `User`.
     async fn set_role(&self, uuid: &str, role: SocialRole) -> AppResult<()>;
     /// Admin only.
+    /// Guest only: asks the admin for a server account. The guest keeps their
+    /// token, so after the admin issues a Drasl invite they can register and
+    /// log in as a full account.
+    async fn request_account(&self, note: &str) -> AppResult<()> {
+        let _ = note;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::request_account",
+        ))
+    }
+    /// Admin only: every launcher account the hub knows (players, guests, requests).
+    async fn admin_accounts(&self) -> AppResult<Vec<AdminAccount>> {
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::admin_accounts",
+        ))
+    }
+    /// Admin only: guests waiting for an account.
+    async fn account_requests(&self) -> AppResult<Vec<AccountRequest>> {
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::account_requests",
+        ))
+    }
+    /// Admin only: creates a Drasl invite for a waiting request, returns its
+    /// registration link.
+    async fn issue_invite(&self, request_id: &str) -> AppResult<String> {
+        let _ = request_id;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::issue_invite",
+        ))
+    }
     async fn server_state(&self) -> AppResult<AdminServerState>;
     /// Admin only: moves attachments to a new disk or object storage; progress
     /// via `SocialEvent::Admin`. Data is deleted from the old place only after

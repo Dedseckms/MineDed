@@ -544,6 +544,35 @@ async fn dispatch(
         chat.finish_directory_sync(synced.is_ok() && filled);
         synced?;
     }
+    // A new Drasl invite needs the admin API, so it runs outside the store lock
+    // and is then recorded by the store.
+    if let ("POST", Some(request)) = (method.as_str(), path.strip_prefix("admin/invite/")) {
+        let request = request.to_owned();
+        let actor = me.clone();
+        let known = chat
+            .run({
+                let request = request.clone();
+                move |db, _| db.has_account_request(&request)
+            })
+            .await?;
+        if !known {
+            return Err(ApiError::not_found("no such account request"));
+        }
+        let Some((code, url)) = chat.directory.create_invite().await else {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "network",
+                "Drasl invite failed",
+            ));
+        };
+        {
+            let code = code.clone();
+            let url = url.clone();
+            chat.run(move |db, _| db.store_invite(&actor, &request, &code, &url))
+                .await?;
+        }
+        return Ok(Json(json!({ "code": code, "url": url })).into_response());
+    }
     if method == "POST" && path == "admin/migrate" {
         chat.start_migration(me, body).await?;
         return Ok(StatusCode::ACCEPTED.into_response());
