@@ -16,6 +16,7 @@ serde_json.workspace = true
 url.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util"] }
+futures-util = "0.3.31"
 sha1 = "0.10.7"
 sha2 = "0.10.9"
 hex = "0.4.3"
