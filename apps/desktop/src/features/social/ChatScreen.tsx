@@ -504,10 +504,10 @@ export function ChatScreen() {
             getKey={(f) => f.user.uuid}
             ariaLabel={t("social.tabs.friends")}
             renderRow={(friend) => (
-              <div className="flex h-full items-center gap-3 rounded-lg border border-border bg-panel px-3">
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-panel p-3">
+                <ChatAvatar user={friend.user} size="sm" />
                 <button
-                  type="button"
-                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                  className="mr-auto text-left"
                   onClick={() => openProfile(friend.user)}
                 >
                   <ChatAvatar user={friend.user} size="sm" />
