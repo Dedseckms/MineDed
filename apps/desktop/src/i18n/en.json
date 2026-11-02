@@ -504,8 +504,9 @@
     "source": {
       "modrinth": "Modrinth",
       "curseForge": "CurseForge",
-      "local": "Local file"
+      "local": "Local"
     },
+    "openOnSite": "Open on {{site}}",
     "kind": {
       "mod": "Mods",
       "resourcePack": "Resource packs",
@@ -971,6 +972,8 @@
     "deleted": "Message deleted",
     "report": "Report",
     "moderateDelete": "Remove as moderator",
+    "deleteMessage": "Delete message",
+    "reportMessage": "Report message",
     "roomInvite": "Invitation to room {{code}}",
     "join": "Join",
     "pack": "{{loader}} {{mc}} · {{mods}} mods",
@@ -987,6 +990,7 @@
       "avatarRemove": "Remove avatar",
       "avatarHint": "Image up to 256 KiB; the server compresses it to 256×256. The previous avatar is replaced.",
       "images": "Images",
+      "serverSays": "Server response: {{message}}",
       "displayName": "Display name",
       "displayNameHint": "1 to {{max}} characters. Empty shows your nickname.",
       "nameTooLong": "No more than 24 characters",
@@ -1114,6 +1118,12 @@
       "direct": "Direct"
     },
     "players": "Players",
+    "filterChats": "Filter chats",
+    "noChatMatches": "No matching chats",
+    "searchPlayers": "Find a player",
+    "noPlayers": "No players found",
+    "noIncoming": "No incoming requests",
+    "alreadyFriends": "Already friends",
     "noChats": "No conversations yet",
     "noMessages": "No messages yet",
     "back": "Back to chats",
@@ -1174,7 +1184,11 @@
     "packHostOnline": "The host must keep the launcher and room online during transfer. The pack imports as a new instance.",
     "downloadPack": "Download modpack",
     "packImported": "Modpack imported",
-    "unreadBadge": "Unread messages: {{n}}"
+    "unreadBadge": "Unread messages: {{n}}",
+    "reportSent": "Report sent",
+    "friendRequestSent": "Friend request sent",
+    "friendRequestAccepted": "Friend request accepted",
+    "friendRequestDeclined": "Friend request declined"
   },
   "chat": {
     "upload": "Uploading file",

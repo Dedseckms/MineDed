@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Commands } from "../../api/client";
@@ -68,7 +74,10 @@ function image(id = "shot.png", mime = "image/png") {
   });
 }
 
-function mount(messages: SocialMessage[]) {
+function mount(
+  messages: SocialMessage[],
+  over: Partial<typeof actions> = {},
+) {
   const group = buildTimeline(messages, SOCIAL_PEER.uuid).find(
     (row) => row.kind === "group",
   );
@@ -78,7 +87,7 @@ function mount(messages: SocialMessage[]) {
   });
   return render(
     <QueryClientProvider client={qc}>
-      <MessageGroupView group={group.group} actions={actions} />
+      <MessageGroupView group={group.group} actions={{ ...actions, ...over }} />
     </QueryClientProvider>,
   );
 }
@@ -116,6 +125,114 @@ describe("compact bubble", () => {
     ) as HTMLElement;
     expect(toolbar).toBeTruthy();
     expect(toolbar.className).toContain("absolute");
+  });
+});
+
+describe("message actions", () => {
+  const toolbarOf = (container: HTMLElement) =>
+    container.querySelector('[data-testid="message-actions"]') as HTMLElement;
+
+  it("keeps the actions out of the flow, so the bubble height does not change", () => {
+    const { container, unmount } = mount([message({ type: "text", text: "ok" })]);
+    const bubble = container.querySelector('[data-own="true"]') as HTMLElement;
+    // The text row holds only the text and the time; the pill is not inside it.
+    const toolbar = container.querySelector('[data-testid="message-actions"]') as HTMLElement;
+    expect(toolbar.parentElement).toBe(bubble);
+    expect(bubble.lastElementChild).toBe(toolbar);
+    expect(toolbar.previousElementSibling?.className).not.toContain("absolute");
+    expect(bubble.className).toContain("relative");
+    expect(toolbar.className).toContain("absolute");
+    expect(toolbar.className).toContain("top-0");
+    // Hidden by default and placed by offsets only: it has no box in the flow
+    // (no height, no padding on the bubble), so the bubble keeps its height.
+    expect(toolbar.className).toContain("hidden");
+    // Padding lives on the absolutely positioned bridge, not in the flow.
+    expect(toolbar.className).not.toMatch(/(?:^|\s)(?:h-\d|pt-\d|pb-\d)/);
+    // Compact py-1 only; the pill sits outside and adds nothing.
+    expect(bubble.className).toMatch(/(?:^|\s)py-1(?:\s|$)/);
+    unmount();
+  });
+
+  it("is a compact icon pill pinned outside the bubble edge", () => {
+    const { container } = mount([
+      { ...message({ type: "text", text: "from peer" }), author: { ...SOCIAL_PEER, uuid: "9".repeat(32) } },
+    ]);
+    const bubble = container.querySelector('[data-own="false"]') as HTMLElement;
+    const toolbar = toolbarOf(container);
+    expect(toolbar.parentElement).toBe(bubble);
+    const pill = toolbar.firstElementChild as HTMLElement;
+    expect(pill.className).toContain("bg-surface/95");
+    expect(pill.className).toContain("rounded-full");
+    // Padding around the pill bridges the gap so the pointer can reach it.
+    expect(toolbar.className).toContain("px-1.5");
+    expect(toolbar.className).toContain("py-1");
+    expect(toolbar.className).toContain("pointer-events-none");
+    // Peer bubbles grow rightwards: the pill sits past their left edge.
+    expect(toolbar.className).toContain("left-full");
+    expect(toolbar.textContent).toBe("");
+    expect(
+      toolbar.querySelectorAll("button").length,
+    ).toBeLessThanOrEqual(2);
+  });
+
+  it("shows on hover and focus-within; touch reveals it on the bubble", () => {
+    const { container } = mount([message({ type: "text", text: "ok" })]);
+    const bubble = container.querySelector('[data-own="true"]') as HTMLElement;
+    const toolbar = toolbarOf(container);
+    expect(toolbar.className).toMatch(/group-hover\/bubble:flex/);
+    expect(toolbar.className).toMatch(/group-focus-within\/bubble:flex/);
+    // Own bubbles grow leftwards: the pill sits past their right edge.
+    expect(toolbar.className).toContain("right-full");
+    // Touch: :hover never sticks, so focus-within (tap / OS long-press menu) shows it.
+    expect(bubble.className).toContain('focus-within:[&_[data-testid=message-actions]]:flex');
+  });
+
+  it("deletes own messages and reports other people's", () => {
+    mount([message({ type: "text", text: "mine" })]);
+    // Own message: only "delete" is offered.
+    expect(
+      screen.getByRole("button", { name: i18n.t("social.deleteMessage") }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.reportMessage") }),
+    ).toBeNull();
+    cleanup();
+
+    // Peer message: the same pill offers "report" instead of "delete".
+    const peer = message({ type: "text", text: "theirs" });
+    peer.author = { ...SOCIAL_PEER, uuid: "9".repeat(32) };
+    const onReport = vi.fn();
+    mount([peer], { onReport, selfUuid: "8".repeat(32) });
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.reportMessage") }),
+    );
+    expect(onReport).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.deleteMessage") }),
+    ).toBeNull();
+  });
+
+  it("deletes own messages through the action", () => {
+    const onDelete = vi.fn();
+    mount([message({ type: "text", text: "mine" })], { onDelete });
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.deleteMessage") }),
+    );
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: i18n.t("social.reportMessage") }),
+    ).toBeNull();
+  });
+
+  it("adds the moderator action as a second icon for moderators", () => {
+    const onModerateDelete = vi.fn();
+    const peer = message({ type: "text", text: "spam" });
+    peer.author = { ...SOCIAL_PEER, uuid: "9".repeat(32) };
+    mount([peer], { canModerate: true, onModerateDelete });
+    const toolbar = toolbarOf(document.body);
+    expect(toolbar.querySelectorAll("button")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("social.moderateDelete") }));
+    expect(onModerateDelete).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -17,6 +17,7 @@ import { selectModpackFilters, useModpackStore } from "../../stores/modpackStore
 import { useNavStore } from "../../stores/navStore";
 import { useTaskView } from "../../stores/taskStore";
 import { ProjectIcon } from "../content/ProjectIcon";
+import { ProjectPageLink } from "../content/ProjectPageLink";
 import { ModpackDialog } from "./ModpackDialog";
 
 const RELEASES = ["release"] as const;
@@ -59,6 +60,13 @@ function ModpackCard({
         <Button size="sm" variant="ghost" onClick={onOpen}>
           {t("content.versions.title")}
         </Button>
+        <ProjectPageLink
+          source={project.source}
+          projectId={project.projectId}
+          kind="modpack"
+          slug={project.slug}
+          className="justify-center"
+        />
       </div>
     </div>
   );

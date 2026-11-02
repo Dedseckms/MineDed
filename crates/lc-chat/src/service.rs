@@ -39,7 +39,7 @@ use url::Url;
 
 const MAX_FILE: usize = 10 * 1024 * 1024;
 const MAX_JSON: usize = 4 * 1024 * 1024;
-const MAX_AVATAR: u64 = 256 * 1024;
+const MAX_AVATAR: u64 = 2 * 1024 * 1024;
 /// Hub avatars are re-encoded to a 256×256 WebP; anything bigger is refused.
 const MAX_AVATAR_PREVIEW: usize = 1024 * 1024;
 /// Avatar previews kept in process memory; bytes are never written to disk.
@@ -782,8 +782,10 @@ async fn checked(response: Response, cancel: &CancelToken) -> AppResult<Response
         _ => ErrorCode::Network,
     };
     let mut error = AppError::new(code, "Chat server rejected request");
+    let mut server_message = None;
     if let Ok(bytes) = bounded(response, 16384, cancel).await {
         if let Ok(server) = serde_json::from_slice::<AppError>(&bytes) {
+            server_message = Some(server.message.clone());
             if let Some(reason) = server.details.as_ref().and_then(|d| d.get("reason")) {
                 if [
                     "filtered",
@@ -799,6 +801,9 @@ async fn checked(response: Response, cancel: &CancelToken) -> AppResult<Response
                 }
             }
         }
+    }
+    if let Some(message) = server_message {
+        error = error.detail("serverMessage", message);
     }
     if status.as_u16() == 401 {
         cancel.cancel();
@@ -1343,15 +1348,21 @@ impl ChatService for ChatClient {
         if bytes.is_empty() {
             return Err(invalid("avatarEmpty"));
         }
-        let name = std::path::Path::new(path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| invalid("fileName"))?
-            .to_owned();
-        let part = reqwest::multipart::Part::bytes(bytes)
-            .file_name(name)
-            .mime_str("application/octet-stream")
-            .map_err(|_| invalid("avatar"))?;
+        // Raw image body: the hub's multipart parser rejects file names with
+        // non-ASCII characters, and the hub re-encodes the image anyway, so the
+        // name and the exact mime type do not matter.
+        let mime = match std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            Some("gif") => "image/gif",
+            Some("bmp") => "image/bmp",
+            _ => "image/png",
+        };
         let token = self.token(&s).await?;
         sink.check_cancelled()?;
         sink.progress(0, Some(size), "chat.upload");
@@ -1360,7 +1371,8 @@ impl ChatService for ChatClient {
             .client(Route::Auto)
             .put(endpoint(&s.base, &["avatar"])?)
             .bearer_auth(token.expose())
-            .multipart(reqwest::multipart::Form::new().part("file", part));
+            .header(reqwest::header::CONTENT_TYPE, mime)
+            .body(bytes);
         let response = tokio::select! { _ = sink.cancel_token().cancelled() => return Err(cancelled()), _ = s.cancel.cancelled() => return Err(cancelled()), r = request.send() => r.map_err(|_| network())? };
         let user: SocialUser = tokio::select! { _ = sink.cancel_token().cancelled() => return Err(cancelled()), r = async { decode(checked(response, &s.cancel).await?, &s.cancel).await } => r? };
         sink.check_cancelled()?;

@@ -11,6 +11,7 @@ import { Badge, EmptyState, ErrorMessage, Skeleton } from "../../components/ui/f
 import { formatCount } from "../../lib/content";
 import { useFormatBytes } from "../common/ExternalLink";
 import { ProjectIcon } from "./ProjectIcon";
+import { ProjectPageLink } from "./ProjectPageLink";
 
 /** Project card with its versions; any version can be installed. */
 export function ProjectDialog({
@@ -55,6 +56,12 @@ export function ProjectDialog({
                 {project.categories.map((c) => (
                   <Badge key={c}>{c}</Badge>
                 ))}
+                <ProjectPageLink
+                  source={project.source}
+                  projectId={project.projectId}
+                  kind={project.kind}
+                  slug={project.slug}
+                />
               </p>
             </div>
           </div>

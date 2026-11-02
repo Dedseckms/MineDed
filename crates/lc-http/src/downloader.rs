@@ -864,6 +864,11 @@ impl Downloader for HttpDownloader {
     /// Callers without a hash must keep the original first (CONTRACTS §2);
     /// `fetch_many`/`get_bytes` apply that policy themselves.
     fn upgrade_client(&self, route: Route) -> reqwest::Client {
+        // Built once: a client per socket would leak connection pools.
+        static CACHE: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+        if let Some(client) = CACHE.get() {
+            return client.clone();
+        }
         let proxy = match route {
             Route::Direct => None,
             _ => {
@@ -880,8 +885,9 @@ impl Downloader for HttpDownloader {
                 target.and_then(|u| reqwest::Proxy::all(u.as_str()).ok())
             }
         };
-        build_client_with(&self.cfg, proxy, false, true)
-            .unwrap_or_else(|_| self.unconfigured.clone())
+        let client = build_client_with(&self.cfg, proxy, false, true)
+            .unwrap_or_else(|_| self.unconfigured.clone());
+        CACHE.get_or_init(|| client.clone()).clone()
     }
 
     fn mirrors_for(&self, original: &Url, _kind: ResourceKind) -> Vec<Url> {

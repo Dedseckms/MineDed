@@ -33,8 +33,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{broadcast, OwnedSemaphorePermit, Semaphore};
 
-/// Largest accepted avatar upload; the hub stores a 256×256 WebP after re-encoding.
-pub(super) const MAX_AVATAR: usize = 256 * 1024;
+/// Largest accepted avatar upload (usually a camera photo); the hub stores a
+/// 256×256 WebP after re-encoding, capped separately by [`MAX_AVATAR_STORED`].
+pub(super) const MAX_AVATAR: usize = 2 * 1024 * 1024;
+
+/// Largest stored avatar after re-encoding.
+pub(super) const MAX_AVATAR_STORED: usize = 256 * 1024;
 
 /// Durable state. Open once during startup; an unavailable database fails startup.
 pub struct Chat {
@@ -245,7 +249,7 @@ impl Chat {
                 .flatten();
             let hash = hash.ok_or_else(|| ApiError::not_found("no avatar"))?;
             let path = db.files.join(&hash);
-            if std::fs::metadata(&path)?.len() > MAX_AVATAR as u64 {
+            if std::fs::metadata(&path)?.len() > MAX_AVATAR_STORED as u64 {
                 return Err(internal());
             }
             Ok(std::fs::read(path)?)
@@ -283,7 +287,7 @@ fn avatar_too_large() -> ApiError {
     ApiError::new(
         StatusCode::PAYLOAD_TOO_LARGE,
         "invalidInput",
-        "avatar exceeds 256 KiB",
+        "avatar is too large",
     )
 }
 fn unavailable() -> ApiError {

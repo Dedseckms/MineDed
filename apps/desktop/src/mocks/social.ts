@@ -74,12 +74,34 @@ export function createSocialMocks(
   let friends: SocialFriend[] = [
     { user: { ...SOCIAL_PEER }, state: "incoming" },
   ];
-  let messages: SocialMessage[] = [];
+  let seq = 0;
+  // A couple of messages from another player, so the global chat has something
+  // to hover (report, moderator delete) before anyone types.
+  const before = Date.now() - 4 * 60 * 1000;
+  let messages: SocialMessage[] = [
+    {
+      id: String(++seq),
+      channel: "global",
+      author: { ...SOCIAL_PEER },
+      content: { type: "text", text: "Кто-нибудь хочет в комнату на ванилле?" },
+      createdAt: new Date(before).toISOString(),
+      editedAt: null,
+      deleted: false,
+    },
+    {
+      id: String(++seq),
+      channel: "global",
+      author: { ...SOCIAL_PEER },
+      content: { type: "text", text: "Сборка уже стоит, заходите :)" },
+      createdAt: new Date(before + 60_000).toISOString(),
+      editedAt: null,
+      deleted: false,
+    },
+  ];
   let channels: SocialChannel[] = [
-    { id: "global", kind: "global", peer: null, lastMessage: null, unread: 0 },
+    { id: "global", kind: "global", peer: null, lastMessage: messages[1] ?? null, unread: 2 },
   ];
   let reports: SocialReport[] = [];
-  let seq = 0;
   const server: AdminServerState = {
     diskUsedBytes: 42 * 1024 ** 3,
     diskTotalBytes: 100 * 1024 ** 3,

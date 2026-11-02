@@ -101,6 +101,51 @@ export function filterInstalled(list: InstalledContent[], text: string): Install
   return list.filter((c) => displayName(c).toLowerCase().includes(q) || c.fileName.toLowerCase().includes(q));
 }
 
+// ---- project pages in the browser --------------------------------------------
+
+/** Page segment of each provider's project links (`allcategories` = CurseForge generic). */
+const PAGE_SEGMENT = {
+  mod: "mc-mods",
+  modpack: "modpacks",
+  resourcePack: "texture-packs",
+  shader: "shaders",
+  dataPack: "data-packs",
+} as const satisfies Record<ContentKind, string>;
+
+/**
+ * Project page on the provider's site: `https://modrinth.com/project/<slug|id>`
+ * or `https://www.curseforge.com/minecraft/<category>/<slug|id>`. `null` for
+ * local files (no project).
+ */
+export function projectPageUrl(
+  source: ContentSourceKind,
+  projectId: string | null,
+  kind: ContentKind,
+  slug?: string | null,
+): string | null {
+  const ref = (slug?.trim() || projectId?.trim()) ?? "";
+  if (source === "local" || ref === "") return null;
+  const target = encodeURIComponent(ref);
+  if (source === "modrinth") return `https://modrinth.com/project/${target}`;
+  return `https://www.curseforge.com/minecraft/${PAGE_SEGMENT[kind]}/${target}`;
+}
+
+/** Badge tone of an install source (`local` reads as neutral). */
+export function sourceTone(source: ContentSourceKind): "accent" | "info" | "neutral" {
+  if (source === "modrinth") return "accent";
+  if (source === "curseForge") return "info";
+  return "neutral";
+}
+
+/**
+ * Server rejection text carried in `AppError.details.serverMessage`
+ * (e.g. "invalid or oversized image"): trimmed, or `null` when absent.
+ */
+export function detailServerMessage(details: Record<string, string> | null | undefined): string | null {
+  const text = details?.serverMessage?.trim();
+  return text ? text : null;
+}
+
 // ---- shader loader -----------------------------------------------------------
 
 const SHADER_LOADER = /\b(iris|oculus)\b/i;

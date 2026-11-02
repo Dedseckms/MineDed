@@ -15,6 +15,7 @@ import type { TaskView } from "../../lib/tasks";
 import { useFormatBytes } from "../common/ExternalLink";
 import { ManualDownloadLinks } from "../common/ManualDownloadLinks";
 import { ProjectIcon } from "../content/ProjectIcon";
+import { ProjectPageLink } from "../content/ProjectPageLink";
 import { TaskProgress } from "../tasks/TaskProgress";
 
 /** Modpack card with its versions; installs the latest or a picked version as a new instance. */
@@ -87,6 +88,7 @@ export function ModpackDialog({
                 {project.categories.map((c) => (
                   <Badge key={c}>{c}</Badge>
                 ))}
+                <ProjectPageLink source={project.source} projectId={project.projectId} kind="modpack" slug={project.slug} />
               </p>
             </div>
           </div>
