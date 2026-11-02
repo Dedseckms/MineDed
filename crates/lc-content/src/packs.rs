@@ -3,8 +3,10 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use lc_http::{DownloadReq, ResourceKind};
 use lc_runtime::ProgressSink;
 use lc_types::content::{ContentKind, ContentSourceKind, ContentVersion, ManualDownload};
@@ -702,6 +704,7 @@ pub(crate) fn move_tree(src: &Path, dst: &Path) -> AppResult<()> {
 type Planned = (MrpackFile, String, String);
 
 /// One CurseForge pack file resolved to a concrete, verifiable download.
+#[derive(Clone)]
 struct PackJob {
     /// Version actually installed: a Modrinth stand-in when the CurseForge file
     /// may not be redistributed.
@@ -715,7 +718,134 @@ struct PackJob {
     dest: PathBuf,
 }
 
+/// Extra attempts of one file after a blocked/network error (pauses 1 s, 3 s).
+const CDN_RETRIES: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+/// Attempts with a single URL: the first plus [`CDN_RETRIES`].
+const CDN_ATTEMPTS: u32 = 3;
+/// Pack files downloaded at once (each has its own retries and CDN fallback).
+const MAX_PACK_DOWNLOADS: usize = 8;
+
+/// A transient failure of the download itself (not cancellation or bad input):
+/// worth repeating the same file or trying another host of CurseForge's CDN.
+fn cdn_transient(e: &AppError) -> bool {
+    matches!(e.code, ErrorCode::Blocked | ErrorCode::Network)
+}
+
+/// Other CurseForge CDN hosts serving the same path (`edge.forgecdn.net` →
+/// `mediafilez.forgecdn.net`, `media.forgecdn.net`), as download candidates.
+pub(crate) fn cdn_alternates(url: &str) -> Vec<String> {
+    let Ok(u) = url::Url::parse(url) else {
+        return Vec::new();
+    };
+    if u.scheme() != "https" || u.query().is_some() {
+        return Vec::new();
+    }
+    let host = u.host_str().unwrap_or_default();
+    let rest = host
+        .split_once('.')
+        .filter(|(base, rest)| matches!(*base, "edge" | "mediafilez" | "media") && !rest.is_empty())
+        .map(|(_, rest)| rest.to_owned());
+    let mut out: Vec<String> = Vec::new();
+    for alt in ["mediafilez", "media"] {
+        let Some(h) = rest.as_ref().map(|rest| format!("{alt}.{rest}")) else {
+            break;
+        };
+        if h == host || !crate::curseforge::allowed_cdn(&format!("https://{h}/files/x")) {
+            continue;
+        }
+        let mut v = u.clone();
+        if v.set_host(Some(&h)).is_ok() {
+            out.push(v.to_string());
+        }
+    }
+    out
+}
+
+/// Download candidates for one CurseForge file: the preferred URL first, the
+/// other CDN hosts after it.
+pub(crate) fn cdn_candidates(url: &str) -> Vec<String> {
+    let mut out = vec![url.to_owned()];
+    out.extend(cdn_alternates(url));
+    out
+}
+
+/// Downloads one pack file: the first candidate, then the other CDN hosts.
+/// A blocked/network failure is retried on the same file ([`CDN_RETRIES`]);
+/// any other failure moves on to the next host. On failure, the manual entry
+/// carries the real URL that was last tried.
+#[allow(clippy::too_many_lines)]
+async fn fetch_pack_file(
+    dl: &dyn lc_http::Downloader,
+    job: PackJob,
+    sink: &dyn ProgressSink,
+) -> Result<(), ManualFile> {
+    let candidates = cdn_candidates(&job.url);
+    let manual = |file: &str| ManualFile {
+        file_name: job.version.file_name.clone(),
+        title: job.title.clone(),
+        url: file.to_owned(),
+    };
+    let req = |urls: Vec<String>| DownloadReq {
+        urls: urls
+            .iter()
+            .filter_map(|u| parse_url(u).ok())
+            .collect::<Vec<_>>(),
+        sha1: Some(job.sha1.clone()),
+        size: (job.version.size > 0).then_some(job.version.size),
+        dest: job.dest.clone(),
+        kind: ResourceKind::Content,
+    };
+
+    // Other CDN hosts at once: the downloader falls through on a reset.
+    if candidates.len() > 1 {
+        if let Err(e) = dl.fetch_many(vec![req(candidates.clone())], sink).await {
+            if !cdn_transient(&e) {
+                return Err(manual(&job.url));
+            }
+        } else {
+            return Ok(());
+        }
+    }
+
+    // The file's own URL alone, 1 s and 3 s apart: a CDN reset is transient.
+    for (attempt, pause) in CDN_RETRIES.into_iter().enumerate() {
+        tokio::select! {
+            biased;
+            () = sink.cancel_token().cancelled() => return Err(manual(&job.url)),
+            () = tokio::time::sleep(pause) => {}
+        }
+        sink.check_cancelled().map_err(|_| manual(&job.url))?;
+        match dl.fetch_many(vec![req(vec![job.url.clone()])], sink).await {
+            Ok(()) => return Ok(()),
+            Err(e) if cdn_transient(&e) => {
+                sink.log(&format!(
+                    "{}: {} failed ({}), attempt {} of {}",
+                    job.version.file_name,
+                    job.url,
+                    e.message,
+                    attempt + 2,
+                    CDN_RETRIES.len() + 1
+                ));
+            }
+            Err(_) => return Err(manual(&job.url)),
+        }
+    }
+    Err(manual(&job.url))
+}
+
 impl Inner {
+    /// Downloads one pack file with this service's downloader.
+    async fn fetch_job(
+        &self,
+        job: PackJob,
+        sink: &dyn ProgressSink,
+    ) -> (PackJob, Result<(), ManualFile>) {
+        (
+            job.clone(),
+            fetch_pack_file(self.dl.as_ref(), job, sink).await,
+        )
+    }
+
     async fn create_instance(
         &self,
         name: &str,
@@ -821,7 +951,6 @@ impl Inner {
         tokio::fs::write(&path, &bytes).await.ok()?;
         Some(name)
     }
-
     async fn import_curseforge(
         &self,
         path: &Path,
@@ -935,24 +1064,27 @@ impl Inner {
                 .await,
             )?;
             sink.check_cancelled()?;
-            let requests = jobs
-                .iter()
-                .map(|job| {
-                    Ok(DownloadReq {
-                        urls: vec![parse_url(&job.url)?],
-                        sha1: Some(job.sha1.clone()),
-                        size: (job.version.size > 0).then_some(job.version.size),
-                        dest: job.dest.clone(),
-                        kind: ResourceKind::Content,
-                    })
-                })
-                .collect::<AppResult<Vec<_>>>()?;
-            if !requests.is_empty() {
-                self.dl.fetch_many(requests, sink).await?;
+            // One file per request: a CDN reset must not fail the whole pack
+            // and is retried on the same file, then on another CDN host.
+            let fetched = futures_util::stream::iter(jobs.clone())
+                .map(|job: PackJob| self.fetch_job(job, sink))
+                .buffer_unordered(MAX_PACK_DOWNLOADS)
+                .collect::<Vec<_>>()
+                .await;
+            for (job, failed) in fetched {
+                if let Err(file) = failed {
+                    if !job.dest.is_file() {
+                        manual.push(file);
+                    }
+                }
             }
             let mut index = ContentIndex::default();
             for job in jobs {
                 sink.check_cancelled()?;
+                // A file that could not be downloaded is only listed for the user.
+                if !job.dest.is_file() {
+                    continue;
+                }
                 let (actual, sha512) = file_hashes(&job.dest).await?;
                 if actual != job.sha1 {
                     return Err(
@@ -1050,7 +1182,6 @@ impl Inner {
             })
             .collect()
     }
-
     async fn import_mrpack(
         &self,
         path: &Path,
@@ -1235,18 +1366,47 @@ impl Inner {
             .join("content")
             .join("packs")
             .join(format!("{sha1}.mrpack"));
-        self.dl
-            .fetch_many(
-                vec![DownloadReq {
-                    urls: vec![parse_url(&pf.url)?],
-                    sha1: Some(sha1),
-                    size: (pf.size > 0).then_some(pf.size),
-                    dest: dest.clone(),
-                    kind: ResourceKind::Content,
-                }],
-                sink,
-            )
-            .await?;
+        // A CDN reset is transient: retry the archive with the same pauses.
+        let mut last = None;
+        for attempt in 0..CDN_ATTEMPTS {
+            if attempt > 0 {
+                tokio::select! {
+                    biased;
+                    () = sink.cancel_token().cancelled() => {
+                        return Err(AppError::new(ErrorCode::Cancelled, "cancelled"));
+                    }
+                    () = tokio::time::sleep(CDN_RETRIES[attempt as usize - 1]) => {}
+                }
+                sink.check_cancelled()?;
+            }
+            let req = DownloadReq {
+                urls: cdn_candidates(&pf.url)
+                    .iter()
+                    .filter_map(|u| parse_url(u).ok())
+                    .collect(),
+                sha1: Some(sha1.clone()),
+                size: (pf.size > 0).then_some(pf.size),
+                dest: dest.clone(),
+                kind: ResourceKind::Content,
+            };
+            match self.dl.fetch_many(vec![req], sink).await {
+                Ok(()) => {
+                    last = None;
+                    break;
+                }
+                Err(e) if cdn_transient(&e) => {
+                    sink.log(&format!(
+                        "{}: {} failed ({}), another attempt",
+                        pf.file_name, pf.url, e.message
+                    ));
+                    last = Some(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        if let Some(e) = last {
+            return Err(e);
+        }
         if let Some(want512) = &pf.sha512 {
             let (_, got) = file_hashes(&dest).await?;
             if !want512.eq_ignore_ascii_case(&got) {
@@ -1502,6 +1662,137 @@ impl PackIo for ContentServices {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Refuses every URL until `ok_at` calls of that URL; then serves a body.
+    struct Flaky {
+        ok_at: std::sync::Mutex<std::collections::HashMap<String, i64>>,
+        calls: std::sync::Mutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl lc_http::Downloader for Flaky {
+        async fn fetch_many(&self, reqs: Vec<DownloadReq>, _s: &dyn ProgressSink) -> AppResult<()> {
+            let Some(r) = reqs.into_iter().next() else {
+                return Ok(());
+            };
+            let urls: Vec<String> = r.urls.iter().map(ToString::to_string).collect();
+            self.calls.lock().unwrap().push(urls.clone());
+            // `ok_at[url] = n` fails the first n calls for that URL; a negative
+            // budget fails every call.
+            let ready = {
+                let mut ok_at = self.ok_at.lock().unwrap();
+                match ok_at.get_mut(&urls[0]) {
+                    Some(n) if *n < 0 => false,
+                    None => true,
+                    Some(n) if *n > 0 => {
+                        *n -= 1;
+                        false
+                    }
+                    Some(_) => true,
+                }
+            };
+            if !ready {
+                return Err(AppError::new(ErrorCode::Blocked, "reset"));
+            }
+            if let Some(p) = r.dest.parent() {
+                std::fs::create_dir_all(p).unwrap();
+            }
+            std::fs::write(&r.dest, b"jar").unwrap();
+            Ok(())
+        }
+        async fn get_bytes(&self, _u: &url::Url, _k: ResourceKind) -> AppResult<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn client(&self, _r: lc_http::Route) -> reqwest::Client {
+            lc_http::StubDownloader.client(lc_http::Route::Direct)
+        }
+        fn mirrors_for(&self, u: &url::Url, _k: ResourceKind) -> Vec<url::Url> {
+            vec![u.clone()]
+        }
+        fn set_manual_proxy(&self, _p: Option<lc_types::settings::ProxyCfg>) {}
+    }
+
+    fn flaky() -> Flaky {
+        Flaky {
+            ok_at: Default::default(),
+            calls: Default::default(),
+        }
+    }
+
+    fn job(dir: &Path) -> PackJob {
+        PackJob {
+            version: ContentVersion {
+                source: ContentSourceKind::CurseForge,
+                project_id: "1".into(),
+                version_id: "1".into(),
+                name: String::new(),
+                version_number: "1".into(),
+                mc_versions: Vec::new(),
+                loaders: Vec::new(),
+                published: String::new(),
+                file_name: "a.jar".into(),
+                size: 3,
+                sha1: None,
+                dependencies: Vec::new(),
+                manual_download: false,
+            },
+            kind: ContentKind::Mod,
+            title: "Mod".into(),
+            url: "https://edge.forgecdn.net/files/1/1/a.jar".into(),
+            sha1: "0".repeat(40),
+            sha512: None,
+            dest: dir.join("mods/a.jar"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pack_file_resets_are_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = lc_runtime::NullSink::default();
+        let url = "https://edge.forgecdn.net/files/1/1/a.jar";
+        // The other CDN hosts refuse; the file's own URL then fails twice
+        // before it arrives (pauses of 1 s, then 3 s).
+        let dl = flaky();
+        // The own URL is reset twice, then served (pauses of 1 s and 3 s).
+        dl.ok_at.lock().unwrap().insert(url.to_owned(), 2);
+        fetch_pack_file(&dl, job(dir.path()), &sink).await.unwrap();
+        assert_eq!(
+            dl.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.len() == 1 && c[0] == url)
+                .count(),
+            (CDN_ATTEMPTS - 1) as usize
+        );
+        assert!(dir.path().join("mods/a.jar").is_file());
+    }
+
+    #[tokio::test]
+    async fn pack_file_gives_up_on_the_real_url_after_all_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let dl = flaky();
+        dl.ok_at
+            .lock()
+            .unwrap()
+            .insert("https://edge.forgecdn.net/files/1/1/a.jar".into(), -1);
+        let missing = fetch_pack_file(&dl, job(dir.path()), &lc_runtime::NullSink::default())
+            .await
+            .unwrap_err();
+        assert_eq!(missing.file_name, "a.jar");
+        // The real URL, which is what the user can open in a browser.
+        assert_eq!(missing.url, "https://edge.forgecdn.net/files/1/1/a.jar");
+        // First the candidate list (all hosts), then the own URL once per retry.
+        assert_eq!(
+            dl.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.len() == 1)
+                .count(),
+            (CDN_ATTEMPTS - 1) as usize
+        );
+    }
 
     #[test]
     fn parses_mrpack_fixture() {

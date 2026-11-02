@@ -3576,6 +3576,7 @@ name = "lc-content"
 version = "1.5.1"
 dependencies = [
  "async-trait",
+ "futures-util",
  "hex",
  "lc-accounts",
  "lc-core",

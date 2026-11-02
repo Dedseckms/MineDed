@@ -155,7 +155,7 @@ pub(crate) fn allowed_cdn(value: &str) -> bool {
             && u.port_or_known_default() == Some(443)
             && matches!(
                 u.host_str(),
-                Some("edge.forgecdn.net" | "mediafilez.forgecdn.net")
+                Some("edge.forgecdn.net" | "mediafilez.forgecdn.net" | "media.forgecdn.net")
             )
     })
 }
@@ -627,6 +627,7 @@ mod tests {
         );
         assert!(!v.manual_download);
         assert!(allowed_cdn("https://mediafilez.forgecdn.net/files/x.jar"));
+        assert!(allowed_cdn("https://media.forgecdn.net/files/x.jar"));
         for url in [
             "http://edge.forgecdn.net/files/x.jar",
             "https://edge.forgecdn.net.evil.example/x.jar",
