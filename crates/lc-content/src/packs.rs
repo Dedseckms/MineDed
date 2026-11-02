@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use lc_http::{DownloadReq, ResourceKind};
 use lc_runtime::ProgressSink;
-use lc_types::content::{ContentKind, ContentSourceKind, ContentVersion};
+use lc_types::content::{ContentKind, ContentSourceKind, ContentVersion, ManualDownload};
 use lc_types::instance::{
     Instance, InstancePatch, InstanceSpec, JavaCfg, LoaderRef, MemoryCfg, PackFormat,
 };
@@ -1022,6 +1022,27 @@ impl Inner {
         tokio::fs::write(&path, bytes)
             .await
             .map_err(|e| io_err(&path, e))
+    }
+
+    /// Pack files the user still has to download by hand. A missing or damaged
+    /// list means nothing is outstanding.
+    pub(crate) async fn manual_downloads(&self, id: InstanceId) -> Vec<ManualDownload> {
+        let path = self.instance_dir(id).join(MANUAL_FILE);
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            return Vec::new();
+        };
+        let Ok(files) = serde_json::from_slice::<Vec<ManualFile>>(&bytes) else {
+            return Vec::new();
+        };
+        files
+            .into_iter()
+            .map(|file| ManualDownload {
+                project_id: fallback::project_id(&file.url).unwrap_or_default(),
+                file_name: file.file_name,
+                url: file.url,
+                title: Some(file.title),
+            })
+            .collect()
     }
 
     async fn import_mrpack(

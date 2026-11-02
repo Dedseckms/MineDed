@@ -182,6 +182,21 @@ pub(crate) fn file_url(kind: ContentKind, slug: &str, file_id: &str, page: &str)
     }
 }
 
+/// The project a file link belongs to: the slug of a pretty link, otherwise the
+/// last id of the path (`…/minecraft/mc-mods/<slug>/files/<file>` → `<slug>`,
+/// `…/projects/<id>/files/<file>` → `<file>`).
+pub(crate) fn project_id(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let segs: Vec<&str> = u.path_segments()?.collect();
+    match segs.as_slice() {
+        ["minecraft", _, slug, "files", _] if !slug.is_empty() => Some((*slug).to_owned()),
+        _ => segs
+            .last()
+            .filter(|s| !s.is_empty())
+            .map(|s| (*s).to_owned()),
+    }
+}
+
 impl Inner {
     /// The same mod version from Modrinth for a file that may not be
     /// redistributed. Best effort: `None` (with a log line) when nothing matches
@@ -364,6 +379,21 @@ mod tests {
             &version("0.5.8", "sodium.jar", &[]),
             &t
         ));
+    }
+
+    #[test]
+    fn project_ids_from_links() {
+        assert_eq!(
+            project_id("https://www.curseforge.com/minecraft/mc-mods/geckolib/files/21"),
+            Some("geckolib".into())
+        );
+        // Numeric page: the file id is the best available project reference.
+        assert_eq!(
+            project_id("https://www.curseforge.com/projects/2/files/21"),
+            Some("21".into())
+        );
+        assert_eq!(project_id("not a url"), None);
+        assert_eq!(project_id(""), None);
     }
 
     #[test]
