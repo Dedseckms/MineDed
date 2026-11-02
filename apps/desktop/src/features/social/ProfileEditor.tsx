@@ -10,6 +10,7 @@ import { Button } from "../../components/ui/Button";
 import { ErrorMessage } from "../../components/ui/feedback";
 import { Field, TextInput } from "../../components/ui/form";
 import { Modal } from "../../components/ui/Modal";
+import { errorView } from "../../lib/errors";
 import { useSocialStore } from "../../stores/socialStore";
 import { useTaskStore } from "../../stores/taskStore";
 import { localSkinSrc } from "../skins/skinSrc";
@@ -24,11 +25,25 @@ import {
   validateDisplayName,
 } from "../../lib/socialProfile";
 
-export interface ProfileEditorProps {
-  self: SocialUser;
+export interface ProfileEditorProps {  self: SocialUser;
   onClose: () => void;
   /** Called with the saved profile; the store is updated too. */
   onSaved?: (user: SocialUser) => void;
+}
+
+/**
+ * The server's own rejection reason (`details.serverMessage`, e.g. "invalid or
+ * oversized image"), shown under the generic error; nothing without one.
+ */
+function ServerMessage({ error }: { error: unknown }) {
+  const { t } = useTranslation();
+  const text = error == null ? null : errorView(error).serverMessage;
+  if (!text) return null;
+  return (
+    <p data-testid="server-message" className="text-xs text-danger">
+      {t("social.profile.serverSays", { message: text })}
+    </p>
+  );
 }
 
 /** Own-profile editor: avatar, display name, bio and accent in one save. */
@@ -160,6 +175,7 @@ export function ProfileEditor({ self, onClose, onSaved }: ProfileEditorProps) {
             </div>
           </div>
           <p className="text-xs text-muted">{t("social.profile.avatarHint")}</p>
+          <ServerMessage error={error} />
           {task ? <TaskProgress task={task} compact /> : null}
         </section>
 

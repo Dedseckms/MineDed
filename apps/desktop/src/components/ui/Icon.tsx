@@ -9,6 +9,7 @@ const PATHS = {
   tasks: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
   plus: "M12 5v14M5 12h14",
   copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  flag: "M5 21V4M5 4h11l-2 3.5L16 11H5",
   trash: "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6",
   folder: "M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z",
   check: "M5 12.5l4.5 4.5L19 7.5",

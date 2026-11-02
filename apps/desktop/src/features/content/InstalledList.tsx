@@ -12,7 +12,8 @@ import { ConfirmDialog } from "../../components/ui/Modal";
 import { VirtualList } from "../../components/ui/VirtualList";
 import { TextInput } from "../../components/ui/form";
 import { Badge, EmptyState, ErrorMessage } from "../../components/ui/feedback";
-import { LOCAL_EXTS, displayName, filterInstalled, isLocalKind } from "../../lib/content";
+import { LOCAL_EXTS, displayName, filterInstalled, isLocalKind, sourceTone } from "../../lib/content";
+import { ProjectPageLink } from "./ProjectPageLink";
 
 const ROW_HEIGHT = 60;
 const LIST_HEIGHT = 480;
@@ -48,7 +49,8 @@ function Row({
         </p>
       </div>
       {item.updateAvailable ? <Badge tone="info">{t("content.updateAvailable")}</Badge> : null}
-      <Badge>{t(`content.source.${item.source}`)}</Badge>
+      <Badge tone={sourceTone(item.source)}>{t(`content.source.${item.source}`)}</Badge>
+      <ProjectPageLink source={item.source} projectId={item.projectId} kind={item.kind} iconOnly />
       <Button size="sm" variant="ghost" className="text-danger" icon={<Icon name="trash" />} aria-label={t("content.removeNamed", { name })} onClick={onRemove} />
     </div>
   );

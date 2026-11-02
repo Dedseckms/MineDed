@@ -1,5 +1,6 @@
 import type { AppError, ErrorCode, TaskKind } from "../bindings";
 import { ApiError } from "../api/client";
+import { detailServerMessage } from "./content";
 
 // Exhaustive lists (a missing variant fails typecheck via `satisfies`).
 const ERROR_CODE_MAP = {
@@ -89,6 +90,8 @@ export interface ErrorView {
   details: Array<[string, string]>;
   /** Backend suggests a proxy / VPN (`details.hint = useProxy`). */
   suggestProxy: boolean;
+  /** Raw rejection text from the server (`details.serverMessage`), verbatim (English). */
+  serverMessage: string | null;
   /** Plain text for the "Copy" button (code, developer message, details). */
   copyText: string;
 }
@@ -132,5 +135,5 @@ export function errorView(e: unknown): ErrorView {
     ...(err.message ? [`message: ${err.message}`] : []),
     ...details.map(([k, v]) => `${k}: ${v}`),
   ].join("\n");
-  return { code: err.code, messageKey, params, details, suggestProxy: raw.hint === "useProxy", copyText };
+  return { code: err.code, messageKey, params, details, suggestProxy: raw.hint === "useProxy", serverMessage: detailServerMessage(raw), copyText };
 }
