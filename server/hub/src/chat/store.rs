@@ -179,9 +179,14 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         // the read-only flag once the real account signs in.
         self.db.execute("INSERT INTO users(uuid,name,admin,skin,privacy,created_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(uuid) DO UPDATE SET name=excluded.name,admin=excluded.admin,skin=COALESCE(excluded.skin,users.skin),created_at=CASE WHEN users.created_at='' THEN excluded.created_at ELSE users.created_at END",
             params![id, who.name, admin, skin, serde_json::to_string(&privacy_default())?, crate::rfc3339::format(std::time::SystemTime::now())])?;
-        self.db
-            .execute("UPDATE users SET guest=0 WHERE uuid=?1", [&id])?;
         Ok(id)
+    }
+    /// A verified account (Yggdrasil/Drasl login, never a guest token) must
+    /// not keep the read-only guest flag: it may be an old row with the same id.
+    pub(super) fn mark_account(&self, id: &str) -> Result<(), ApiError> {
+        self.db
+            .execute("UPDATE users SET guest=0 WHERE uuid=?1", [id])?;
+        Ok(())
     }
     pub fn privacy(&self, id: &str) -> Result<SocialPrivacy, ApiError> {
         let raw: String = self

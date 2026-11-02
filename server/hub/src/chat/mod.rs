@@ -399,13 +399,18 @@ async fn authenticate(State(s): State<AppState>, mut req: Request, next: Next) -
         } else {
             chat.directory.profile(&who.user_id).await
         };
+        let verified = !guest;
         let id = chat
             .run(move |db, _| {
-                db.identify(
+                let id = db.identify(
                     &who,
                     info.as_ref().is_some_and(|v| v.admin),
                     info.as_ref().and_then(|v| v.skin.as_deref()),
-                )
+                )?;
+                if verified {
+                    db.mark_account(&id)?;
+                }
+                Ok(id)
             })
             .await?;
         req.extensions_mut().insert(Caller(id));
@@ -699,6 +704,8 @@ async fn socket_loop(
     token: String,
     guest: bool,
 ) {
+    // Only verified accounts are promoted out of the guest read-only role.
+    let verified = !guest;
     let mut events = chat.events.subscribe();
     let mut auth = tokio::time::interval(Duration::from_secs(60));
     let mut last_seen = tokio::time::Instant::now();
@@ -715,7 +722,7 @@ async fn socket_loop(
                 if last_seen.elapsed()>Duration::from_secs(120){break;}
                 let who=match resolve_token(&s,&chat,&token).await{Ok(Some(who)) if store::uuid(&who.who.user_id).ok().as_deref()==Some(&me)=>who.who,_=>break};
                 let info=if guest{None}else{chat.directory.profile(&who.user_id).await};
-                if chat.run_wait(move|db,_|db.identify(&who,info.as_ref().is_some_and(|v|v.admin),info.as_ref().and_then(|v|v.skin.as_deref()))).await.is_err(){break;}
+                if chat.run_wait(move|db,_|{let id=db.identify(&who,info.as_ref().is_some_and(|v|v.admin),info.as_ref().and_then(|v|v.skin.as_deref()))?;if verified{db.mark_account(&id)?;}Ok(id)}).await.is_err(){break;}
                 if send_frame(&mut socket,Message::Ping(Vec::new().into())).await.is_err(){break;}
             }
             incoming=socket.recv()=>match incoming{
