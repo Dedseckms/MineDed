@@ -1,11 +1,11 @@
 //! Public launcher counter and the admin presence list.
-//! A launcher counts while its heartbeat is younger than [`PRESENCE_TTL`]; a
-//! chat WebSocket counts too, so the number is "launchers on air", not "humans".
+//! A launcher counts while its heartbeat is younger than [`PRESENCE_TTL`]; one
+//! launcher reports one client id, so the counter is "launchers on air", not "humans".
 use super::{internal, store::Store, Chat};
 use crate::error::ApiError;
 use crate::rfc3339;
 use lc_types::social::{AdminPresence, PresenceClient, PresenceSummary};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 /// Two missed ticks of the 60 s launcher heartbeat.
 pub(super) const PRESENCE_TTL: Duration = Duration::from_secs(120);
@@ -15,6 +15,8 @@ const MAX_CLIENTS: usize = 50_000;
 const MAX_LISTED: usize = 500;
 
 /// Self-reported launcher kind from `POST /presence/beat`.
+/// It carries no identity, so it only validates the wire value: the admin list
+/// names authenticated chat sessions instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Offline,
@@ -31,31 +33,21 @@ impl Kind {
             _ => Err(super::invalid("invalid client kind")),
         }
     }
-    /// Kind reported in the admin list; an offline launcher is a guest client.
-    fn label(self) -> &'static str {
-        match self {
-            Kind::Offline => "guest",
-            Kind::Yggdrasil => "yggdrasil",
-            Kind::Anonymous => "anonymous",
-        }
-    }
 }
 
 pub(super) struct Beat {
-    kind: Kind,
-    since: SystemTime,
     seen: Instant,
 }
 
 impl Chat {
     /// Records a heartbeat; a repeated `client_id` only extends itself.
     pub fn beat(&self, client_id: &str, kind: &str) -> Result<(), ApiError> {
-        self.beat_at(client_id, Kind::parse(kind)?, Instant::now())
+        Kind::parse(kind)?;
+        self.beat_at(client_id, Instant::now())
     }
-    pub(super) fn beat_at(&self, client_id: &str, kind: Kind, at: Instant) -> Result<(), ApiError> {
+    pub(super) fn beat_at(&self, client_id: &str, at: Instant) -> Result<(), ApiError> {
         let mut beats = self.beats.lock().map_err(|_| internal())?;
         if let Some(beat) = beats.get_mut(client_id) {
-            beat.kind = kind;
             beat.seen = at;
             return Ok(());
         }
@@ -65,22 +57,17 @@ impl Chat {
                 return Err(ApiError::rate_limited(PRESENCE_TTL.as_secs()));
             }
         }
-        beats.insert(
-            client_id.to_owned(),
-            Beat {
-                kind,
-                since: SystemTime::now(),
-                seen: at,
-            },
-        );
+        beats.insert(client_id.to_owned(), Beat { seen: at });
         Ok(())
     }
-    /// Unique beating launchers plus launchers connected to the chat socket.
+    /// Unique beating launchers. Chat sockets are not added on top: every
+    /// launcher that keeps a socket open also beats under the same process, so
+    /// a second count would report it twice.
     pub fn online(&self) -> PresenceSummary {
         self.online_at(Instant::now())
     }
     pub(super) fn online_at(&self, at: Instant) -> PresenceSummary {
-        let beating = self
+        let online = self
             .beats
             .lock()
             .map(|beats| {
@@ -90,18 +77,8 @@ impl Chat {
                     .count()
             })
             .unwrap_or_default();
-        let sockets = self
-            .presence
-            .lock()
-            .map(|presence| {
-                presence
-                    .values()
-                    .filter(|session| session.sockets > 0)
-                    .count()
-            })
-            .unwrap_or_default();
         PresenceSummary {
-            online: u32::try_from(beating.saturating_add(sockets)).unwrap_or(u32::MAX),
+            online: u32::try_from(online).unwrap_or(u32::MAX),
         }
     }
     /// Drops expired heartbeats; called from the request and reaper sweeps.
@@ -113,23 +90,11 @@ impl Chat {
     }
 }
 
-/// Admin view: beating launchers stay anonymous, socket clients show their name.
+/// Admin view: authenticated chat sessions with their names only. A heartbeat
+/// carries no identity, so anonymous launchers raise `online` without becoming
+/// a client entry; an empty list with a non-zero counter is expected.
 pub(super) fn admin_presence(chat: &Chat, db: &Store) -> Result<AdminPresence, ApiError> {
-    let now = Instant::now();
-    let mut clients = Vec::new();
-    let beats = chat.beats.lock().map_err(|_| internal())?;
-    for beat in beats.values() {
-        if now.saturating_duration_since(beat.seen) >= PRESENCE_TTL {
-            continue;
-        }
-        clients.push(PresenceClient {
-            label: "anonymous".into(),
-            kind: beat.kind.label().into(),
-            since: rfc3339::format(beat.since),
-        });
-    }
-    drop(beats);
-    let sessions: Vec<(String, SystemTime)> = chat
+    let sessions: Vec<(String, std::time::SystemTime)> = chat
         .presence
         .lock()
         .map_err(|_| internal())?
@@ -137,17 +102,20 @@ pub(super) fn admin_presence(chat: &Chat, db: &Store) -> Result<AdminPresence, A
         .filter(|(_, session)| session.sockets > 0)
         .map(|(id, session)| (id.clone(), session.since))
         .collect();
+    let mut clients = Vec::new();
     for (id, since) in sessions {
-        // A stale socket without a profile cannot be named; keep it anonymous.
-        let (label, guest) = db
-            .label(&id)?
-            .unwrap_or_else(|| ("anonymous".to_owned(), false));
+        // A socket without a profile row cannot be named; nothing to show.
+        let Some((label, guest)) = db.label(&id)? else {
+            continue;
+        };
         clients.push(PresenceClient {
             label,
             kind: if guest { "guest" } else { "yggdrasil" }.into(),
             since: rfc3339::format(since),
         });
     }
+    // Stable order for the admin panel: oldest session first, then by name.
+    clients.sort_by(|a, b| a.since.cmp(&b.since).then_with(|| a.label.cmp(&b.label)));
     clients.truncate(MAX_LISTED);
     Ok(AdminPresence {
         online: chat.online().online,
