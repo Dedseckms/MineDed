@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   ACCOUNT_NOTE_MAX,
+  createAccountFailure,
   hasRequestedAccount,
   markAccountRequested,
   normalizeNote,
+  validateAccountLogin,
+  validateAccountPassword,
 } from "./accountRequest";
 
 afterEach(() => localStorage.clear());
@@ -30,6 +33,21 @@ describe("account requests", () => {
     } finally {
       Storage.prototype.getItem = original;
     }
+  });
+
+  it("checks the login and the password of a request", () => {
+    expect(validateAccountLogin("ab")).toBe("validation.nick.length");
+    expect(validateAccountLogin("bad nick")).toBe("validation.nick.chars");
+    expect(validateAccountLogin("Steve_01")).toBeNull();
+    expect(validateAccountPassword("")).toBe("validation.required");
+    expect(validateAccountPassword("12345")).toBe("validation.password.range");
+    expect(validateAccountPassword("123456")).toBeNull();
+  });
+
+  it("recognises refusals of the account creation", () => {
+    expect(createAccountFailure({ reason: "usernameTaken" })).toBe("usernameTaken");
+    expect(createAccountFailure({ reason: "other" })).toBeNull();
+    expect(createAccountFailure(null)).toBeNull();
   });
 
   it("trims the note and caps it at the limit", () => {

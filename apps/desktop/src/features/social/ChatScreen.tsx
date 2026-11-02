@@ -45,6 +45,7 @@ import { useTaskStore } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 import { AdminPanel } from "./admin/AdminPanel";
 import { AccountRequestDialog } from "./AccountRequestDialog";
+import { profileAccountCreated } from "../../lib/socialAdmin";
 import { ChatAvatar } from "./ChatAvatar";
 import {
   type ChatMessageActions,
@@ -102,6 +103,13 @@ export function ChatScreen() {
     setAccountDialog(false);
   }, [self?.uuid]);
   const [taskId, setTaskId] = useState<string | null>(null);
+  // Guests can be told their server account exists; poll until the flag flips.
+  const accountCreated = useQuery({
+    queryKey: ["social", "profile", self?.uuid ?? "", "created"],
+    queryFn: async () => profileAccountCreated(unwrap(await api.socialProfile(self!.uuid))),
+    enabled: !!self && (self.guest === true || self.role === "guest"),
+    refetchInterval: 30000,
+  }).data === true;
   const task = useTaskStore((s) => (taskId ? s.tasks[taskId] : undefined));
   const room = useRoomState();
   useEffect(() => {
@@ -475,22 +483,40 @@ export function ChatScreen() {
               <div
                 className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-border bg-panel px-3 py-3"
               >
-                <p role="status" className="text-center text-sm text-muted">
-                  {t("social.guestReadOnly")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={accountRequested}
-                  icon={<Icon name={accountRequested ? "check" : "user"} />}
-                  onClick={() => setAccountDialog(true)}
-                >
-                  {t(
-                    accountRequested
-                      ? "social.accountRequest.sent"
-                      : "social.accountRequest.ask",
-                  )}
-                </Button>
+                {accountCreated ? (
+                  <>
+                    <p role="status" className="text-center text-sm text-accent">
+                      {t("social.accountRequest.createdBanner")}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      icon={<Icon name="user" />}
+                      onClick={() => useNavStore.getState().go("accounts")}
+                    >
+                      {t("social.accountRequest.createdAction")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p role="status" className="text-center text-sm text-muted">
+                      {t("social.guestReadOnly")}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={accountRequested}
+                      icon={<Icon name={accountRequested ? "check" : "user"} />}
+                      onClick={() => setAccountDialog(true)}
+                    >
+                      {t(
+                        accountRequested
+                          ? "social.accountRequest.sent"
+                          : "social.accountRequest.ask",
+                      )}
+                    </Button>
+                  </>
+                )}
               </div>
             ) : (
               <ChatComposer

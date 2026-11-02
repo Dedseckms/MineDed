@@ -345,6 +345,7 @@
     "invite": "Invalid invite code",
     "password": {
       "short": "At least 8 characters",
+      "range": "6 to 64 characters",
       "mismatch": "Passwords don't match"
     },
     "vpn": {
@@ -398,6 +399,8 @@
       "helperFailed": "Couldn't start the VPN helper with administrator rights.",
       "vpnNotRunning": "The VPN is off. Turn on the VPN to check the ping.",
       "hostTooOld": "The host has an old launcher version — ask them to update.",
+      "usernameTaken": "This login is already taken — ask the player to choose another.",
+      "weakPassword": "The requested password is too weak — ask the player to pick another.",
       "packRoomBusy": "Leave the current room before downloading a shared pack."
     },
     "serverRejected": "The server rejected the file",
@@ -1058,11 +1061,15 @@
         "select": "Select a request on the left",
         "note": "Message",
         "noNote": "No message",
-        "invite": "Invite",
+        "invite": "Create account",
         "inviteLink": "Drasl invite link",
         "copy": "Copy link",
         "inviteHint": "Send the link to the player. The guest token is kept, so they can sign up right in the launcher.",
-        "issuedToast": "Invite issued"
+        "issuedToast": "Invite issued",
+        "create": "Create account",
+        "created": "Account created",
+        "createdToast": "Account created",
+        "createHint": "The account gets the login and password from the request. The guest token is kept — the player only has to sign in in the launcher."
       },
       "userUuid": "UUID",
       "roleSection": "Role",
@@ -1142,8 +1149,17 @@
       "note": "Message to the admin (optional)",
       "noteHint": "Up to {{max}} characters.",
       "notePlaceholder": "Why do you need an account?",
-      "tokenHint": "Your guest token stays saved. Once the admin issues an invite, sign up with the same nickname and the launcher will link your guest profile to the account.",
-      "submit": "Send request"
+      "tokenHint": "Your guest token stays saved. Once the admin creates the account, sign in with this login and password and the launcher will link your guest profile to the account.",
+      "submit": "Send request",
+      "login": "Login",
+      "loginHint": "3–16 Latin letters, digits or _. Becomes your in-game name.",
+      "loginPlaceholder": "For example, Steve",
+      "password": "Password",
+      "passwordHint": "The password goes to the admin with the request — don't reuse a password from other services.",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password",
+      "createdBanner": "Account created — sign in with the login and password from your request.",
+      "createdAction": "Go to accounts"
     },
     "guestLogin": "Enter as a guest",
     "guestSubmit": "Enter",
