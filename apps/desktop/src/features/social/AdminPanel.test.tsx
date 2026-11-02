@@ -292,44 +292,53 @@ describe("requests tab", () => {
     },
   ];
 
-  it("lists the requests and issues a Drasl invite", async () => {
-    const issued: string[] = [];
-    const link = "https://drasl.test/register?invite=MINE-DED1-NV1T";
+  it("creates the account of an approved request", async () => {
+    const created: string[] = [];
     mount(ADMIN, {
       socialAccountRequests: async () => ok(REQUESTS),
       socialIssueInvite: async (id) => {
-        issued.push(id);
-        return ok(link);
+        created.push(id);
+        return ok("");
       },
     });
     fireEvent.click(tab("requests"));
-    expect(
-      (await screen.findAllByText("NotchFan")).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getAllByText("Хочу свой ник").length).toBe(2);
-    expect(screen.getAllByText("Kefir").length).toBeGreaterThan(0);
+    expect(await screen.findAllByText("NotchFan")).not.toHaveLength(0);
     fireEvent.click(screen.getAllByText("Kefir")[0]!);
     expect(screen.getByText(i18n.t("social.admin.requests.noNote"))).toBeTruthy();
     fireEvent.click(screen.getAllByText("NotchFan")[0]!);
 
     fireEvent.click(
-      screen.getByRole("button", { name: i18n.t("social.admin.requests.invite") }),
+      screen.getByRole("button", { name: i18n.t("social.admin.requests.create") }),
     );
-    expect(await screen.findByText(link)).toBeTruthy();
-    expect(issued).toEqual([REQUESTS[0]!.id]);
+    await waitFor(() => expect(created).toEqual([REQUESTS[0]!.id]));
     expect(
       useToastStore.getState().toasts.map((x) => x.messageKey),
-    ).toContain("social.admin.requests.issuedToast");
-
-    const writes: string[] = [];
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText: async (text: string) => void writes.push(text) },
+    ).toContain("social.admin.requests.createdToast");
+    const done = await screen.findByRole("button", {
+      name: i18n.t("social.admin.requests.created"),
     });
+    expect((done as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows a taken login next to the request", async () => {
+    mount(ADMIN, {
+      socialAccountRequests: async () => ok(REQUESTS),
+      socialIssueInvite: async () => ({
+        status: "error" as const,
+        error: {
+          code: "conflict" as const,
+          message: "username is taken",
+          details: { reason: "usernameTaken" },
+        },
+      }),
+    });
+    fireEvent.click(tab("requests"));
     fireEvent.click(
-      screen.getByRole("button", { name: i18n.t("social.admin.requests.copy") }),
+      await screen.findByRole("button", { name: i18n.t("social.admin.requests.create") }),
     );
-    await waitFor(() => expect(writes).toEqual([link]));
+    const message = i18n.t("errors.reason.usernameTaken");
+    const alerts = await screen.findAllByText(message);
+    expect(alerts.length).toBeGreaterThanOrEqual(2);
   });
 
   it("shows an empty state without requests", async () => {
