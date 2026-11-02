@@ -33,3 +33,22 @@ export function forgetGuest(): void {
     // Nothing to clean up.
   }
 }
+
+/** Login the guest asked for, so the account screen can prefill it. */
+const LOGIN_KEY = "mineded.guestRequestedLogin";
+
+export function rememberRequestedLogin(login: string): void {
+  try {
+    localStorage.setItem(LOGIN_KEY, login);
+  } catch {
+    // Storage is optional: the account screen just asks for the login.
+  }
+}
+
+export function requestedLogin(): string | null {
+  try {
+    return localStorage.getItem(LOGIN_KEY);
+  } catch {
+    return null;
+  }
+}

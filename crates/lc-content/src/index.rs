@@ -23,6 +23,9 @@ pub(crate) struct IndexEntry {
     pub title: Option<String>,
     #[serde(default)]
     pub version_number: Option<String>,
+    /// Provider page slug (Modrinth search / CurseForge project).
+    #[serde(default)]
+    pub slug: Option<String>,
     #[serde(default)]
     pub sha1: Option<String>,
     #[serde(default)]
@@ -106,6 +109,7 @@ mod tests {
                 version_id: "v".into(),
                 title: None,
                 version_number: None,
+                slug: None,
                 sha1: None,
                 sha512: None,
                 size: None,

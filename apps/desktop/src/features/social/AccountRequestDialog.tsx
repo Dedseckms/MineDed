@@ -15,6 +15,7 @@ import {
   validateAccountLogin,
   validateAccountPassword,
 } from "../../lib/accountRequest";
+import { rememberRequestedLogin } from "../../lib/guestSession";
 import { socialRequestAccountWithCredentials } from "../../lib/socialAdmin";
 import { useToastStore } from "../../stores/toastStore";
 
@@ -44,8 +45,11 @@ export function AccountRequestDialog({
   const loginError = validateAccountLogin(login);
   const passwordError = validateAccountPassword(password);
   const send = useMutation({
-    mutationFn: async () =>
-      unwrap(await socialRequestAccountWithCredentials(login, password, normalizeNote(note))),
+    mutationFn: async () => {
+      unwrap(await socialRequestAccountWithCredentials(login, password, normalizeNote(note)));
+      // The guest signs in with this login once the admin creates the account.
+      rememberRequestedLogin(login);
+    },
     onSuccess: () => {
       useToastStore.getState().push({
         tone: "info",

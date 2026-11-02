@@ -324,6 +324,7 @@ impl Inner {
                     version_id: v.version_id.clone(),
                     title: Some(info.title.clone()),
                     version_number: Some(v.version_number.clone()),
+                    slug: Some(info.slug.clone()),
                     sha1,
                     sha512: rf.sha512.clone(),
                     size: Some(v.size),
@@ -635,6 +636,7 @@ impl ContentService for ContentServices {
                     source: e.map(|e| e.source).unwrap_or(ContentSourceKind::Local),
                     project_id: e.map(|e| e.project_id.clone()),
                     version_id: e.map(|e| e.version_id.clone()),
+                    slug: e.and_then(|e| e.slug.clone()),
                     title: e.and_then(|e| e.title.clone()),
                     version_number: e.and_then(|e| e.version_number.clone()),
                     update_available: e

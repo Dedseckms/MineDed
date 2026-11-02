@@ -438,6 +438,8 @@ export type InstalledContent = {
 	source: ContentSourceKind,
 	projectId: string | null,
 	versionId: string | null,
+	/**  Provider page slug, so the project link opens the real page. */
+	slug?: string | null,
 	title: string | null,
 	versionNumber: string | null,
 	updateAvailable: boolean,
