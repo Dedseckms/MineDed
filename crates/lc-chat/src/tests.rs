@@ -102,6 +102,7 @@ fn user() -> SocialUser {
         bio: None,
         accent: None,
         avatar: None,
+        account_created: false,
     }
 }
 fn guest_user() -> SocialUser {
