@@ -1,4 +1,6 @@
 import type {
+  AccountRequest,
+  AdminAccount,
   AdminServerState,
   AuditEntry,
   PresenceClient,
@@ -173,6 +175,54 @@ export function createSocialMocks(
       { label: "anonymous", kind: "anonymous", since },
     ];
   };
+  // Account requests and the full account list behind the admin panel.
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+  let requests: AccountRequest[] = [
+    {
+      id: "44444444444444444444444444444444",
+      name: "NotchFan",
+      note: "Играю гостём третий день, хочу свой ник.",
+      createdAt: minutesAgo(40),
+    },
+    {
+      id: "55555555555555555555555555555555",
+      name: "Kefir",
+      note: "",
+      createdAt: minutesAgo(60 * 26),
+    },
+  ];
+  const invites = new Map<string, string>();
+  const accounts = (): AdminAccount[] => [
+    {
+      uuid: SOCIAL_PEER.uuid,
+      name: SOCIAL_PEER.name,
+      guest: false,
+      displayName: null,
+      createdAt: minutesAgo(60 * 24 * 12),
+      invite: null,
+      inviteUrl: null,
+    },
+    {
+      uuid: "66666666666666666666666666666666",
+      name: "Gremlin",
+      guest: true,
+      displayName: "Gremlin_",
+      createdAt: minutesAgo(60 * 5),
+      invite: null,
+      inviteUrl: null,
+    },
+    ...requests
+      .filter((r) => invites.has(r.id))
+      .map((r) => ({
+        uuid: r.id,
+        name: r.name,
+        guest: true,
+        displayName: null,
+        createdAt: r.createdAt,
+        invite: "MINE-DED1-NV1T",
+        inviteUrl: invites.get(r.id) ?? null,
+      })),
+  ];
   const send = (channel: string, content: SocialContent) => {
     if (
       !self ||
@@ -494,6 +544,45 @@ export function createSocialMocks(
       return ok(mockAvatarDataUrl(user));
     },
     socialPresence: async () => ok({ online: 12 }),
+    socialRequestAccount: async (note) => {
+      if (!self || (!self.guest && self.role !== "guest")) return denied();
+      if (note.length > 300) return invalid("mock: note is too long");
+      if (requests.some((r) => r.id === self!.uuid))
+        return {
+          status: "error" as const,
+          error: {
+            code: "conflict" as const,
+            message: "mock: account request already sent",
+            details: null,
+          },
+        };
+      requests = [
+        ...requests,
+        {
+          id: self.uuid,
+          name: self.name,
+          note,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      return ok(null);
+    },
+    socialAccountRequests: async () =>
+      self?.role === "admin"
+        ? ok(requests.map((r) => ({ ...r })))
+        : denied(),
+    socialIssueInvite: async (requestId) => {
+      if (self?.role !== "admin") return denied();
+      const request = requests.find((r) => r.id === requestId);
+      if (!request) return invalid("mock: unknown request");
+      const seen = invites.get(requestId);
+      if (seen) return ok(seen);
+      const link = `https://mineded.example/register?invite=MINE-DED1-NV1T&name=${encodeURIComponent(request.name)}`;
+      invites.set(requestId, link);
+      return ok(link);
+    },
+    socialAdminAccounts: async () =>
+      self?.role === "admin" ? ok(accounts()) : denied(),
     socialAdminPresence: async () =>
       self?.role === "admin"
         ? ok({ online: clients().length, clients: clients() })

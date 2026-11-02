@@ -8,12 +8,13 @@ import { Badge } from "../../../components/ui/feedback";
 import { isAdmin } from "../../../lib/social";
 import { JournalTab } from "./JournalTab";
 import { ModerationTab } from "./ModerationTab";
+import { RequestsTab } from "./RequestsTab";
 import { ServerTab } from "./ServerTab";
 import { UsersTab } from "./UsersTab";
 
-type AdminTab = "moderation" | "users" | "server" | "journal";
+type AdminTab = "moderation" | "users" | "requests" | "server" | "journal";
 
-const TABS: AdminTab[] = ["moderation", "users", "server", "journal"];
+const TABS: AdminTab[] = ["moderation", "users", "requests", "server", "journal"];
 
 /** Full-screen administration section inside the chat tab; admins only. */
 export function AdminPanel({ self }: { self: SocialUser }) {
@@ -53,6 +54,7 @@ export function AdminPanel({ self }: { self: SocialUser }) {
       >
         {tab === "moderation" ? <ModerationTab /> : null}
         {tab === "users" ? <UsersTab /> : null}
+        {tab === "requests" ? <RequestsTab /> : null}
         {tab === "server" ? <ServerTab /> : null}
         {tab === "journal" ? <JournalTab /> : null}
       </div>

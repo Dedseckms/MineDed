@@ -28,6 +28,10 @@ import { Select } from "../../components/ui/form";
 import { useMediaQuery } from "../../hooks/useAppearance";
 import { applySocialEvent } from "../../hooks/useSocialSync";
 import {
+  hasRequestedAccount,
+  markAccountRequested,
+} from "../../lib/accountRequest";
+import {
   canModerate,
   isAdmin,
   isGuest,
@@ -40,6 +44,7 @@ import { useToastStore } from "../../stores/toastStore";
 import { useTaskStore } from "../../stores/taskStore";
 import { TaskProgress } from "../tasks/TaskProgress";
 import { AdminPanel } from "./admin/AdminPanel";
+import { AccountRequestDialog } from "./AccountRequestDialog";
 import { ChatAvatar } from "./ChatAvatar";
 import {
   type ChatMessageActions,
@@ -88,6 +93,14 @@ export function ChatScreen() {
   const [tab, setTab] = useState("chat");
   const [pane, setPane] = useState<"list" | "chat">("list");
   const [guestLogin, setGuestLogin] = useState(false);
+  const [accountDialog, setAccountDialog] = useState(false);
+  const [accountRequested, setAccountRequested] = useState(() =>
+    hasRequestedAccount(self?.uuid ?? ""),
+  );
+  useEffect(() => {
+    setAccountRequested(hasRequestedAccount(self?.uuid ?? ""));
+    setAccountDialog(false);
+  }, [self?.uuid]);
   const [taskId, setTaskId] = useState<string | null>(null);
   const task = useTaskStore((s) => (taskId ? s.tasks[taskId] : undefined));
   const room = useRoomState();
@@ -456,12 +469,26 @@ export function ChatScreen() {
               />
             </div>
             {guest ? (
-              <p
-                role="status"
-                className="shrink-0 border-t border-border bg-panel px-3 py-3 text-center text-sm text-muted"
+              <div
+                className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-border bg-panel px-3 py-3"
               >
-                {t("social.guestReadOnly")}
-              </p>
+                <p role="status" className="text-center text-sm text-muted">
+                  {t("social.guestReadOnly")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={accountRequested}
+                  icon={<Icon name={accountRequested ? "check" : "user"} />}
+                  onClick={() => setAccountDialog(true)}
+                >
+                  {t(
+                    accountRequested
+                      ? "social.accountRequest.sent"
+                      : "social.accountRequest.ask",
+                  )}
+                </Button>
+              </div>
             ) : (
               <ChatComposer
                 value={text}
@@ -675,6 +702,17 @@ export function ChatScreen() {
       ) : null}
       {editor ? (
         <ProfileEditor self={self} onClose={() => setEditor(false)} />
+      ) : null}
+      {guest ? (
+        <AccountRequestDialog
+          open={accountDialog}
+          onClose={() => setAccountDialog(false)}
+          requested={accountRequested}
+          onSent={() => {
+            markAccountRequested(self.uuid);
+            setAccountRequested(true);
+          }}
+        />
       ) : null}
     </div>
   );

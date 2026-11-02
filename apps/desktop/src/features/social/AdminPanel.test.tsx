@@ -10,8 +10,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Commands } from "../../api/client";
-import type { SocialReport, SocialUser } from "../../bindings";
-
+import type {
+  AccountRequest,
+  SocialReport,
+  SocialUser,
+} from "../../bindings";
 const h = vi.hoisted(() => ({ api: null as unknown as Commands }));
 vi.mock("../../api/client", async (orig) => {
   const actual = await orig<typeof import("../../api/client")>();
@@ -28,6 +31,7 @@ const { createMockCommands } = await import("../../mocks");
 const { createMockBus } = await import("../../mocks/bus");
 const { unwrap } = await import("../../api/client");
 const { useAdminStore } = await import("../../stores/adminStore");
+const { useToastStore } = await import("../../stores/toastStore");
 const { AdminPanel } = await import("./admin/AdminPanel");
 const i18n = (await import("../../i18n")).default;
 
@@ -102,10 +106,10 @@ describe("admin panel access", () => {
     }
   });
 
-  it("shows the full section to admins with four tabs", () => {
+  it("shows the full section to admins with all tabs", () => {
     mount();
     expect(screen.getByText(i18n.t("social.admin.title"))).toBeTruthy();
-    for (const value of ["moderation", "users", "server", "journal"])
+    for (const value of ["moderation", "users", "requests", "server", "journal"])
       expect(tab(value)).toBeTruthy();
   });
 });
@@ -186,6 +190,69 @@ describe("server tab", () => {
 });
 
 describe("users tab", () => {
+  it("lists every known account and filters it by the account search", async () => {
+    mount();
+    fireEvent.click(tab("users"));
+    const filter = await screen.findByLabelText(
+      i18n.t("social.admin.accounts.filter"),
+    );
+    // The mock knows a regular player and a guest.
+    expect((await screen.findAllByText("Alex")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Gremlin_")).toBeTruthy();
+    expect(screen.getAllByText(i18n.t("social.admin.accounts.real")).length).toBe(1);
+    fireEvent.change(filter, { target: { value: "grem" } });
+    await waitFor(() => expect(screen.queryByText("Alex")).toBeNull());
+    expect(screen.getByText("Gremlin_")).toBeTruthy();
+    fireEvent.change(filter, { target: { value: "zzz" } });
+    expect(
+      screen.getByText(i18n.t("social.admin.accounts.empty")),
+    ).toBeTruthy();
+  });
+
+  it("shows an issued invite for the account", async () => {
+    mount();
+    fireEvent.click(tab("users"));
+    fireEvent.click((await screen.findAllByText("Gremlin_"))[0]!);
+    await waitFor(() =>
+      expect(screen.getByText(i18n.t("social.admin.userUuid"))).toBeTruthy(),
+    );
+    expect(
+      screen.queryByText(i18n.t("social.admin.accounts.invite")),
+    ).toBeNull();
+
+    const requests: AccountRequest[] = [
+      {
+        id: "9".repeat(32),
+        name: "Invited",
+        note: "",
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    cleanup();
+    mount(ADMIN, {
+      socialAccountRequests: async () => ok(requests),
+      socialAdminAccounts: async () =>
+        ok([
+          {
+            uuid: requests[0]!.id,
+            name: "Invited",
+            guest: true,
+            createdAt: requests[0]!.createdAt,
+            invite: "MINE-DED1-NV1T",
+            inviteUrl: "https://drasl.test/register?invite=MINE-DED1-NV1T",
+          },
+        ]),
+    });
+    fireEvent.click(tab("users"));
+    fireEvent.click(await screen.findByText("Invited"));
+    expect(
+      await screen.findByText(i18n.t("social.admin.accounts.invite")),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("https://drasl.test/register?invite=MINE-DED1-NV1T"),
+    ).toBeTruthy();
+  });
+
   it("finds a player and shows role and sanctions", async () => {
     mount();
     fireEvent.click(tab("users"));
@@ -208,3 +275,72 @@ describe("users tab", () => {
     ).toBe(true);
   });
 });
+
+describe("requests tab", () => {
+  const REQUESTS: AccountRequest[] = [
+    {
+      id: "7".repeat(32),
+      name: "NotchFan",
+      note: "Хочу свой ник",
+      createdAt: new Date().toISOString(),
+    },
+    {
+      id: "8".repeat(32),
+      name: "Kefir",
+      note: "",
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  it("lists the requests and issues a Drasl invite", async () => {
+    const issued: string[] = [];
+    const link = "https://drasl.test/register?invite=MINE-DED1-NV1T";
+    mount(ADMIN, {
+      socialAccountRequests: async () => ok(REQUESTS),
+      socialIssueInvite: async (id) => {
+        issued.push(id);
+        return ok(link);
+      },
+    });
+    fireEvent.click(tab("requests"));
+    expect(
+      (await screen.findAllByText("NotchFan")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Хочу свой ник").length).toBe(2);
+    expect(screen.getAllByText("Kefir").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByText("Kefir")[0]!);
+    expect(screen.getByText(i18n.t("social.admin.requests.noNote"))).toBeTruthy();
+    fireEvent.click(screen.getAllByText("NotchFan")[0]!);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.admin.requests.invite") }),
+    );
+    expect(await screen.findByText(link)).toBeTruthy();
+    expect(issued).toEqual([REQUESTS[0]!.id]);
+    expect(
+      useToastStore.getState().toasts.map((x) => x.messageKey),
+    ).toContain("social.admin.requests.issuedToast");
+
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => void writes.push(text) },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.admin.requests.copy") }),
+    );
+    await waitFor(() => expect(writes).toEqual([link]));
+  });
+
+  it("shows an empty state without requests", async () => {
+    mount(ADMIN, { socialAccountRequests: async () => ok([]) });
+    fireEvent.click(tab("requests"));
+    expect(
+      await screen.findByText(i18n.t("social.admin.requests.empty")),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(i18n.t("social.admin.requests.select")),
+    ).toBeTruthy();
+  });
+});
+
