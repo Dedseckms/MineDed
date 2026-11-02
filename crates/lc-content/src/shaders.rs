@@ -33,6 +33,7 @@ pub(crate) fn optifine_manual() -> ManualDownload {
         project_id: "optifine".into(),
         file_name: "OptiFine.jar".into(),
         url: OPTIFINE_URL.into(),
+        title: Some("OptiFine".into()),
     }
 }
 

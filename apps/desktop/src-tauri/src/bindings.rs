@@ -48,6 +48,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             content::preset_apply,
             content::instance_import,
             content::modpack_install,
+            content::instance_manual_downloads,
             content::instance_export,
             // accounts
             accounts::account_list,

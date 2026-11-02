@@ -303,6 +303,7 @@ pub(crate) async fn resolve(
                 project_id: v.project_id.clone(),
                 file_name: v.file_name.clone(),
                 url: lookup.manual_url(&v).await?,
+                title: None,
             });
             Slot::Manual
         } else {

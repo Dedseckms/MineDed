@@ -1,5 +1,6 @@
 //! Owner: mods. Includes modpack import/export and performance presets.
 
+use lc_types::content::ManualDownload;
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
     InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
@@ -222,4 +223,15 @@ pub async fn instance_export(
         on_event,
         move |sink| async move { svc.export(id, format, &path, &*sink).await },
     ))
+}
+
+/// Pack files of the last import that must be downloaded by hand, with a link
+/// to this exact file version for the pack's game version and loader.
+#[tauri::command]
+#[specta::specta]
+pub async fn instance_manual_downloads(
+    state: State<'_, AppState>,
+    id: InstanceId,
+) -> AppResult<Vec<ManualDownload>> {
+    state.content.manual_downloads(&id).await
 }
