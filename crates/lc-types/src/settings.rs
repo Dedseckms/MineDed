@@ -98,6 +98,10 @@ pub struct Settings {
     /// Manual proxy; `None` = direct (or built-in VPN when enabled).
     pub proxy: Option<ProxyCfg>,
     pub close_on_launch: bool,
+    /// Closing the window hides it into the tray instead of quitting; the VPN
+    /// and sidecars keep running. Older settings files default to `true`.
+    #[serde(default = "default_true")]
+    pub close_to_tray: bool,
     pub auto_update: bool,
     /// Hub API root, e.g. `https://mc.example.ru/api/v1`; empty = [`DEFAULT_HUB_URL`].
     pub hub_url: String,
@@ -127,9 +131,14 @@ impl Default for Settings {
             prefer_mirrors: false,
             proxy: None,
             close_on_launch: false,
+            close_to_tray: true,
             auto_update: true,
             hub_url: DEFAULT_HUB_URL.to_owned(),
             skin_server: None,
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }

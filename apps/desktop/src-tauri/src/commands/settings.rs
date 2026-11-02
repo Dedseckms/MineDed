@@ -22,5 +22,6 @@ pub async fn settings_set(
     // Proxy and window look apply immediately; game dir / parallelism on restart.
     state.downloader.set_manual_proxy(settings.proxy.clone());
     crate::apply_window_effects(&app, &settings);
+    crate::commands::app::apply_close_to_tray(&app, settings.close_to_tray);
     state.settings.set(settings).await
 }

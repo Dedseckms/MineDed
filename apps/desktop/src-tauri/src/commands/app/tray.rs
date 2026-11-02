@@ -359,6 +359,24 @@ fn toggle_close_to_tray(app: &AppHandle) {
     let _ = tray.items.close_to_tray.set_checked(next);
 }
 
+/// Applies the `close_to_tray` pref coming from `Settings`.
+pub(crate) fn set_close_to_tray(app: &AppHandle, enabled: bool) {
+    let Some(tray) = app.try_state::<TrayState>() else {
+        return;
+    };
+    if let Err(e) = tray.prefs.set(TrayPrefs {
+        close_to_tray: enabled,
+    }) {
+        tracing::warn!("tray: cannot save preferences: {e}");
+    }
+    let _ = tray.items.close_to_tray.set_checked(enabled);
+}
+
+/// Stops the services and exits, used by the tray menu and `app_quit`.
+pub(crate) fn quit_now(app: &AppHandle) {
+    quit_app(app);
+}
+
 fn quit_app(app: &AppHandle) {
     let target = AppQuit(app.clone());
     tauri::async_runtime::spawn(async move { quit(&target).await });

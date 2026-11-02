@@ -241,3 +241,15 @@ mod tests {
         }
     }
 }
+
+/// Mirrors the `close_to_tray` preference into the tray state.
+pub fn apply_close_to_tray(app: &AppHandle, enabled: bool) {
+    tray::set_close_to_tray(app, enabled);
+}
+
+/// Quits the app: stops the VPN, rooms and voice first, then exits.
+#[tauri::command]
+#[specta::specta]
+pub fn app_quit(app: AppHandle) {
+    tray::quit_now(&app);
+}

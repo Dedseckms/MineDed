@@ -146,6 +146,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             tasks::task_cancel,
             // release
             app::app_version,
+            app::app_quit,
             app::update_check,
             app::update_install,
         ])
