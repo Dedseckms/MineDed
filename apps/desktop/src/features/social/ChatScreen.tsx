@@ -33,7 +33,7 @@ import {
   isGuest,
   privacyOptions,
 } from "../../lib/social";
-import { canEditProfile } from "../../lib/socialProfile";
+import { canEditProfile, displayNameOf } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
 import { useSocialStore } from "../../stores/socialStore";
 import { useTaskStore } from "../../stores/taskStore";
@@ -54,6 +54,7 @@ import { GuestLoginDialog } from "./GuestLoginDialog";
 import { OnlineBadge } from "./OnlineBadge";
 import { ProfileCard } from "./ProfileCard";
 import { ProfileEditor } from "./ProfileEditor";
+import { useAutoMarkRead } from "./useAutoMarkRead";
 
 const privacyFields: (keyof SocialPrivacy)[] = [
   "whoCanMessage",
@@ -158,6 +159,25 @@ export function ChatScreen() {
     () => buildTimeline(messages, self?.uuid ?? ""),
     [messages, self?.uuid],
   );
+  const latestId = useMemo(() => messages.at(-1)?.id ?? null, [messages]);
+  const [pinned, setPinned] = useState(true);
+  const markRead = (channel: string, messageId: string) => {
+    void (async () => {
+      try {
+        unwrap(await api.socialMarkRead(channel, messageId));
+      } catch {
+        return;
+      }
+      void qc.invalidateQueries({ queryKey: ["social", "channels"] });
+    })();
+  };
+  useAutoMarkRead({
+    channel: session.selected,
+    latestId,
+    pinned,
+    markRead,
+    enabled: !!self,
+  });
   useEffect(() => {
     session.set({
       unread: channels.data?.reduce((n, c) => n + c.unread, 0) ?? 0,
@@ -221,13 +241,6 @@ export function ChatScreen() {
   const blocked = peer?.isBlocked === true || (!!peer && session.blocked.includes(peer.uuid));
   const title = directChat ? (peer?.name ?? t("social.directChat")) : t("social.global");
   const canInvitePeer = !!room.data && !!peer && peer.canInvite && !blocked;
-  const latest = messages.at(-1);
-  const markRead = () => {
-    if (latest)
-      run(async () => {
-        unwrap(await api.socialMarkRead(session.selected, latest.id));
-      });
-  };
   const invite = (user: SocialUser) => {
     const code = room.data?.code;
     if (!code) return;
@@ -412,15 +425,6 @@ export function ChatScreen() {
                       icon={<Icon name="link" />}
                     />
                   ) : null}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label={t("social.markRead")}
-                    title={t("social.markRead")}
-                    disabled={!latest || action.isPending}
-                    onClick={markRead}
-                    icon={<Icon name="check" />}
-                  />
                 </div>
               </header>
               <div
@@ -433,6 +437,7 @@ export function ChatScreen() {
                   hasOlder={!!history.hasNextPage}
                   loadingOlder={history.isFetchingNextPage}
                   onLoadOlder={() => void history.fetchNextPage()}
+                  onAtBottomChange={setPinned}
                   renderRow={renderRow}
                   empty={t(history.isPending ? "common.loading" : "social.empty")}
                 />
@@ -494,45 +499,81 @@ export function ChatScreen() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <VirtualList
             items={friends.data ?? []}
-            rowHeight={80}
+            rowHeight={112}
             height={480}
             getKey={(f) => f.user.uuid}
             ariaLabel={t("social.tabs.friends")}
             renderRow={(friend) => (
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-panel p-3">
+              <div className="flex h-full items-center gap-3 rounded-lg border border-border bg-panel px-3">
                 <button
-                  className="mr-auto"
+                  type="button"
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
                   onClick={() => openProfile(friend.user)}
                 >
-                  {friend.user.name} · {t(`social.friend.${friend.state}`)}
+                  <ChatAvatar user={friend.user} size="sm" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium">
+                      {displayNameOf(friend.user)}
+                    </span>
+                    <span className="block truncate text-xs text-muted">
+                      {t(`social.friend.${friend.state}`)}
+                    </span>
+                  </span>
                 </button>
-                {friend.state === "incoming" ? (
+                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                  {friend.state === "incoming" ? (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        run(async () => {
+                          unwrap(await api.socialAddFriend(friend.user.uuid));
+                        })
+                      }
+                    >
+                      {t("social.accept")}
+                    </Button>
+                  ) : null}
                   <Button
                     size="sm"
+                    variant="secondary"
+                    onClick={() => direct(friend.user)}
+                  >
+                    {t("social.write")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => openProfile(friend.user)}
+                  >
+                    {t("social.openProfile")}
+                  </Button>
+                  {/* A disabled button swallows tooltips, so the hint sits on the wrapper. */}
+                  <span title={t(room.data ? "social.invite" : "social.inviteNoRoom")}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!room.data}
+                      onClick={() => invite(friend.user)}
+                    >
+                      {t("social.invite")}
+                    </Button>
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     onClick={() =>
                       run(async () => {
-                        unwrap(await api.socialAddFriend(friend.user.uuid));
+                        unwrap(await api.socialRemoveFriend(friend.user.uuid));
                       })
                     }
                   >
-                    {t("social.accept")}
+                    {t(
+                      friend.state === "incoming"
+                        ? "social.decline"
+                        : "common.delete",
+                    )}
                   </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    run(async () => {
-                      unwrap(await api.socialRemoveFriend(friend.user.uuid));
-                    })
-                  }
-                >
-                  {t(
-                    friend.state === "incoming"
-                      ? "social.decline"
-                      : "common.delete",
-                  )}
-                </Button>
+                </div>
               </div>
             )}
           />

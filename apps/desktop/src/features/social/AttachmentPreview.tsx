@@ -1,73 +1,107 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+
 import { api, unwrap } from "../../api/client";
 import type { SocialAttachment } from "../../bindings";
-import { Button } from "../../components/ui/Button";
 import { PhotoViewer } from "../../components/ui/PhotoViewer";
-import { ErrorMessage } from "../../components/ui/feedback";
 
-/**
- * Native authenticated, bounded thumbnail. Never expose protected hub URLs to
- * the WebView. Clicking the thumbnail opens the full-screen viewer; other
- * attachment kinds keep their save button in the bubble.
- */
-export function AttachmentPreview({
-  attachment,
-  onSave,
-}: {
-  attachment: SocialAttachment;
-  /** Saves the original file from the viewer toolbar. */
-  onSave: (attachment: SocialAttachment) => void;
-}) {
-  const { t } = useTranslation();
-  const [visible, setVisible] = useState(false);
-  const [viewer, setViewer] = useState(false);
-  const preview = useQuery({
+/** Preview side of a single image: 200–320 px, so a thumbnail reads at a glance. */
+const SINGLE_THUMB = "h-56 w-56 max-w-full";
+
+/** Protected hub URLs never reach the WebView: previews arrive as bounded data URLs. */
+function usePreview(attachment: SocialAttachment) {
+  const query = useQuery({
     queryKey: ["social", "preview", attachment.id],
     queryFn: async () => unwrap(await api.socialAttachmentPreview(attachment.id)),
-    enabled: visible,
     staleTime: Infinity,
   });
-  const safe = preview.data?.startsWith("data:image/webp;base64,")
-    ? preview.data
+  const src = query.data?.startsWith("data:image/webp;base64,")
+    ? query.data
     : null;
+  return { src, pending: query.isPending, failed: !!query.error };
+}
+
+export function isImage(attachment: SocialAttachment): boolean {
+  return attachment.mime.startsWith("image/");
+}
+
+/**
+ * Inline thumbnail with an immediate preview; the save button lives only in the
+ * full-screen viewer, never in the bubble.
+ */
+export function ImageThumb({
+  attachment,
+  onSave,
+  className = SINGLE_THUMB,
+}: {
+  attachment: SocialAttachment;
+  onSave: (attachment: SocialAttachment) => void;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const [viewer, setViewer] = useState(false);
+  const { src, pending } = usePreview(attachment);
   return (
-    <div>
-      <Button size="sm" variant="ghost" onClick={() => setVisible(!visible)}>
-        {t(visible ? "social.hidePreview" : "social.showPreview")}
-      </Button>
-      {visible ? (
-        <>
-          <ErrorMessage error={preview.error} />
-          {preview.isPending ? (
-            <p role="status">{t("common.loading")}</p>
-          ) : null}
-          {safe ? (
-            <>
-              <button
-                type="button"
-                aria-label={t("social.openFullscreen")}
-                title={t("social.openFullscreen")}
-                className="block cursor-zoom-in"
-                onClick={() => setViewer(true)}
-              >
-                <img
-                  src={safe}
-                  alt={t("social.attachment")}
-                  className="h-16 max-w-full rounded object-contain"
-                />
-              </button>
-              <PhotoViewer
-                src={viewer ? safe : null}
-                alt={attachment.fileName}
-                onClose={() => setViewer(false)}
-                onSave={() => onSave(attachment)}
-              />
-            </>
-          ) : null}
-        </>
-      ) : null}
+    <div
+      className={`relative overflow-hidden rounded-lg bg-surface ${className}`}
+    >
+      {src ? (
+        <button
+          type="button"
+          aria-label={t("social.openFullscreen")}
+          title={attachment.fileName}
+          className="block size-full cursor-zoom-in"
+          onClick={() => setViewer(true)}
+        >
+          <img
+            src={src}
+            alt={t("social.attachment")}
+            draggable={false}
+            className="size-full object-cover"
+          />
+        </button>
+      ) : (
+        <p className="grid size-full place-items-center p-1 text-center text-[11px] break-all text-muted">
+          {t(pending ? "common.loading" : "social.previewUnavailable")}
+        </p>
+      )}
+      <PhotoViewer
+        src={viewer ? src : null}
+        alt={attachment.fileName}
+        onClose={() => setViewer(false)}
+        onSave={() => onSave(attachment)}
+      />
+    </div>
+  );
+}
+
+/**
+ * Image previews of one message: a plain thumbnail for a single picture, a grid
+ * for a run of them (2 columns, 3 once there are more than four).
+ */
+export function AttachmentGrid({
+  attachments,
+  onSave,
+}: {
+  attachments: SocialAttachment[];
+  onSave: (attachment: SocialAttachment) => void;
+}) {
+  const columns =
+    attachments.length === 1 ? 1 : attachments.length <= 4 ? 2 : 3;
+  return (
+    <div
+      className="grid w-fit max-w-full gap-1"
+      style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+    >
+      {attachments.map((attachment) => (
+        <ImageThumb
+          key={attachment.id}
+          attachment={attachment}
+          onSave={onSave}
+          className={columns === 1 ? SINGLE_THUMB : "aspect-square w-full"}
+        />
+      ))}
     </div>
   );
 }

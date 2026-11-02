@@ -121,6 +121,39 @@ export function clockLabel(iso: string, locale: string): string {
   });
 }
 
+/** A bubble is either one message or a merged run of image messages. */
+export type GroupSegment =
+  | { kind: "message"; key: string; message: SocialMessage }
+  | { kind: "images"; key: string; messages: SocialMessage[] };
+
+/** Captionless image: consecutive ones share a single preview grid. */
+export function imageOnly(message: SocialMessage): boolean {
+  return (
+    !message.deleted &&
+    message.content.type === "attachment" &&
+    !message.content.caption &&
+    message.content.attachment.mime.startsWith("image/")
+  );
+}
+
+/** Splits a group into single bubbles and runs of image previews. */
+export function segmentsOf(messages: SocialMessage[]): GroupSegment[] {
+  const out: GroupSegment[] = [];
+  for (const message of messages) {
+    const previous = out.at(-1);
+    if (imageOnly(message)) {
+      if (previous?.kind === "images") previous.messages.push(message);
+      else
+        out.push({
+          kind: "images",
+          key: `images-${message.id}`,
+          messages: [message],
+        });
+    } else out.push({ kind: "message", key: message.id, message });
+  }
+  return out;
+}
+
 export function previewOf(message: SocialMessage | null): Preview | null {
   if (!message) return null;
   if (message.deleted)

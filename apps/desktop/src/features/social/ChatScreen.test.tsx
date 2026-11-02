@@ -293,34 +293,35 @@ describe("guest access", () => {
 });
 
 describe("photo viewer", () => {
-  it("opens a full-screen photo from an image bubble", async () => {
-    const message: SocialMessage = {
-      id: "1",
-      channel: "global",
-      author: SOCIAL_PEER,
-      content: {
-        type: "attachment",
-        caption: null,
-        attachment: {
-          id: "a1",
-          fileName: "shot.png",
-          mime: "image/png",
-          size: 2048,
-          url: "",
-          thumbUrl: null,
-          width: null,
-          height: null,
-        },
+  const shot: SocialMessage = {
+    id: "1",
+    channel: "global",
+    author: SOCIAL_PEER,
+    content: {
+      type: "attachment",
+      caption: null,
+      attachment: {
+        id: "a1",
+        fileName: "shot.png",
+        mime: "image/png",
+        size: 2048,
+        url: "",
+        thumbUrl: null,
+        width: null,
+        height: null,
       },
-      createdAt: new Date().toISOString(),
-      editedAt: null,
-      deleted: false,
-    };
+    },
+    createdAt: new Date().toISOString(),
+    editedAt: null,
+    deleted: false,
+  };
+
+  function mountImage() {
     h.api = createMockCommands(
       {
         socialHistory: async () => ({
           status: "ok",
-          data: { messages: [message], before: null },
+          data: { messages: [shot], before: null },
         }),
         socialAttachmentPreview: async () => ({
           status: "ok",
@@ -329,13 +330,12 @@ describe("photo viewer", () => {
       },
       { bus: createMockBus(), tickMs: 5 },
     );
+  }
+
+  it("opens a full-screen photo from the preview in the bubble", async () => {
+    mountImage();
     await connect();
     mount();
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: i18n.t("social.showPreview"),
-      }),
-    );
     fireEvent.click(
       await screen.findByRole("button", {
         name: i18n.t("social.openFullscreen"),
@@ -348,5 +348,81 @@ describe("photo viewer", () => {
     expect(
       screen.getByRole("button", { name: i18n.t("common.save") }),
     ).toBeTruthy();
+  });
+
+  it("keeps the save button out of the bubble", async () => {
+    mountImage();
+    await connect();
+    mount();
+    await screen.findByRole("button", { name: i18n.t("social.openFullscreen") });
+    expect(
+      screen.queryByRole("button", { name: i18n.t("common.save") }),
+    ).toBeNull();
+  });
+});
+
+describe("read marker", () => {
+  const history = (id: string): Commands["socialHistory"] => async () => ({
+    status: "ok",
+    data: {
+      messages: [
+        {
+          id,
+          channel: "global",
+          author: SOCIAL_PEER,
+          content: { type: "text", text: "hello" },
+          createdAt: new Date().toISOString(),
+          editedAt: null,
+          deleted: false,
+        },
+      ],
+      before: null,
+    },
+  });
+
+  it("marks the channel read automatically and offers no manual button", async () => {
+    const marked: Array<[string, string]> = [];
+    h.api = createMockCommands(
+      {
+        socialHistory: history("7"),
+        socialMarkRead: async (channel, messageId) => {
+          marked.push([channel, messageId]);
+          return { status: "ok", data: null };
+        },
+      },
+      { bus: createMockBus(), tickMs: 5 },
+    );
+    await connect();
+    mount();
+    await screen.findByText("hello");
+    await waitFor(() => expect(marked).toEqual([["global", "7"]]));
+    // The old manual button (RU "Отметить прочитанным") is gone.
+    expect(screen.queryByLabelText(/Отметить прочитанным|Mark as read/)).toBeNull();
+  });
+});
+
+describe("friends", () => {
+  it("offers write, profile and room invite actions per friend", async () => {
+    await connect();
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: i18n.t("social.tabs.friends") }),
+    );
+    const write = await screen.findByRole("button", {
+      name: i18n.t("social.write"),
+    });
+    const profile = screen.getByRole("button", {
+      name: i18n.t("social.openProfile"),
+    });
+    const invite = screen.getByRole("button", {
+      name: i18n.t("social.invite"),
+    }) as HTMLButtonElement;
+    expect(write).toBeTruthy();
+    expect(profile).toBeTruthy();
+    // No active room in the mock: the invitation is disabled with a hint.
+    expect(invite.disabled).toBe(true);
+    expect(invite.closest("span")?.getAttribute("title")).toBe(
+      i18n.t("social.inviteNoRoom"),
+    );
   });
 });
