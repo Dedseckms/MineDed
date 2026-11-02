@@ -62,6 +62,17 @@ fn ensure_column(db: &Connection, table: &str, column: &str, ddl: &str) -> Resul
 fn allowed(a: SocialAudience, friends: bool) -> bool {
     a == SocialAudience::Everyone || (a == SocialAudience::Friends && friends)
 }
+/// Stored profile columns rendered into [`SocialUser`].
+struct ProfileRow {
+    name: String,
+    skin: Option<String>,
+    guest: bool,
+    display_name: Option<String>,
+    bio: Option<String>,
+    accent: Option<String>,
+    /// Content hash of the avatar blob, `None` while the player has none.
+    avatar: Option<String>,
+}
 
 impl Store {
     pub fn open(root: &Path) -> Result<Self, ApiError> {
@@ -190,31 +201,34 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
             .optional()?)
     }
     pub fn user(&self, viewer: &str, id: &str, chat: &Chat) -> Result<SocialUser, ApiError> {
-        let (name, skin, guest, display_name, bio, accent): (
-            String,
-            Option<String>,
-            bool,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ) = self
+        let row: ProfileRow = self
             .db
             .query_row(
-                "SELECT name,skin,guest,display_name,bio,accent FROM users WHERE uuid=?1",
+                "SELECT name,skin,guest,display_name,bio,accent,avatar FROM users WHERE uuid=?1",
                 [id],
                 |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                    ))
+                    Ok(ProfileRow {
+                        name: r.get(0)?,
+                        skin: r.get(1)?,
+                        guest: r.get(2)?,
+                        display_name: r.get(3)?,
+                        bio: r.get(4)?,
+                        accent: r.get(5)?,
+                        avatar: r.get(6)?,
+                    })
                 },
             )
             .optional()?
             .ok_or_else(|| ApiError::not_found("player not found"))?;
+        let ProfileRow {
+            name,
+            skin,
+            guest,
+            display_name,
+            bio,
+            accent,
+            avatar,
+        } = row;
         let viewer_guest = self.is_guest(viewer)?;
         let friend = self.friends_with(viewer, id)?;
         let blocked = self.blocked(viewer, id)?;
@@ -251,6 +265,7 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
             display_name,
             bio,
             accent,
+            avatar,
         })
     }
     /// Guests may only read the global chat: every writer path goes through here.
