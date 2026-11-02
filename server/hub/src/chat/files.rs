@@ -70,8 +70,8 @@ fn encode(bytes: Vec<u8>) -> Result<Encoded, ApiError> {
         .with_guessed_format()
         .map_err(|_| invalid("invalid image"))?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
     let (width, height) = image::ImageReader::new(Cursor::new(&bytes))
@@ -79,12 +79,18 @@ fn encode(bytes: Vec<u8>) -> Result<Encoded, ApiError> {
         .map_err(|_| invalid("invalid image"))?
         .into_dimensions()
         .map_err(|_| invalid("invalid image"))?;
-    if u64::from(width) * u64::from(height) > 8_000_000 || width > 4096 || height > 4096 {
+    // Phone photos and 4K screenshots routinely exceed 4096 px: shrink them to
+    // the preview limit instead of refusing the upload.
+    if u64::from(width) * u64::from(height) > 60_000_000 || width > 16_384 || height > 16_384 {
         return Err(invalid("image dimensions exceed limit"));
     }
-    let image = reader
+    let mut image = reader
         .decode()
         .map_err(|_| invalid("invalid or oversized image"))?;
+    if width > 4096 || height > 4096 || u64::from(width) * u64::from(height) > 8_000_000 {
+        image = image.resize(4096, 4096, image::imageops::FilterType::Lanczos3);
+    }
+    let (width, height) = (image.width(), image.height());
     let mut encoded = Cursor::new(Vec::new());
     image
         .write_to(&mut encoded, image::ImageFormat::WebP)
@@ -120,8 +126,8 @@ pub(super) fn avatar(bytes: &[u8]) -> Result<Vec<u8>, ApiError> {
         .with_guessed_format()
         .map_err(|_| invalid("invalid image"))?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
     let image = reader
@@ -315,9 +321,16 @@ mod tests {
         assert!(thumb.len() <= 256 * 1024);
         let thumb = image::load_from_memory(&thumb).unwrap();
         assert!(thumb.width() <= 320 && thumb.height() <= 320);
+        // A 4097×1 strip used to be rejected; now it is scaled to the limit.
         let image = image::DynamicImage::new_rgb8(4097, 1);
         let mut png = Cursor::new(Vec::new());
         image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let wide = encode(png.into_inner()).unwrap();
+        assert!(wide.width.unwrap_or(0) <= 4096);
+        // Beyond any sane screenshot the upload is still refused.
+        let huge = image::DynamicImage::new_rgb8(16_385, 1);
+        let mut png = Cursor::new(Vec::new());
+        huge.write_to(&mut png, image::ImageFormat::Png).unwrap();
         assert!(encode(png.into_inner()).is_err());
         let file = encode(b"arbitrary file".to_vec()).unwrap();
         assert_eq!(file.bytes, b"arbitrary file");
