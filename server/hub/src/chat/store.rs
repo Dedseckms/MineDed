@@ -105,6 +105,8 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         ensure_column(&db, "users", "bio", "TEXT")?;
         ensure_column(&db, "users", "accent", "TEXT")?;
         ensure_column(&db, "users", "avatar", "TEXT")?;
+        // Schema v3: the uploaded original is kept for "save as" (older rows have none).
+        ensure_column(&db, "attachments", "original", "TEXT")?;
         let files: Option<String> = db
             .query_row("SELECT value FROM settings WHERE key='files'", [], |r| {
                 r.get(0)

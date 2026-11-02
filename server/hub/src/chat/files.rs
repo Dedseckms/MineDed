@@ -52,6 +52,9 @@ pub(super) fn persist(dir: &std::path::Path, bytes: &[u8]) -> Result<String, Api
     Ok(digest)
 }
 struct Encoded {
+    /// Uploaded bytes kept for "save as", so the user gets the original format.
+    original: Vec<u8>,
+    /// WebP shown inline and served as the preview.
     bytes: Vec<u8>,
     thumb: Option<Vec<u8>>,
     width: Option<u32>,
@@ -60,6 +63,7 @@ struct Encoded {
 fn encode(bytes: Vec<u8>) -> Result<Encoded, ApiError> {
     if image::guess_format(&bytes).is_err() {
         return Ok(Encoded {
+            original: bytes.clone(),
             bytes,
             thumb: None,
             width: None,
@@ -114,6 +118,7 @@ fn encode(bytes: Vec<u8>) -> Result<Encoded, ApiError> {
         }
     };
     Ok(Encoded {
+        original: bytes,
         bytes: encoded.into_inner(),
         thumb: Some(thumb.into_inner()),
         width: Some(width),
@@ -215,6 +220,11 @@ pub(super) async fn upload(
         }
         let encoded = encode(bytes.to_vec())?;
         let digest = persist(&db.files, &encoded.bytes)?;
+        let original = encoded
+            .thumb
+            .as_ref()
+            .map(|_| persist(&db.files, &encoded.original))
+            .transpose()?;
         let thumb = encoded
             .thumb
             .as_ref()
@@ -223,11 +233,8 @@ pub(super) async fn upload(
         let id = uuid::Uuid::new_v4().simple().to_string();
         let attachment = SocialAttachment {
             id: id.clone(),
-            file_name: if encoded.thumb.is_some() {
-                format!("{}.webp", name.trim_end_matches('.'))
-            } else {
-                name
-            },
+            // Keep the uploaded name so "save as" keeps the original extension.
+            file_name: name,
             mime: if encoded.thumb.is_some() {
                 "image/webp"
             } else {
@@ -243,8 +250,15 @@ pub(super) async fn upload(
             height: encoded.height,
         };
         db.db.execute(
-            "INSERT INTO attachments(id,owner,metadata,hash,thumb) VALUES(?1,?2,?3,?4,?5)",
-            params![id, me, serde_json::to_string(&attachment)?, digest, thumb],
+            "INSERT INTO attachments(id,owner,metadata,hash,thumb,original) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                id,
+                me,
+                serde_json::to_string(&attachment)?,
+                digest,
+                thumb,
+                original
+            ],
         )?;
         Ok(Json(attachment))
     })
@@ -291,14 +305,41 @@ pub(super) async fn download_bytes(
     let me = me.to_owned();
     let id = id.to_owned();
     chat.run(move|db,_|{
-        let row:Option<(String,String,Option<String>)>=db.db.query_row("SELECT a.metadata,a.hash,a.thumb FROM attachments a WHERE a.id=?1 AND EXISTS(SELECT 1 FROM message_files f JOIN messages m ON m.id=f.message JOIN channels c ON c.id=m.channel WHERE f.file=a.id AND m.deleted=0 AND (c.id='global' OR c.a=?2 OR c.b=?2))",params![id,me],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        let(metadata,hash,thumbnail)=row.ok_or_else(||ApiError::not_found("attachment not found"))?;
+        let row:Option<(String,String,Option<String>,Option<String>)>=db.db.query_row("SELECT a.metadata,a.hash,a.thumb,a.original FROM attachments a WHERE a.id=?1 AND EXISTS(SELECT 1 FROM message_files f JOIN messages m ON m.id=f.message JOIN channels c ON c.id=m.channel WHERE f.file=a.id AND m.deleted=0 AND (c.id='global' OR c.a=?2 OR c.b=?2))",params![id,me],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        let(metadata,hash,thumbnail,original)=row.ok_or_else(||ApiError::not_found("attachment not found"))?;
         let attachment:SocialAttachment=serde_json::from_str(&metadata)?;
-        let hash=if thumb{thumbnail.ok_or_else(||ApiError::not_found("no thumbnail"))?}else{hash};
+        // The thumbnail is a small WebP; saving gets the uploaded original when
+        // it was kept (images), otherwise the stored blob itself.
+        let (hash, mime) = if thumb {
+            (thumbnail.ok_or_else(||ApiError::not_found("no thumbnail"))?, "image/webp".to_owned())
+        } else {
+            match original {
+                Some(hash) => (hash, original_mime(&attachment.file_name)),
+                None => (hash, attachment.mime.clone()),
+            }
+        };
         let path=db.files.join(hash);if std::fs::metadata(&path)?.len()>MAX_UPLOAD as u64{return Err(internal());}
         let bytes=std::fs::read(path)?;
-        Ok((bytes,attachment.mime,attachment.file_name))
+        Ok((bytes, mime, attachment.file_name))
     }).await
+}
+
+/// Content type implied by the uploaded file name (WebP originals are served
+/// back as WebP when the name kept its `.webp` extension).
+fn original_mime(name: &str) -> String {
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    }
+    .to_owned()
 }
 
 #[cfg(test)]
