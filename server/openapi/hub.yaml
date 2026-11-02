@@ -138,6 +138,17 @@ paths:
       responses:
         "200": { description: SocialUser, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
         "401": { $ref: "#/components/responses/Error" }
+  /chat/avatar/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [chat]
+      operationId: chatAvatarGet
+      summary: Avatar bytes of a player (WebP 256×256), authenticated like other chat routes
+      responses:
+        "200": { description: WebP image, content: { image/webp: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /chat/admin/presence:
     get:
       tags: [chat]
