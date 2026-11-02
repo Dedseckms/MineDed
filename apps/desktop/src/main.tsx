@@ -45,6 +45,18 @@ const ready: Promise<void> = isDemo
       .catch(() => undefined)
   : Promise.resolve();
 
+// The WebView shows a browser menu on every right click; keep it only where
+// the user can act on it: editable fields, text selections and links.
+document.addEventListener("contextmenu", (event) => {
+  const target = event.target as HTMLElement | null;
+  const editable = target?.closest(
+    'input, textarea, [contenteditable="true"], [contenteditable=""]',
+  );
+  const link = target?.closest("a[href]");
+  const selection = window.getSelection()?.toString().trim() ?? "";
+  if (!editable && !link && selection.length === 0) event.preventDefault();
+});
+
 const root = document.getElementById("root");
 if (root) void ready.then(() => {
   createRoot(root).render(
