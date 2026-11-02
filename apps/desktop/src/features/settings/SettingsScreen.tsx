@@ -197,6 +197,12 @@ function AppearanceSection({ settings }: { settings: Settings }) {
         label={t("settings.reduceMotion")}
         description={t("settings.reduceMotionHint")}
       />
+      <Switch
+        checked={settings.closeToTray ?? true}
+        onChange={(closeToTray) => set({ closeToTray })}
+        label={t("settings.closeToTray")}
+        description={t("settings.closeToTrayHint")}
+      />
       <ErrorMessage error={save.error} />
     </Section>
   );

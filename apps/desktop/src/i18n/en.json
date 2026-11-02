@@ -223,7 +223,9 @@
       "cave": "Ore cave",
       "desert": "Desert dusk",
       "cherry": "Cherry grove"
-    }
+    },
+    "closeToTray": "Close to tray",
+    "closeToTrayHint": "The close button hides the window instead of quitting: VPN and rooms keep running. Quit from the tray menu."
   },
   "updates": {
     "available": "Version {{version}} is available",
