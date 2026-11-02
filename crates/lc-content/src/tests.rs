@@ -1621,3 +1621,74 @@ async fn curseforge_pack_with_every_file_downloadable_needs_no_manual_list() {
         .join(crate::packs::MANUAL_FILE)
         .exists());
 }
+
+#[tokio::test]
+async fn manual_downloads_are_reported_until_the_pack_is_complete() {
+    let e = env();
+    e.cf_project(1, 6, true);
+    e.cf_file(1, 11, serde_json::json!([]));
+    e.cf_project_named(2, 6, false, "geckolib", "GeckoLib");
+    e.cf_file_named(
+        2,
+        21,
+        "geckolib-forge-1.20.1-4.4.9.jar",
+        "geckolib-forge-1.20.1-4.4.9",
+    );
+    let path = pack_zip(
+        &e,
+        "partial.zip",
+        serde_json::json!([
+            {"projectID":1,"fileID":11,"required":true},
+            {"projectID":2,"fileID":21,"required":true}
+        ]),
+    );
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+
+    let manual = e.svc.manual_downloads(&inst.id).await.unwrap();
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0].project_id, "geckolib");
+    assert_eq!(manual[0].file_name, "geckolib-forge-1.20.1-4.4.9.jar");
+    assert_eq!(
+        manual[0].url,
+        "https://www.curseforge.com/minecraft/mc-mods/geckolib/files/21"
+    );
+    assert_eq!(manual[0].title.as_deref(), Some("GeckoLib"));
+
+    // A fully downloadable pack leaves nothing outstanding.
+    e.cf_project(3, 6, true);
+    e.cf_file(3, 31, serde_json::json!([]));
+    let path = pack_zip(
+        &e,
+        "all.zip",
+        serde_json::json!([{"projectID":3,"fileID":31,"required":true}]),
+    );
+    let full = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    assert!(e.svc.manual_downloads(&full.id).await.unwrap().is_empty());
+
+    // Unknown instance fails, a damaged list is not an error.
+    assert_eq!(
+        e.svc
+            .manual_downloads(&InstanceId::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    std::fs::write(
+        e.inst
+            .paths
+            .instance(inst.id)
+            .join(crate::packs::MANUAL_FILE),
+        b"{",
+    )
+    .unwrap();
+    assert!(e.svc.manual_downloads(&inst.id).await.unwrap().is_empty());
+}
