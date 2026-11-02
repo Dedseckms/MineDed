@@ -73,6 +73,8 @@ enum Notice {
     Friend(String, String),
     Presence(String),
     Admin,
+    /// A created Drasl account for the request of this guest profile.
+    Account(String),
 }
 #[derive(Clone)]
 struct Caller(String);
@@ -573,6 +575,12 @@ async fn dispatch(
         }
         return Ok(Json(json!({ "code": code, "url": url })).into_response());
     }
+    // The account is created in Drasl with the password of the request; the
+    // admin API call runs outside the store lock.
+    if let ("POST", Some(request)) = (method.as_str(), path.strip_prefix("admin/create-account/")) {
+        chat.create_account(me, request.to_owned(), &body).await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     if method == "POST" && path == "admin/migrate" {
         chat.start_migration(me, body).await?;
         return Ok(StatusCode::ACCEPTED.into_response());
@@ -670,6 +678,19 @@ async fn send_frame(socket: &mut WebSocket, frame: Message) -> Result<(), ()> {
         .map_err(|_| ())?
         .map_err(|_| ())
 }
+/// Delivers an event; `accountCreated` is not a [`SocialEvent`] variant yet, so
+/// the guest account event is a plain JSON frame with the same field.
+async fn send_own_account(socket: &mut WebSocket, user: &SocialUser) -> Result<(), ()> {
+    let mut frame = serde_json::to_value(SocialEvent::Presence {
+        uuid: user.uuid.clone(),
+        status: user.status.unwrap_or(SocialStatus::Offline),
+    })
+    .map_err(|_| ())?;
+    let object = frame.as_object_mut().ok_or(())?;
+    object.insert("type".into(), Value::String("account_created".into()));
+    object.insert("accountCreated".into(), Value::Bool(true));
+    send_frame(socket, Message::Text(frame.to_string().into())).await
+}
 async fn socket_loop(
     mut socket: WebSocket,
     s: AppState,
@@ -715,6 +736,15 @@ async fn socket_loop(
                 let Ok(event)=event else{break;};
                 // Guests only ever see the global channel: no presence, friends or admin events.
                 if guest&&matches!(event,Notice::Presence(_)|Notice::Friend(..)|Notice::Admin){continue;}
+                if let Notice::Account(request)=event{
+                    if request!=me{continue;}
+                    let viewer=me.clone();
+                    match chat.run_wait(move|db,chat|db.user(&viewer,&viewer,chat)).await{
+                        Ok(user)=>if send_own_account(&mut socket,&user).await.is_err(){break;},
+                        Err(_)=>break,
+                    }
+                    continue;
+                }
                 let viewer=me.clone();
                 let event=chat.run_wait(move|db,chat|{
                     let e=match event{
@@ -725,6 +755,7 @@ async fn socket_loop(
                         }
                         Notice::Friend(a,b) if a==viewer||b==viewer=>{let peer=if a==viewer{b}else{a};Some(match db.friend(&viewer,&peer,chat){Ok(friend)=>SocialEvent::Friend{friend},Err(_)=>SocialEvent::FriendRemoved{uuid:peer}})},
                         Notice::Admin if db.role(&viewer)?==SocialRole::Admin=>Some(SocialEvent::Admin{state:db.health(chat)?}),
+                        Notice::Account(_)=>None,
                         _=>None,
                     };Ok(e)
                 }).await;

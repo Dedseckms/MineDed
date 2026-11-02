@@ -1,5 +1,5 @@
 //! Storage health and copy/verify/switch migration. Source objects are never deleted.
-use super::{denied, internal, invalid, store::Store, Chat, Notice};
+use super::{denied, internal, invalid, store, store::Store, Chat, Notice};
 use crate::error::ApiError;
 use lc_types::social::{AdminServerState, SocialRole};
 use serde_json::Value;
@@ -50,6 +50,57 @@ impl Plan {
         Ok(())
     }
 }
+impl Chat {
+    /// `POST /chat/admin/create-account/{uuid}`: creates the Drasl account the
+    /// guest asked for, with the username and password of the request.
+    ///
+    /// `password` is the salted hash stored for the request, `key` the plaintext
+    /// sealed by the same salt ([`super::store::unseal_password`]). The Drasl
+    /// call runs outside the store lock; only a confirmed account is recorded.
+    pub(super) async fn create_account(
+        self: &Arc<Self>,
+        me: String,
+        request: String,
+        body: &Value,
+    ) -> Result<(), ApiError> {
+        let key = body["key"].as_str().unwrap_or_default().to_owned();
+        let request = store::uuid(&request)?;
+        let payload = self
+            .run({
+                let request = request.clone();
+                let key = key.clone();
+                let actor = me.clone();
+                move |db, _| {
+                    // Unknown callers lack the admin row: same error as a non-admin.
+                    if db.role(&actor).ok() != Some(SocialRole::Admin) {
+                        return Err(denied());
+                    }
+                    if db.account_created_state(&request)? {
+                        return Err(conflict("account already created"));
+                    }
+                    let (username, stored) = db
+                        .account_credentials(&request)?
+                        .ok_or_else(|| ApiError::not_found("no such account request"))?;
+                    let password = store::unseal_password(&request, &stored, &key)?;
+                    Ok((username, password, stored))
+                }
+            })
+            .await?;
+        let (username, password, sealed) = payload;
+        let account = self.directory.create_user(&username, &password).await?;
+        if !account.eq_ignore_ascii_case(&username) {
+            eprintln!("hub: Drasl created account {account} for a different request name");
+        }
+        self.run({
+            let request = request.clone();
+            move |db, _| db.request_served(&me, &request, &sealed, &account)
+        })
+        .await?;
+        let _ = self.events.send(Notice::Account(request));
+        Ok(())
+    }
+}
+
 impl Chat {
     pub(super) async fn start_migration(
         self: &Arc<Self>,
