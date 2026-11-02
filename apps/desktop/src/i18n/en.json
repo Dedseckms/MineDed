@@ -399,7 +399,9 @@
       "vpnNotRunning": "The VPN is off. Turn on the VPN to check the ping.",
       "hostTooOld": "The host has an old launcher version — ask them to update.",
       "packRoomBusy": "Leave the current room before downloading a shared pack."
-    }
+    },
+    "serverRejected": "The server rejected the file",
+    "serverRejectedHint": "The server reason is shown below. Often the size or the image format."
   },
   "dialog": {
     "png": "PNG image",
