@@ -711,6 +711,8 @@ struct PackJob {
     version: ContentVersion,
     kind: ContentKind,
     title: String,
+    /// Provider page slug of the project (project link).
+    slug: String,
     /// Download and the hashes it must match.
     url: String,
     sha1: String,
@@ -1045,6 +1047,7 @@ impl Inner {
                     dest: safe_join(&staging, &rel)?,
                     kind: project.kind,
                     title,
+                    slug: project.slug.clone(),
                     version,
                     url,
                     sha1,
@@ -1111,7 +1114,7 @@ impl Inner {
                         version_id: job.version.version_id,
                         title: Some(job.title),
                         version_number: Some(job.version.version_number),
-                        slug: None,
+                        slug: Some(job.slug.clone()),
                         sha1: Some(actual),
                         sha512: Some(sha512),
                         size: Some(job.version.size),
@@ -1740,6 +1743,7 @@ mod tests {
             },
             kind: ContentKind::Mod,
             title: "Mod".into(),
+            slug: "mod".into(),
             url: "https://edge.forgecdn.net/files/1/1/a.jar".into(),
             sha1: "0".repeat(40),
             sha512: None,
