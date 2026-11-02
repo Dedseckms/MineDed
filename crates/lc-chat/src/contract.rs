@@ -125,6 +125,14 @@ pub trait ChatService: Send + Sync {
     async fn session(&self) -> AppResult<Option<SocialUser>> {
         Ok(None)
     }
+    /// Avatar bytes of a player as a `data:` URL (WebP, bounded), or an error
+    /// when the player has no avatar.
+    async fn avatar_preview(&self, uuid: &str) -> AppResult<String> {
+        let _ = uuid;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::avatar_preview",
+        ))
+    }
     /// Original attachment bytes as a `data:` URL for the full-screen viewer;
     /// bounded and decoded natively, never exposed as a public hub URL.
     async fn attachment_original(&self, id: &str) -> AppResult<String> {

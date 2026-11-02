@@ -194,8 +194,11 @@ export const commands = {
 	bio?: string | null,
 	/**  Accent id from the fixed palette, used for the name and profile header. */
 	accent?: string | null,
+	/**  Avatar id (content hash); bytes come from `ChatService::avatar_preview`. */
+	avatar?: string | null,
 } | null, AppError>(__TAURI_INVOKE("social_session")),
 	socialAttachmentOriginal: (id: string) => typedError<string, AppError>(__TAURI_INVOKE("social_attachment_original", { id })),
+	socialAvatarPreview: (uuid: string) => typedError<string, AppError>(__TAURI_INVOKE("social_avatar_preview", { uuid })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
@@ -926,6 +929,8 @@ export type SocialUser = {
 	bio?: string | null,
 	/**  Accent id from the fixed palette, used for the name and profile header. */
 	accent?: string | null,
+	/**  Avatar id (content hash); bytes come from `ChatService::avatar_preview`. */
+	avatar?: string | null,
 };
 
 export type SortBy = "relevance" | "downloads" | "updated" | "newest";

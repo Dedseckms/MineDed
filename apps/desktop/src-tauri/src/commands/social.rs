@@ -395,3 +395,9 @@ pub async fn social_attachment_original(
 ) -> AppResult<String> {
     state.social.attachment_original(&id).await
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn social_avatar_preview(state: State<'_, AppState>, uuid: String) -> AppResult<String> {
+    state.social.avatar_preview(&uuid).await
+}
