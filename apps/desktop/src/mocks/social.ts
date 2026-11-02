@@ -162,6 +162,14 @@ export function createSocialMocks(
   };
   const targetName = (uuid: string) =>
     uuid === SOCIAL_PEER.uuid ? SOCIAL_PEER.name : uuid;
+  // Like the hub: a real account can open a direct chat with anyone it may message.
+  const directable = (user: SocialUser): SocialUser => ({
+    ...user,
+    isBlocked: blocked.has(user.uuid),
+    isFriend: friends.some((f) => f.state === "friends"),
+    canMessage: !blocked.has(user.uuid),
+    canInvite: !blocked.has(user.uuid) && (!self?.guest || user.guest === true),
+  });
   const userById = (uuid: string): SocialUser | null => {
     if (self?.uuid === uuid) return self;
     if (SOCIAL_PEER.uuid === uuid) return peer();
@@ -257,13 +265,7 @@ export function createSocialMocks(
   return {
     socialConnect: async (account) => {
       const value = ctx.findAccount(account);
-      if (
-        !value ||
-        value.kind !== "yggdrasil" ||
-        !value.valid ||
-        value.server?.includes("ely.by")
-      )
-        return denied();
+      if (!value || value.valid === false) return denied();
       self = {
         uuid: value.uuid.replaceAll("-", ""),
         name: value.name,
@@ -318,21 +320,24 @@ export function createSocialMocks(
         ? remove(id)
         : denied(),
     socialOpenDirect: async (uuid) => {
-      if (!self || uuid !== SOCIAL_PEER.uuid || blocked.has(uuid))
-        return denied();
-      const id = `dm:${[self.uuid, uuid].sort().join(":")}`;
+      if (!self || uuid === self.uuid) return denied();
+      const user = userById(uuid);
+      if (!user || blocked.has(uuid)) return denied();
+      // A plain registered player may not DM another player who refuses messages.
+      if (!self.guest && !user.guest && !user.canMessage) return denied();
+      const id = `dm:${[self.uuid, user.uuid].sort().join(":")}`;
       let channel = channels.find((c) => c.id === id);
       if (!channel) {
         channel = {
           id,
           kind: "direct",
-          peer: peer(),
+          peer: directable(user),
           lastMessage: null,
           unread: 0,
         };
         channels.push(channel);
       }
-      return ok(structuredClone(channel));
+      return ok({ ...structuredClone(channel), peer: directable(user) });
     },
     socialSearchUsers: async (query) =>
       self
