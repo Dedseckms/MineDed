@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -39,6 +40,11 @@ use url::Url;
 const MAX_FILE: usize = 10 * 1024 * 1024;
 const MAX_JSON: usize = 4 * 1024 * 1024;
 const MAX_AVATAR: u64 = 256 * 1024;
+/// Hub avatars are re-encoded to a 256×256 WebP; anything bigger is refused.
+const MAX_AVATAR_PREVIEW: usize = 1024 * 1024;
+/// Avatar previews kept in process memory; bytes are never written to disk.
+const AVATAR_CACHE_ENTRIES: usize = 64;
+const AVATAR_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DISPLAY_NAME: usize = 24;
 const MAX_BIO: usize = 120;
 const MAX_ACCENT: usize = 16;
@@ -60,6 +66,104 @@ fn thumbnail_rejects_active_content_and_wrong_container() {
     assert!(thumbnail_data_url(b"RIFF0000WAVE").is_err());
     assert!(thumbnail_data_url(b"RIFF").is_err());
     assert!(thumbnail_data_url(b"RIFF0000WEBP").is_ok());
+}
+
+#[test]
+fn avatar_cache_is_bounded_and_evicts_the_least_recently_used() {
+    let mut cache = AvatarCache::new(4, 1024);
+    for i in 0..10 {
+        cache.insert(format!("k{i}"), format!("data:image/webp;base64,{i}"));
+    }
+    assert_eq!(cache.len(), 4);
+    assert!(cache.get("k0").is_none());
+    assert!(cache.get("k9").is_some());
+    // Reading an entry keeps it alive, so the next insert evicts its neighbour.
+    cache.get("k6");
+    cache.insert("k10".into(), "data:image/webp;base64,x".into());
+    assert!(cache.get("k6").is_some());
+    assert!(cache.get("k7").is_none());
+
+    // The byte budget also holds: one oversized preview is never cached.
+    let mut small = AvatarCache::new(64, 32);
+    small.insert("big".into(), "x".repeat(64));
+    assert_eq!(small.len(), 0);
+    small.insert("a".into(), "a".repeat(20));
+    small.insert("b".into(), "b".repeat(20));
+    assert_eq!(small.len(), 1);
+    assert!(small.get("b").is_some());
+}
+
+/// Bounded least-recently-used cache of encoded avatar previews.
+///
+/// Avatars are only ever held in process memory for as long as they are used:
+/// the oldest entry is dropped as soon as either the entry or the byte budget
+/// is exceeded, and the whole cache is cleared whenever the session changes.
+struct AvatarCache {
+    max_entries: usize,
+    max_bytes: usize,
+    bytes: usize,
+    tick: u64,
+    entries: HashMap<String, (String, u64)>,
+}
+
+impl AvatarCache {
+    fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            max_entries,
+            max_bytes,
+            bytes: 0,
+            tick: 0,
+            entries: HashMap::new(),
+        }
+    }
+    /// Returns the cached preview and marks the entry as freshly used.
+    fn get(&mut self, key: &str) -> Option<String> {
+        self.tick = self.tick.wrapping_add(1);
+        let tick = self.tick;
+        let entry = self.entries.get_mut(key)?;
+        entry.1 = tick;
+        Some(entry.0.clone())
+    }
+    fn insert(&mut self, key: String, value: String) {
+        if value.len() > self.max_bytes {
+            // A single oversized preview is served but never cached.
+            return;
+        }
+        self.tick = self.tick.wrapping_add(1);
+        if let Some((old, _)) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(old.len());
+        }
+        self.bytes += value.len();
+        self.entries.insert(key, (value, self.tick));
+        self.trim();
+    }
+    fn forget(&mut self, key: &str) {
+        if let Some((old, _)) = self.entries.remove(key) {
+            self.bytes = self.bytes.saturating_sub(old.len());
+        }
+    }
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+    }
+    /// Evicts the least recently used entries until both budgets hold.
+    fn trim(&mut self) {
+        while self.entries.len() > self.max_entries || self.bytes > self.max_bytes {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, tick))| *tick)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.forget(&oldest);
+        }
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 fn invalid(reason: &str) -> AppError {
@@ -261,6 +365,8 @@ pub struct ChatClient {
     live: RwLock<Option<Live>>,
     /// Identity of the current session (returned by `session()`).
     me: RwLock<Option<SocialUser>>,
+    /// Bounded in-memory cache of avatar previews for the current session.
+    avatars: StdMutex<AvatarCache>,
     /// Lazily opened keyring store for the persisted guest token.
     tokens: OnceLock<Arc<dyn TokenStore>>,
     lifecycle: Mutex<()>,
@@ -285,6 +391,7 @@ impl ChatClient {
             observer,
             live: RwLock::new(None),
             me: RwLock::new(None),
+            avatars: StdMutex::new(AvatarCache::new(AVATAR_CACHE_ENTRIES, AVATAR_CACHE_BYTES)),
             tokens: OnceLock::new(),
             lifecycle: Mutex::new(()),
         }
@@ -335,6 +442,7 @@ impl ChatClient {
     }
     /// Tears down the current session (if any), its socket and cached history.
     async fn shutdown_current(&self) {
+        self.clear_avatar_cache();
         if let Some(old) = self.live.write().await.take() {
             old.session.cancel.cancel();
             old.task.abort();
@@ -344,6 +452,8 @@ impl ChatClient {
     }
     /// Builds a session against the configured hub; the heartbeat is armed too.
     async fn start_session(&self, credential: Credential, seed: &str) -> AppResult<Arc<Session>> {
+        // Preview bytes belong to the previous session and are dropped with it.
+        self.clear_avatar_cache();
         start_heartbeat(
             self.accounts.clone(),
             self.settings.clone(),
@@ -443,12 +553,65 @@ impl ChatClient {
                 .await;
         }
     }
-    /// Avatar of `uuid` fetched from the hub as a `data:` URL.
-    pub async fn avatar_preview(&self, uuid: &str) -> AppResult<String> {
-        let s = self.current_session().await?;
-        let url = endpoint(&s.base, &["avatar", uuid])?;
-        image_data_url(&s, self.token(&s).await?, url, self.downloader.as_ref()).await
+    /// Cached preview for `key`, marked as recently used.
+    fn cached_avatar(&self, key: &str) -> Option<String> {
+        self.avatars.lock().ok()?.get(key)
     }
+    /// Stores a preview, evicting the least recently used entry when full.
+    fn remember_avatar(&self, key: String, data: String) {
+        if let Ok(mut cache) = self.avatars.lock() {
+            cache.insert(key, data);
+        }
+    }
+    /// Drops the preview of `uuid` (own avatar changed or was removed).
+    fn forget_avatar(&self, base: &Url, uuid: &str) {
+        if let Ok(mut cache) = self.avatars.lock() {
+            cache.forget(&avatar_key(base, uuid));
+        }
+    }
+    fn clear_avatar_cache(&self) {
+        if let Ok(mut cache) = self.avatars.lock() {
+            cache.clear();
+        }
+    }
+}
+
+/// Cache key: the hub origin plus the avatar owner, so a hub switch never
+/// serves a preview fetched from another server.
+fn avatar_key(base: &Url, uuid: &str) -> String {
+    format!("{}|{uuid}", base.as_str())
+}
+
+/// Fetches an avatar and encodes it as a `data:` URL; bounded to 1 MiB and
+/// restricted to image types.
+async fn avatar_data_url(
+    s: &Session,
+    token: Secret,
+    url: Url,
+    downloader: &dyn Downloader,
+) -> AppResult<String> {
+    let response = tokio::select! {
+        _ = s.cancel.cancelled() => return Err(cancelled()),
+        r = downloader.client(Route::Auto).get(url).bearer_auth(token.expose()).send() => r.map_err(|_| network())?,
+    };
+    let response = checked(response, &s.cancel).await?;
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+    // Only raster image types: SVG is active content and must never be inlined.
+    if !mime.starts_with("image/") || mime == "image/svg+xml" {
+        return Err(invalid("avatarType"));
+    }
+    let bytes = bounded(response, MAX_AVATAR_PREVIEW, &s.cancel).await?;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 /// Fetches an image and encodes it for the UI; never returns a public URL.
@@ -1202,12 +1365,16 @@ impl ChatService for ChatClient {
         let user: SocialUser = tokio::select! { _ = sink.cancel_token().cancelled() => return Err(cancelled()), r = async { decode(checked(response, &s.cancel).await?, &s.cancel).await } => r? };
         sink.check_cancelled()?;
         sink.progress(size, Some(size), "chat.upload");
+        // The stored preview is stale now; the next call fetches the new one.
+        self.forget_avatar(&s.base, &user.uuid);
         Ok(user)
     }
     async fn clear_avatar(&self) -> AppResult<SocialUser> {
         let s = self.full_session().await?;
         let response = self.request(&s, Method::DELETE, &["avatar"], None).await?;
-        decode(response, &s.cancel).await
+        let user: SocialUser = decode(response, &s.cancel).await?;
+        self.forget_avatar(&s.base, &user.uuid);
+        Ok(user)
     }
     async fn presence(&self) -> AppResult<PresenceSummary> {
         // Public endpoint: no session or account is required.
@@ -1249,6 +1416,27 @@ impl ChatService for ChatClient {
         self.spawn_socket(session).await;
         *self.me.write().await = Some(user.clone());
         Ok(Some(user))
+    }
+    /// Avatar bytes of a player as a `data:` URL (WebP, bounded), or an error
+    /// when the player has no avatar.
+    ///
+    /// Previews live in a bounded in-memory cache and are never written to disk
+    /// or to the keyring; the cache is dropped when the session changes.
+    async fn avatar_preview(&self, uuid: &str) -> AppResult<String> {
+        let uuid = uuid.trim();
+        if uuid.is_empty() || uuid.len() > 128 || uuid.chars().any(char::is_control) {
+            return Err(invalid("uuid"));
+        }
+        let s = self.current_session().await?;
+        let key = avatar_key(&s.base, uuid);
+        if let Some(cached) = self.cached_avatar(&key) {
+            return Ok(cached);
+        }
+        let url = endpoint(&s.base, &["avatar", uuid])?;
+        let data =
+            avatar_data_url(&s, self.token(&s).await?, url, self.downloader.as_ref()).await?;
+        self.remember_avatar(key, data.clone());
+        Ok(data)
     }
     /// Original image as a `data:` URL for the full-screen viewer; only image
     /// types are returned and the size is bounded in Rust.
