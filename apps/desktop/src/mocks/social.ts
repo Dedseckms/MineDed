@@ -13,10 +13,20 @@ import type {
   commands,
 } from "../bindings";
 import type { NetMockContext } from "./net";
-import { canModerate, privacyOptions } from "../lib/social";
+import { canModerate, initials, privacyOptions, userHue } from "../lib/social";
 import { ACCENTS, MAX_BIO, MAX_DISPLAY_NAME } from "../lib/socialProfile";
 
 export const MOCK_ONLINE = 12;
+
+/** Stand-in picture: the hub serves a webp, the mock an inline SVG. */
+function mockAvatarDataUrl(user: SocialUser): string {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">` +
+    `<rect width="64" height="64" fill="hsl(${userHue(user.uuid)} 58% 42%)"/>` +
+    `<text x="32" y="43" text-anchor="middle" font-family="sans-serif" font-size="26" fill="#fff">` +
+    `${initials(user.name)}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
 
 type Commands = typeof commands;
 const ok = <T>(data: T) => ({ status: "ok" as const, data });
@@ -45,6 +55,7 @@ export const SOCIAL_PEER: SocialUser = {
   displayName: null,
   bio: null,
   accent: null,
+  avatar: "mock-avatar-1",
 };
 
 /** Stateful social service. `role` is injectable for authorization tests only. */
@@ -127,6 +138,11 @@ export function createSocialMocks(
   };
   const targetName = (uuid: string) =>
     uuid === SOCIAL_PEER.uuid ? SOCIAL_PEER.name : uuid;
+  const userById = (uuid: string): SocialUser | null => {
+    if (self?.uuid === uuid) return self;
+    if (SOCIAL_PEER.uuid === uuid) return peer();
+    return friends.find((f) => f.user.uuid === uuid)?.user ?? null;
+  };
   const clients = (): PresenceClient[] => {
     const since = new Date(Date.now() - 900_000).toISOString();
     return [
@@ -437,12 +453,24 @@ export function createSocialMocks(
           "tasks.chatAvatar",
           ch,
           [{ stage: "chat.upload", total: 256 * 1024 }],
-          () => null,
+          () => {
+            if (self) self.avatar = `mock-avatar-${++seq}`;
+            return null;
+          },
         ),
       );
     },
-    socialAvatarClear: async () =>
-      self && self.role !== "guest" ? ok({ ...self }) : denied(),
+    socialAvatarClear: async () => {
+      if (!self || self.role === "guest") return denied();
+      self.avatar = null;
+      return ok({ ...self });
+    },
+    socialAvatarPreview: async (uuid) => {
+      if (!self) return denied();
+      const user = userById(uuid);
+      if (!user?.avatar) return invalid("mock: no avatar");
+      return ok(mockAvatarDataUrl(user));
+    },
     socialPresence: async () => ok({ online: 12 }),
     socialAdminPresence: async () =>
       self?.role === "admin"

@@ -170,6 +170,7 @@ pub fn run() {
                 });
             }
             app.manage(state);
+            commands::app::setup_tray(app.handle());
             commands::app::spawn_auto_check(app.handle());
             Ok(())
         })

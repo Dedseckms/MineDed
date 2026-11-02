@@ -78,6 +78,9 @@ pub struct SocialUser {
     /// Accent id from the fixed palette, used for the name and profile header.
     #[serde(default)]
     pub accent: Option<String>,
+    /// Avatar id (content hash); bytes come from `ChatService::avatar_preview`.
+    #[serde(default)]
+    pub avatar: Option<String>,
 }
 
 /// Own-profile edit. `None` keeps a field, `Some("")` clears it.

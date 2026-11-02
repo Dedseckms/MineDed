@@ -42,6 +42,11 @@ export const commands = {
 	instanceImport: (path: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_import", { path, onEvent })),
 	/**  Installs a Modrinth modpack as a new instance (`versionId` null = latest; CurseForge is disabled). */
 	modpackInstall: (source: ContentSourceKind, projectId: string, versionId: string | null, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("modpack_install", { source, projectId, versionId, onEvent })),
+	/**
+	 *  Pack files of the last import that must be downloaded by hand, with a link
+	 *  to this exact file version for the pack's game version and loader.
+	 */
+	instanceManualDownloads: (id: InstanceId) => typedError<ManualDownload[], AppError>(__TAURI_INVOKE("instance_manual_downloads", { id })),
 	instanceExport: (id: InstanceId, format: PackFormat, path: string, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_export", { id, format, path, onEvent })),
 	accountList: () => typedError<Account[], AppError>(__TAURI_INVOKE("account_list")),
 	accountOfflineAdd: (name: string) => typedError<Account, AppError>(__TAURI_INVOKE("account_offline_add", { name })),
@@ -194,13 +199,18 @@ export const commands = {
 	bio?: string | null,
 	/**  Accent id from the fixed palette, used for the name and profile header. */
 	accent?: string | null,
+	/**  Avatar id (content hash); bytes come from `ChatService::avatar_preview`. */
+	avatar?: string | null,
 } | null, AppError>(__TAURI_INVOKE("social_session")),
 	socialAttachmentOriginal: (id: string) => typedError<string, AppError>(__TAURI_INVOKE("social_attachment_original", { id })),
+	socialAvatarPreview: (uuid: string) => typedError<string, AppError>(__TAURI_INVOKE("social_avatar_preview", { uuid })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
 	taskCancel: (id: TaskId) => typedError<null, AppError>(__TAURI_INVOKE("task_cancel", { id })),
 	appVersion: () => __TAURI_INVOKE<string>("app_version"),
+	/**  Quits the app: stops the VPN, rooms and voice first, then exits. */
+	appQuit: () => __TAURI_INVOKE<void>("app_quit"),
 	updateCheck: () => typedError<{
 	version: string,
 	currentVersion: string,
@@ -556,6 +566,8 @@ export type ManualDownload = {
 	fileName: string,
 	/**  Page the user must open in a browser. */
 	url: string,
+	/**  Human-readable project title when the source knows it. */
+	title?: string | null,
 };
 
 export type MemoryCfg = {
@@ -776,6 +788,11 @@ export type Settings = {
 	/**  Manual proxy; `None` = direct (or built-in VPN when enabled). */
 	proxy: ProxyCfg | null,
 	closeOnLaunch: boolean,
+	/**
+	 *  Closing the window hides it into the tray instead of quitting; the VPN
+	 *  and sidecars keep running. Older settings files default to `true`.
+	 */
+	closeToTray?: boolean,
 	autoUpdate: boolean,
 	/**  Hub API root, e.g. `https://mc.example.ru/api/v1`; empty = [`DEFAULT_HUB_URL`]. */
 	hubUrl: string,
@@ -926,6 +943,8 @@ export type SocialUser = {
 	bio?: string | null,
 	/**  Accent id from the fixed palette, used for the name and profile header. */
 	accent?: string | null,
+	/**  Avatar id (content hash); bytes come from `ChatService::avatar_preview`. */
+	avatar?: string | null,
 };
 
 export type SortBy = "relevance" | "downloads" | "updated" | "newest";

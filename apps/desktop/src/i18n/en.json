@@ -223,7 +223,9 @@
       "cave": "Ore cave",
       "desert": "Desert dusk",
       "cherry": "Cherry grove"
-    }
+    },
+    "closeToTray": "Close to tray",
+    "closeToTrayHint": "The close button hides the window instead of quitting: VPN and rooms keep running. Quit from the tray menu."
   },
   "updates": {
     "available": "Version {{version}} is available",
@@ -966,11 +968,9 @@
     "history": "Message history",
     "older": "Load older messages",
     "empty": "No messages yet",
-    "markRead": "Mark as read",
     "deleted": "Message deleted",
     "report": "Report",
     "moderateDelete": "Remove as moderator",
-    "saveFile": "Save · {{size}} KiB",
     "roomInvite": "Invitation to room {{code}}",
     "join": "Join",
     "pack": "{{loader}} {{mc}} · {{mods}} mods",
@@ -1072,6 +1072,8 @@
       }
     },
     "write": "Message",
+    "openProfile": "Profile",
+    "inviteNoRoom": "Create a room or join by code first — then you can invite a friend.",
     "invite": "Invite to room",
     "addFriend": "Add friend",
     "removeFriend": "Remove friend",
@@ -1096,10 +1098,9 @@
     "backupError": "Backup failed. Check the server.",
     "migrating": "Moving storage: {{percent}}%",
     "storageHint": "The new disk or external storage must be configured on the server first.",
-    "showPreview": "Show preview",
-    "hidePreview": "Hide preview",
     "openFullscreen": "Open full screen",
     "photoViewer": "Photo viewer",
+    "previewUnavailable": "Preview unavailable",
     "online": "In the launcher now: {{n}}",
     "guestBadge": "guest",
     "guestReadOnly": "Chatting is only available with a server account.",

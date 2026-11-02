@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{Instance, PackFormat, PerfPreset};
 use lc_types::{AppResult, InstanceId};
@@ -25,6 +25,12 @@ pub trait ContentSource: Send + Sync {
 /// Content of one instance; dispatches to the right `ContentSource`.
 #[async_trait]
 pub trait ContentService: Send + Sync {
+    /// Files of the last pack import that must be downloaded by hand, with a
+    /// link to this exact file version. Empty when nothing is outstanding.
+    async fn manual_downloads(&self, instance: &InstanceId) -> AppResult<Vec<ManualDownload>> {
+        let _ = instance;
+        Ok(Vec::new())
+    }
     async fn search(&self, query: SearchQuery) -> AppResult<SearchPage>;
     async fn versions(
         &self,

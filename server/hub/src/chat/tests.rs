@@ -1155,7 +1155,7 @@ async fn presence_counts_unique_clients_and_expires() {
     );
     // Two missed heartbeats drop a client.
     let future = Instant::now() + presence::PRESENCE_TTL + Duration::from_secs(1);
-    chat.beat_at(&c, presence::Kind::Anonymous, future).unwrap();
+    chat.beat_at(&c, future).unwrap();
     assert_eq!(chat.online_at(future).online, 1);
     assert_eq!(chat.online().online, 2 + 1);
 }
@@ -1537,21 +1537,102 @@ async fn avatar_download_serves_the_stored_webp_to_other_players() {
 }
 
 #[tokio::test]
-async fn admin_presence_lists_beats_and_named_sockets() {
+async fn counter_counts_unique_client_ids_and_ignores_sockets() {
+    let (_app, chat, _temp) = app_with_chat();
+    let client = uuid::Uuid::new_v4().to_string();
+    // The same launcher beats twice: one client id, one count.
+    chat.beat(&client, "anonymous").unwrap();
+    chat.beat(&client, "anonymous").unwrap();
+    assert_eq!(chat.online().online, 1);
+    let other = uuid::Uuid::new_v4().to_string();
+    chat.beat(&other, "yggdrasil").unwrap();
+    assert_eq!(chat.online().online, 2);
+    // A chat socket of a launcher that already beats is not a second launcher.
+    chat.presence.lock().unwrap().insert(
+        identity(1).user_id,
+        Session {
+            sockets: 1,
+            status: SocialStatus::Online,
+            since: SystemTime::now(),
+        },
+    );
+    assert_eq!(chat.online().online, 2);
+}
+
+#[tokio::test]
+async fn admin_presence_lists_only_authenticated_sessions() {
     let (app, chat, _temp) = app_with_chat();
-    let (status, _) = request_abs(
-        &app,
-        "POST",
-        "/api/v1/presence/beat",
-        None,
-        json!({"clientId":uuid::Uuid::new_v4().to_string(),"kind":"offline"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let client = uuid::Uuid::new_v4().to_string();
+    for _ in 0..2 {
+        let (status, _) = request_abs(
+            &app,
+            "POST",
+            "/api/v1/presence/beat",
+            None,
+            json!({"clientId":client,"kind":"anonymous"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
     {
         let db = chat.store.lock().unwrap();
         db.identify(&identity(1), true, None).unwrap();
+        // A socket of a profile that never beat is still a named client.
+        chat.presence.lock().unwrap().insert(
+            identity(1).user_id,
+            Session {
+                sockets: 1,
+                status: SocialStatus::Online,
+                since: SystemTime::now(),
+            },
+        );
+        let listing = presence::admin_presence(&chat, &db).unwrap();
+        assert_eq!(listing.online, 1);
+        assert_eq!(listing.clients.len(), 1);
+        assert_eq!(listing.clients[0].label, "Player1");
+        assert_eq!(listing.clients[0].kind, "yggdrasil");
+        assert!(listing.clients[0].since.ends_with('Z'));
     }
+    // A guest keeps its own kind.
+    let guest = {
+        let db = chat.store.lock().unwrap();
+        db.guest_login("Offline", &chat).unwrap().user.uuid
+    };
+    chat.presence.lock().unwrap().insert(
+        guest,
+        Session {
+            sockets: 1,
+            status: SocialStatus::Online,
+            since: SystemTime::now(),
+        },
+    );
+    // A socket whose profile row is gone cannot be named and is skipped.
+    chat.presence.lock().unwrap().insert(
+        identity(2).user_id,
+        Session {
+            sockets: 1,
+            status: SocialStatus::Online,
+            since: SystemTime::now(),
+        },
+    );
+    let listing = {
+        let db = chat.store.lock().unwrap();
+        presence::admin_presence(&chat, &db).unwrap()
+    };
+    assert_eq!(listing.clients.len(), 2);
+    assert!(listing
+        .clients
+        .iter()
+        .any(|client| client.label == "Offline" && client.kind == "guest"));
+    // Without any authenticated session the list is empty while the counter is not.
+    chat.presence.lock().unwrap().clear();
+    let listing = {
+        let db = chat.store.lock().unwrap();
+        presence::admin_presence(&chat, &db).unwrap()
+    };
+    assert!(listing.clients.is_empty());
+    assert_eq!(listing.online, 1);
+    // The endpoint stays admin-only: the Drasl directory is not configured here.
     let (status, error) = request_abs(
         &app,
         "GET",
@@ -1560,16 +1641,126 @@ async fn admin_presence_lists_beats_and_named_sockets() {
         Value::Null,
     )
     .await;
-    // `good` is not an admin for the hub: the Drasl directory is not configured.
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["code"], "permissionDenied");
-    let listing = {
-        let db = chat.store.lock().unwrap();
-        presence::admin_presence(&chat, &db).unwrap()
-    };
-    assert_eq!(listing.online, 1);
-    assert_eq!(listing.clients.len(), 1);
-    assert_eq!(listing.clients[0].label, "anonymous");
-    assert_eq!(listing.clients[0].kind, "guest");
-    assert!(listing.clients[0].since.ends_with('Z'));
+}
+
+fn app_at(root: &std::path::Path) -> (Router, Arc<Chat>) {
+    let state = AppState::new(crate::Config::default(), Arc::new(Fake))
+        .with_chat(Chat::open(root).unwrap());
+    let chat = state.chat.clone().unwrap();
+    (crate::router(state), chat)
+}
+fn avatar_png() -> Vec<u8> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(64, 64)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    png.into_inner()
+}
+
+#[tokio::test]
+async fn avatar_id_is_filled_in_profile_search_and_messages() {
+    let (app, _chat, _temp) = app_with_chat();
+    let (status, bytes) = request_bytes(
+        &app,
+        "PUT",
+        "/api/v1/chat/avatar",
+        Some("Bearer good"),
+        Body::from(avatar_png()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let me: SocialUser = serde_json::from_slice(&bytes).unwrap();
+    let avatar = me.avatar.clone().expect("own avatar id");
+    assert_eq!(avatar.len(), 64);
+    // Profile of the same player seen by somebody else.
+    let (status, profile) = request_abs(
+        &app,
+        "GET",
+        &format!("/api/v1/chat/users/{}", identity(1).user_id),
+        Some("Bearer other"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(profile["avatar"], avatar);
+    // Search returns the same avatar id.
+    let (status, found) = request_abs(
+        &app,
+        "GET",
+        "/api/v1/chat/users?q=Player1",
+        Some("Bearer other"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let found: Vec<SocialUser> = serde_json::from_value(found).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].uuid, identity(1).user_id);
+    assert_eq!(found[0].avatar.as_deref(), Some(avatar.as_str()));
+    // Message authors carry the same avatar id.
+    let (status, _) = request(
+        &app,
+        "POST",
+        "channels/global/messages",
+        true,
+        json!({"type":"text","text":"hello"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, history) = request_abs(
+        &app,
+        "GET",
+        "/api/v1/chat/channels/global/messages",
+        Some("Bearer other"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        history["messages"][0]["author"]["avatar"],
+        Value::String(avatar.clone())
+    );
+}
+
+#[tokio::test]
+async fn avatar_uploaded_before_a_restart_is_still_served() {
+    let temp = Temp::new();
+    let (app, chat) = app_at(&temp.0);
+    let (status, bytes) = request_bytes(
+        &app,
+        "PUT",
+        "/api/v1/chat/avatar",
+        Some("Bearer good"),
+        Body::from(avatar_png()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let stored: SocialUser = serde_json::from_slice(&bytes).unwrap();
+    let avatar = stored.avatar.clone().expect("own avatar id");
+    drop(app);
+    drop(chat);
+    // A new hub process over the same directory.
+    let (app, _chat) = app_at(&temp.0);
+    let (status, profile) = request_abs(
+        &app,
+        "GET",
+        &format!("/api/v1/chat/users/{}", identity(1).user_id),
+        Some("Bearer other"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(profile["avatar"], avatar);
+    let (status, bytes) = request_bytes(
+        &app,
+        "GET",
+        &format!("/api/v1/chat/avatar/{}", identity(1).user_id),
+        Some("Bearer other"),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(bytes.starts_with(b"RIFF"), "WebP container");
 }

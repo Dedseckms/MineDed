@@ -11,7 +11,7 @@ use lc_http::{DownloadReq, Downloader, ResourceKind};
 use lc_runtime::{Paths, ProgressSink};
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::Instance;
 use lc_types::version::LoaderKind;
@@ -557,6 +557,11 @@ impl Lookup for Inner {
 
 #[async_trait]
 impl ContentService for ContentServices {
+    async fn manual_downloads(&self, instance: &InstanceId) -> AppResult<Vec<ManualDownload>> {
+        self.inner.instances.get(*instance).await?;
+        Ok(self.inner.manual_downloads(*instance).await)
+    }
+
     async fn search(&self, query: SearchQuery) -> AppResult<SearchPage> {
         self.inner.catalog(query.source)?.search(&query).await
     }

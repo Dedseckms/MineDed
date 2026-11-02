@@ -101,6 +101,7 @@ fn user() -> SocialUser {
         display_name: None,
         bio: None,
         accent: None,
+        avatar: None,
     }
 }
 fn guest_user() -> SocialUser {
@@ -169,12 +170,35 @@ async fn rest(
     if path.ends_with("/me") {
         return Json(user()).into_response();
     }
-    if path.contains("/chat/avatar/") {
-        return (
-            [(axum::http::header::CONTENT_TYPE, "image/png")],
-            b"\x89PNG".to_vec(),
-        )
-            .into_response();
+    if let Some(uuid) = path.strip_prefix("/api/v1/chat/avatar/") {
+        return match uuid {
+            "doc" => (
+                [(axum::http::header::CONTENT_TYPE, "application/pdf")],
+                b"%PDF".to_vec(),
+            )
+                .into_response(),
+            "svg" => (
+                [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+                b"<svg onload='bad()'/>".to_vec(),
+            )
+                .into_response(),
+            "big" => (
+                [(axum::http::header::CONTENT_TYPE, "image/webp")],
+                vec![0u8; MAX_AVATAR_PREVIEW + 1],
+            )
+                .into_response(),
+            "none" => StatusCode::NOT_FOUND.into_response(),
+            "webp" => (
+                [(axum::http::header::CONTENT_TYPE, "image/webp")],
+                b"RIFF0000WEBP".to_vec(),
+            )
+                .into_response(),
+            _ => (
+                [(axum::http::header::CONTENT_TYPE, "image/png")],
+                b"\x89PNG".to_vec(),
+            )
+                .into_response(),
+        };
     }
     if path.ends_with("/profile") || path.ends_with("/avatar") {
         return Json(user()).into_response();
@@ -658,4 +682,104 @@ async fn attachment_original_returns_data_urls_for_images_only() {
     );
     let avatar = f.client.avatar_preview("abcd").await.unwrap();
     assert!(avatar.starts_with("data:image/png;base64,"));
+}
+
+fn avatar_calls(server: &Server) -> usize {
+    server
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|call| call.contains("/chat/avatar/"))
+        .count()
+}
+
+#[tokio::test]
+async fn avatar_preview_returns_bounded_image_data_urls() {
+    let f = fixture().await;
+    f.client.connect(f.accounts.id).await.unwrap();
+
+    let webp = f.client.avatar_preview("webp").await.unwrap();
+    assert!(webp.starts_with("data:image/webp;base64,"));
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(webp.trim_start_matches("data:image/webp;base64,"))
+        .unwrap();
+    assert_eq!(decoded, b"RIFF0000WEBP");
+
+    // Authenticated request, avatar size limit (never the attachment one).
+    assert!(f
+        .server
+        .auths
+        .lock()
+        .unwrap()
+        .contains(&"Bearer test-bearer".to_owned()));
+    assert!(f
+        .server
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|call| call.contains("/chat/avatar/webp")));
+
+    for uuid in ["doc", "svg", "big"] {
+        let err = f.client.avatar_preview(uuid).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidInput, "{uuid}");
+    }
+    assert_eq!(
+        f.client.avatar_preview("none").await.unwrap_err().code,
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        f.client.avatar_preview("").await.unwrap_err().code,
+        ErrorCode::InvalidInput
+    );
+}
+
+#[tokio::test]
+async fn avatar_preview_cache_is_bounded_and_session_scoped() {
+    let f = fixture().await;
+    f.client.connect(f.accounts.id).await.unwrap();
+
+    // A repeated preview is served from memory, not from the hub.
+    f.client.avatar_preview("webp").await.unwrap();
+    let calls = avatar_calls(&f.server);
+    f.client.avatar_preview("webp").await.unwrap();
+    assert_eq!(avatar_calls(&f.server), calls);
+
+    // Never more entries than the cap, no matter how many players are shown.
+    for i in 0..(AVATAR_CACHE_ENTRIES * 2) {
+        f.client
+            .avatar_preview(&format!("player-{i}"))
+            .await
+            .unwrap();
+    }
+    assert_eq!(avatar_calls(&f.server), calls + AVATAR_CACHE_ENTRIES * 2);
+    assert_eq!(f.client.avatars.lock().unwrap().len(), AVATAR_CACHE_ENTRIES);
+    // The oldest entries were evicted, the newest are still cached.
+    let calls = avatar_calls(&f.server);
+    f.client
+        .avatar_preview(&format!("player-{}", AVATAR_CACHE_ENTRIES * 2 - 1))
+        .await
+        .unwrap();
+    assert_eq!(avatar_calls(&f.server), calls);
+    f.client.avatar_preview("webp").await.unwrap();
+    assert_eq!(avatar_calls(&f.server), calls + 1);
+
+    // Leaving the session drops every preview from memory.
+    f.client.disconnect().await.unwrap();
+    assert_eq!(f.client.avatars.lock().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn clearing_the_own_avatar_drops_its_cached_preview() {
+    let f = fixture().await;
+    let me = f.client.connect(f.accounts.id).await.unwrap();
+    f.client.avatar_preview(&me.uuid).await.unwrap();
+    let calls = avatar_calls(&f.server);
+    f.client.avatar_preview(&me.uuid).await.unwrap();
+    assert_eq!(avatar_calls(&f.server), calls);
+
+    f.client.clear_avatar().await.unwrap();
+    f.client.avatar_preview(&me.uuid).await.unwrap();
+    assert_eq!(avatar_calls(&f.server), calls + 1);
 }

@@ -48,6 +48,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             content::preset_apply,
             content::instance_import,
             content::modpack_install,
+            content::instance_manual_downloads,
             content::instance_export,
             // accounts
             accounts::account_list,
@@ -138,12 +139,14 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             social::social_admin_audit,
             social::social_session,
             social::social_attachment_original,
+            social::social_avatar_preview,
             settings::settings_get,
             settings::settings_set,
             tasks::tasks_list,
             tasks::task_cancel,
             // release
             app::app_version,
+            app::app_quit,
             app::update_check,
             app::update_install,
         ])

@@ -137,6 +137,10 @@ pub struct ManualDownload {
     pub file_name: String,
     /// Page the user must open in a browser.
     pub url: String,
+    /// Human-readable project title when the source knows it.
+    #[serde(default)]
+    #[specta(optional)]
+    pub title: Option<String>,
 }
 
 /// Result of dependency resolution; confirmed by the user, then installed.

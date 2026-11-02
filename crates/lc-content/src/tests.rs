@@ -1000,11 +1000,52 @@ const CF: &str = "https://relay.dedseckms.ru/api/v1/catalog/curseforge";
 
 impl Env {
     fn cf_project(&self, project: u32, class: u32, allow: bool) -> serde_json::Value {
-        let value = serde_json::json!({"id":project,"gameId":432,"classId":class,"slug":format!("p{project}"),"name":format!("Project {project}"),"allowModDistribution":allow});
+        self.cf_project_named(
+            project,
+            class,
+            allow,
+            &format!("p{project}"),
+            &format!("Project {project}"),
+        )
+    }
+    fn cf_project_named(
+        &self,
+        project: u32,
+        class: u32,
+        allow: bool,
+        slug: &str,
+        name: &str,
+    ) -> serde_json::Value {
+        let value = serde_json::json!({"id":project,"gameId":432,"classId":class,"slug":slug,"name":name,"allowModDistribution":allow});
         self.http.route(
             &format!("{CF}/mods/{project}"),
             serde_json::json!({"data":value}).to_string(),
         );
+        value
+    }
+    /// Pack files the import could not download (`manual-downloads.json`).
+    fn manual_files(&self, id: InstanceId) -> Vec<serde_json::Value> {
+        let path = self.inst.paths.instance(id).join(crate::packs::MANUAL_FILE);
+        match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                .unwrap()
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+    fn cf_file_named(
+        &self,
+        project: u32,
+        file: u32,
+        file_name: &str,
+        display_name: &str,
+    ) -> serde_json::Value {
+        let mut value = self.cf_file(project, file, serde_json::json!([]));
+        value["fileName"] = serde_json::json!(file_name);
+        value["displayName"] = serde_json::json!(display_name);
+        self.cf_register(project, &value);
         value
     }
     fn cf_file(&self, project: u32, file: u32, deps: serde_json::Value) -> serde_json::Value {
@@ -1167,6 +1208,8 @@ async fn curseforge_pack_import_remote_and_manual() {
         e.svc.list(inst.id).await.unwrap()[0].source,
         ContentSourceKind::CurseForge
     );
+    // Everything was downloadable: no manual list.
+    assert!(e.manual_files(inst.id).is_empty());
     e.cf_project(9, 4471, true);
     let mut pack = e.cf_file(9, 99, serde_json::json!([]));
     pack["fileName"] = serde_json::json!("pack.zip");
@@ -1185,14 +1228,23 @@ async fn curseforge_pack_import_remote_and_manual() {
         .await
         .unwrap();
     e.cf_project(1, 6, false);
+    // The pack still installs; the opt-out file is only listed for the user.
     let before = e.inst.map.lock().unwrap().len();
-    let error = e
+    let listed = e
         .svc
         .import(path.to_str().unwrap(), &NullSink::default())
         .await
-        .unwrap_err();
-    assert_eq!(error.code, ErrorCode::ManualDownloadRequired);
-    assert_eq!(e.inst.map.lock().unwrap().len(), before);
+        .unwrap();
+    assert_eq!(e.inst.map.lock().unwrap().len(), before + 1);
+    assert!(!e.inst.game_dir(listed.id).join("mods/11.jar").exists());
+    assert!(e.inst.game_dir(listed.id).join("config/test.txt").exists());
+    let manual = e.manual_files(listed.id);
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0]["fileName"], "11.jar");
+    assert_eq!(
+        manual[0]["url"],
+        "https://www.curseforge.com/minecraft/mc-mods/p1/files/11"
+    );
 }
 #[tokio::test]
 async fn curseforge_pack_rejects_override_traversal_and_hash_mismatch() {
@@ -1370,13 +1422,273 @@ async fn curseforge_large_pack_batches_are_bounded_and_fail_closed() {
     assert_eq!(e.inst.map.lock().unwrap().len(), 1);
     e.cf_file(65, 165, serde_json::json!([]));
     e.cf_project(65, 6, false);
+    // The opt-out file alone is listed; the other 64 are installed.
+    let listed = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    assert_eq!(e.inst.map.lock().unwrap().len(), 2);
     assert_eq!(
         e.svc
-            .import(path.to_str().unwrap(), &NullSink::default())
+            .inner
+            .scan(&e.inst.game_dir(listed.id))
+            .await
+            .unwrap()
+            .len(),
+        64
+    );
+    let manual = e.manual_files(listed.id);
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0]["fileName"], "165.jar");
+    assert_eq!(
+        manual[0]["url"],
+        "https://www.curseforge.com/minecraft/mc-mods/p65/files/165"
+    );
+}
+
+/// Modrinth search answer with one mod hit.
+fn search_hit(project: &str, slug: &str, title: &str) -> String {
+    serde_json::json!({
+        "hits": [{"project_id": project, "slug": slug, "title": title, "project_type": "mod"}],
+        "offset": 0, "total_hits": 1
+    })
+    .to_string()
+}
+
+/// A pack zip with the given manifest files and one override.
+fn pack_zip(e: &Env, name: &str, files: serde_json::Value) -> PathBuf {
+    let mut manifest = cf_manifest("overrides");
+    manifest["files"] = files;
+    let path = e._dir.path().join(name);
+    std::fs::write(
+        &path,
+        zip_bytes(
+            e._dir.path(),
+            &[
+                ("manifest.json", serde_json::to_vec(&manifest).unwrap()),
+                ("overrides/config/a.toml", b"x=1".to_vec()),
+            ],
+        ),
+    )
+    .unwrap();
+    path
+}
+
+#[tokio::test]
+async fn curseforge_unavailable_file_is_replaced_from_modrinth() {
+    let e = env();
+    e.cf_project(1, 6, true);
+    e.cf_file(1, 11, serde_json::json!([]));
+    // The same mod version is published on Modrinth under the same file name.
+    e.project("AANobbMI", "sodium", "mod");
+    let so = e.mr_version(
+        "AANobbMI",
+        "so058",
+        "sodium-fabric-0.5.8.jar",
+        &["forge"],
+        &[],
+    );
+    e.versions("AANobbMI", "sodium", std::slice::from_ref(&so));
+    e.http.route(
+        &format!("{MR}/search"),
+        search_hit("AANobbMI", "sodium", "Sodium"),
+    );
+    e.cf_project_named(2, 6, false, "sodium", "Sodium");
+    let f = e.cf_file_named(
+        2,
+        21,
+        "sodium-fabric-0.5.8.jar",
+        "sodium-fabric-mc1.20.1-0.5.8",
+    );
+    assert_eq!(f["modId"], 2);
+    let path = pack_zip(
+        &e,
+        "mix.zip",
+        serde_json::json!([
+            {"projectID":1,"fileID":11,"required":true},
+            {"projectID":2,"fileID":21,"required":true}
+        ]),
+    );
+
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    let game = e.inst.game_dir(inst.id);
+    assert!(game.join("mods/11.jar").exists());
+    assert!(game.join("mods/sodium-fabric-0.5.8.jar").exists());
+    assert!(game.join("config/a.toml").exists());
+    assert!(e.manual_files(inst.id).is_empty());
+    // The index records the Modrinth source of the substituted file.
+    let idx = crate::index::ContentIndex::load(&e.inst.paths.instance(inst.id))
+        .await
+        .unwrap();
+    let hit = &idx.files["mods/sodium-fabric-0.5.8.jar"];
+    assert_eq!(hit.source, ContentSourceKind::Modrinth);
+    assert_eq!(hit.project_id, "AANobbMI");
+    assert_eq!(hit.version_id, "so058");
+    assert_eq!(
+        idx.files["mods/11.jar"].source,
+        ContentSourceKind::CurseForge
+    );
+}
+
+#[tokio::test]
+async fn curseforge_file_without_modrinth_match_is_listed_and_pack_installs() {
+    let e = env();
+    e.cf_project(1, 6, true);
+    e.cf_file(1, 11, serde_json::json!([]));
+    // Modrinth knows the mod, but only another build of it.
+    e.project("GECK0001", "geckolib", "mod");
+    let other = e.mr_version(
+        "GECK0001",
+        "g440",
+        "geckolib-forge-1.20.1-4.4.0.jar",
+        &["forge"],
+        &[],
+    );
+    e.versions("GECK0001", "geckolib", &[other]);
+    e.http.route(
+        &format!("{MR}/search"),
+        search_hit("GECK0001", "geckolib", "GeckoLib"),
+    );
+    e.cf_project_named(2, 6, false, "geckolib", "GeckoLib");
+    e.cf_file_named(
+        2,
+        21,
+        "geckolib-forge-1.20.1-4.4.9.jar",
+        "geckolib-forge-1.20.1-4.4.9",
+    );
+    let path = pack_zip(
+        &e,
+        "partial.zip",
+        serde_json::json!([
+            {"projectID":1,"fileID":11,"required":true},
+            {"projectID":2,"fileID":21,"required":true}
+        ]),
+    );
+
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    let game = e.inst.game_dir(inst.id);
+    // The rest of the pack is installed, the missing file is only listed.
+    assert!(game.join("mods/11.jar").exists());
+    assert!(game.join("config/a.toml").exists());
+    assert!(!game.join("mods/geckolib-forge-1.20.1-4.4.9.jar").exists());
+    let manual = e.manual_files(inst.id);
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0]["fileName"], "geckolib-forge-1.20.1-4.4.9.jar");
+    assert_eq!(manual[0]["title"], "GeckoLib");
+    assert_eq!(
+        manual[0]["url"],
+        "https://www.curseforge.com/minecraft/mc-mods/geckolib/files/21"
+    );
+}
+
+#[tokio::test]
+async fn curseforge_pack_with_every_file_downloadable_needs_no_manual_list() {
+    let e = env();
+    for project in 1..=2 {
+        e.cf_project(project, 6, true);
+        e.cf_file(project, project + 10, serde_json::json!([]));
+    }
+    let path = pack_zip(
+        &e,
+        "all.zip",
+        serde_json::json!([
+            {"projectID":1,"fileID":11,"required":true},
+            {"projectID":2,"fileID":12,"required":true}
+        ]),
+    );
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    let game = e.inst.game_dir(inst.id);
+    assert!(game.join("mods/11.jar").exists());
+    assert!(game.join("mods/12.jar").exists());
+    assert!(e.manual_files(inst.id).is_empty());
+    assert!(!e
+        .inst
+        .paths
+        .instance(inst.id)
+        .join(crate::packs::MANUAL_FILE)
+        .exists());
+}
+
+#[tokio::test]
+async fn manual_downloads_are_reported_until_the_pack_is_complete() {
+    let e = env();
+    e.cf_project(1, 6, true);
+    e.cf_file(1, 11, serde_json::json!([]));
+    e.cf_project_named(2, 6, false, "geckolib", "GeckoLib");
+    e.cf_file_named(
+        2,
+        21,
+        "geckolib-forge-1.20.1-4.4.9.jar",
+        "geckolib-forge-1.20.1-4.4.9",
+    );
+    let path = pack_zip(
+        &e,
+        "partial.zip",
+        serde_json::json!([
+            {"projectID":1,"fileID":11,"required":true},
+            {"projectID":2,"fileID":21,"required":true}
+        ]),
+    );
+    let inst = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+
+    let manual = e.svc.manual_downloads(&inst.id).await.unwrap();
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0].project_id, "geckolib");
+    assert_eq!(manual[0].file_name, "geckolib-forge-1.20.1-4.4.9.jar");
+    assert_eq!(
+        manual[0].url,
+        "https://www.curseforge.com/minecraft/mc-mods/geckolib/files/21"
+    );
+    assert_eq!(manual[0].title.as_deref(), Some("GeckoLib"));
+
+    // A fully downloadable pack leaves nothing outstanding.
+    e.cf_project(3, 6, true);
+    e.cf_file(3, 31, serde_json::json!([]));
+    let path = pack_zip(
+        &e,
+        "all.zip",
+        serde_json::json!([{"projectID":3,"fileID":31,"required":true}]),
+    );
+    let full = e
+        .svc
+        .import(path.to_str().unwrap(), &NullSink::default())
+        .await
+        .unwrap();
+    assert!(e.svc.manual_downloads(&full.id).await.unwrap().is_empty());
+
+    // Unknown instance fails, a damaged list is not an error.
+    assert_eq!(
+        e.svc
+            .manual_downloads(&InstanceId::new())
             .await
             .unwrap_err()
             .code,
-        ErrorCode::ManualDownloadRequired
+        ErrorCode::NotFound
     );
-    assert_eq!(e.inst.map.lock().unwrap().len(), 1);
+    std::fs::write(
+        e.inst
+            .paths
+            .instance(inst.id)
+            .join(crate::packs::MANUAL_FILE),
+        b"{",
+    )
+    .unwrap();
+    assert!(e.svc.manual_downloads(&inst.id).await.unwrap().is_empty());
 }

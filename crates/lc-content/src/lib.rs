@@ -4,6 +4,7 @@
 mod api;
 pub mod contract;
 mod curseforge;
+mod fallback;
 mod index;
 mod local;
 mod localdeps;

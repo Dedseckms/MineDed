@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use lc_http::{DownloadReq, ResourceKind};
 use lc_runtime::ProgressSink;
-use lc_types::content::{ContentKind, ContentSourceKind};
+use lc_types::content::{ContentKind, ContentSourceKind, ContentVersion, ManualDownload};
 use lc_types::instance::{
     Instance, InstancePatch, InstanceSpec, JavaCfg, LoaderRef, MemoryCfg, PackFormat,
 };
@@ -16,15 +16,20 @@ use lc_types::{AppError, AppResult, ErrorCode, InstanceId};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::PackIo;
+use crate::fallback::{self, ManualFile, Missing};
 use crate::index::{key, ContentIndex, IndexEntry};
 use crate::service::{ContentServices, Inner};
+use crate::source::Target;
 use crate::util::{
-    ensure_no_links, file_hashes, io_err, is_link, join, parse_url, safe_join, CONTENT_DIRS,
+    ensure_no_links, file_hashes, io_err, is_link, join, kind_dir, parse_url, safe_join,
+    CONTENT_DIRS,
 };
 
 pub(crate) const MRPACK_INDEX: &str = "modrinth.index.json";
 pub(crate) const CF_MANIFEST: &str = "manifest.json";
 pub(crate) const LAUNCHER_MANIFEST: &str = "mineup-pack.json";
+/// Pack files the user has to download by hand (inside the instance dir).
+pub(crate) const MANUAL_FILE: &str = "manual-downloads.json";
 
 /// Hosts `.mrpack` downloads may come from (Modrinth spec).
 const ALLOWED_HOSTS: [&str; 4] = [
@@ -696,6 +701,20 @@ pub(crate) fn move_tree(src: &Path, dst: &Path) -> AppResult<()> {
 /// `.mrpack` file entry accepted for download: (entry, url, sha1).
 type Planned = (MrpackFile, String, String);
 
+/// One CurseForge pack file resolved to a concrete, verifiable download.
+struct PackJob {
+    /// Version actually installed: a Modrinth stand-in when the CurseForge file
+    /// may not be redistributed.
+    version: ContentVersion,
+    kind: ContentKind,
+    title: String,
+    /// Download and the hashes it must match.
+    url: String,
+    sha1: String,
+    sha512: Option<String>,
+    dest: PathBuf,
+}
+
 impl Inner {
     async fn create_instance(
         &self,
@@ -827,10 +846,15 @@ impl Inner {
             return Err(bad_pack("invalid CurseForge override prefix"));
         }
         let (mc, loader) = cf_target(&manifest)?;
+        let target = Target {
+            mc: mc.clone(),
+            loader: loader.kind,
+        };
         let staging = self.staging_dir().await?;
         let result = async {
             let mut remaining = MAX_TOTAL_BYTES;
-            let mut planned = Vec::new();
+            let mut jobs: Vec<PackJob> = Vec::new();
+            let mut manual: Vec<ManualFile> = Vec::new();
             let mut used = std::collections::HashSet::new();
             let entries: Vec<_> = manifest
                 .files
@@ -840,27 +864,57 @@ impl Inner {
                 .collect();
             for (v, project, remote) in self.curseforge.pack_entries(&entries, sink).await? {
                 sink.check_cancelled()?;
-                let url = remote.url.ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::ManualDownloadRequired,
-                        "pack file requires manual download",
-                    )
-                    .detail("file", &v.file_name)
-                    .detail("url", remote.manual_url)
-                })?;
-                let sha1 = remote
-                    .sha1
-                    .ok_or_else(|| bad_pack("CurseForge pack file has no SHA-1"))?;
+                let dir = kind_dir(project.kind)?;
+                let (version, title, url, sha1, sha512) = if v.manual_download {
+                    // Opt-out: only the same mod version from Modrinth may be
+                    // installed; otherwise the file is listed for the user.
+                    let missing = Missing::of(&v, &project);
+                    match self.modrinth_stand_in(&missing, &target, sink).await {
+                        Some(s) => (s.version, s.title, s.url, s.sha1, s.sha512),
+                        None => {
+                            manual.push(ManualFile {
+                                file_name: v.file_name.clone(),
+                                title: project.title.clone(),
+                                url: fallback::file_url(
+                                    project.kind,
+                                    &project.slug,
+                                    &v.version_id,
+                                    &remote.manual_url,
+                                ),
+                            });
+                            continue;
+                        }
+                    }
+                } else {
+                    let url = remote.url.ok_or_else(|| {
+                        AppError::new(
+                            ErrorCode::ManualDownloadRequired,
+                            "pack file requires manual download",
+                        )
+                        .detail("file", &v.file_name)
+                        .detail("url", remote.manual_url)
+                    })?;
+                    let sha1 = remote
+                        .sha1
+                        .ok_or_else(|| bad_pack("CurseForge pack file has no SHA-1"))?;
+                    (v.clone(), project.title.clone(), url, sha1, None)
+                };
                 remaining = remaining
-                    .checked_sub(v.size)
+                    .checked_sub(version.size)
                     .ok_or_else(|| bad_pack("CurseForge downloads are too large"))?;
-                let dir = crate::util::kind_dir(project.kind)?;
-                let rel = format!("{dir}/{}", v.file_name);
+                let rel = format!("{dir}/{}", version.file_name);
                 if !used.insert(rel.to_ascii_lowercase()) {
                     return Err(bad_pack("duplicate CurseForge pack file"));
                 }
-                let dest = safe_join(&staging, &rel)?;
-                planned.push((v, project, url, sha1, dest));
+                jobs.push(PackJob {
+                    dest: safe_join(&staging, &rel)?,
+                    kind: project.kind,
+                    title,
+                    version,
+                    url,
+                    sha1,
+                    sha512,
+                });
             }
             // Same path, byte, link and entry-count guards as the other pack formats.
             let (p, prefix, dest) = (
@@ -875,14 +929,14 @@ impl Inner {
                 .await,
             )?;
             sink.check_cancelled()?;
-            let requests = planned
+            let requests = jobs
                 .iter()
-                .map(|(v, _, url, sha1, dest)| {
+                .map(|job| {
                     Ok(DownloadReq {
-                        urls: vec![parse_url(url)?],
-                        sha1: Some(sha1.clone()),
-                        size: Some(v.size),
-                        dest: dest.clone(),
+                        urls: vec![parse_url(&job.url)?],
+                        sha1: Some(job.sha1.clone()),
+                        size: (job.version.size > 0).then_some(job.version.size),
+                        dest: job.dest.clone(),
                         kind: ResourceKind::Content,
                     })
                 })
@@ -891,38 +945,104 @@ impl Inner {
                 self.dl.fetch_many(requests, sink).await?;
             }
             let mut index = ContentIndex::default();
-            for (v, project, url, sha1, dest) in planned {
+            for job in jobs {
                 sink.check_cancelled()?;
-                let (actual, sha512) = file_hashes(&dest).await?;
-                if actual != sha1 {
-                    return Err(AppError::new(
-                        ErrorCode::HashMismatch,
-                        "CurseForge pack SHA-1 mismatch",
-                    ));
+                let (actual, sha512) = file_hashes(&job.dest).await?;
+                if actual != job.sha1 {
+                    return Err(
+                        AppError::new(ErrorCode::HashMismatch, "pack file SHA-1 mismatch")
+                            .detail("file", job.version.file_name.as_str()),
+                    );
                 }
-                let dir = crate::util::kind_dir(project.kind)?;
+                if let Some(want) = &job.sha512 {
+                    if !want.eq_ignore_ascii_case(&sha512) {
+                        return Err(AppError::new(
+                            ErrorCode::HashMismatch,
+                            "pack file SHA-512 mismatch",
+                        )
+                        .detail("file", job.version.file_name.as_str()));
+                    }
+                }
+                let dir = kind_dir(job.kind)?;
                 index.files.insert(
-                    key(dir, &v.file_name),
+                    key(dir, &job.version.file_name),
                     IndexEntry {
-                        kind: project.kind,
-                        source: ContentSourceKind::CurseForge,
-                        project_id: v.project_id,
-                        version_id: v.version_id,
-                        title: Some(project.title),
-                        version_number: Some(v.version_number),
-                        sha1: Some(sha1),
+                        kind: job.kind,
+                        source: job.version.source,
+                        project_id: job.version.project_id,
+                        version_id: job.version.version_id,
+                        title: Some(job.title),
+                        version_number: Some(job.version.version_number),
+                        sha1: Some(actual),
                         sha512: Some(sha512),
-                        size: Some(v.size),
-                        url: Some(url),
+                        size: Some(job.version.size),
+                        url: Some(job.url),
                     },
                 );
             }
-            self.finish_pack(&staging, &manifest.name, mc, loader, index, meta, sink)
-                .await
+            let inst = self
+                .finish_pack(&staging, &manifest.name, mc, loader, index, meta, sink)
+                .await?;
+            if !manual.is_empty() {
+                sink.log(&format!(
+                    "{} pack file(s) must be downloaded by hand: {}",
+                    manual.len(),
+                    manual
+                        .iter()
+                        .map(|m| format!("{} → {}", m.file_name, m.url))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                // Best effort: the pack itself is already installed.
+                if let Err(e) = self.save_manual(inst.id, &manual).await {
+                    sink.log(&format!(
+                        "manual download list was not saved: {}",
+                        e.message
+                    ));
+                }
+            }
+            Ok(inst)
         }
         .await;
         let _ = tokio::fs::remove_dir_all(&staging).await;
         result
+    }
+
+    /// Writes the pack files the user must download by hand next to the content
+    /// index, so the list survives the task that produced it.
+    async fn save_manual(&self, id: InstanceId, files: &[ManualFile]) -> AppResult<()> {
+        let dir = self.instance_dir(id);
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| io_err(&dir, e))?;
+        let path = dir.join(MANUAL_FILE);
+        ensure_no_links(&path)?;
+        let bytes = serde_json::to_vec_pretty(files)
+            .map_err(|e| AppError::internal(format!("json encode: {e}")))?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(|e| io_err(&path, e))
+    }
+
+    /// Pack files the user still has to download by hand. A missing or damaged
+    /// list means nothing is outstanding.
+    pub(crate) async fn manual_downloads(&self, id: InstanceId) -> Vec<ManualDownload> {
+        let path = self.instance_dir(id).join(MANUAL_FILE);
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            return Vec::new();
+        };
+        let Ok(files) = serde_json::from_slice::<Vec<ManualFile>>(&bytes) else {
+            return Vec::new();
+        };
+        files
+            .into_iter()
+            .map(|file| ManualDownload {
+                project_id: fallback::project_id(&file.url).unwrap_or_default(),
+                file_name: file.file_name,
+                url: file.url,
+                title: Some(file.title),
+            })
+            .collect()
     }
 
     async fn import_mrpack(
