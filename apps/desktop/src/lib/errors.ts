@@ -75,6 +75,7 @@ export const KNOWN_REASONS = [
   "helperFailed",
   "vpnNotRunning",
   "hostTooOld",
+  "serverRejected",
 ] as const;
 export type KnownReason = (typeof KNOWN_REASONS)[number];
 
@@ -99,6 +100,10 @@ export interface ErrorView {
 /** Backend errors without a `reason` detail, recognised by their developer message. */
 function reasonFromMessage(code: ErrorCode, message: string): KnownReason | undefined {
   if (code === "invalidInput" && /vpn is not running/i.test(message)) return "vpnNotRunning";
+  // Hub chat rejections: show the concrete cause (file too large, bad image...).
+  if (code === "invalidInput" && /^Chat server rejected request/i.test(message)) {
+    return "serverRejected";
+  }
   return undefined;
 }
 
