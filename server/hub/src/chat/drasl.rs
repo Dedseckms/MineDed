@@ -1,5 +1,6 @@
 //! Server-to-server Drasl v3 directory. Player UUID is not the owning user's UUID.
 //! Protocol verified against unmojang/drasl v4.0.1 api.go (GPL-3.0).
+use super::super::error::ApiError;
 use axum::body::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{header, Request};
@@ -12,6 +13,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
+fn internal(what: &'static str) -> ApiError {
+    ApiError::new(hyper::StatusCode::INTERNAL_SERVER_ERROR, "internal", what)
+}
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Player {
@@ -89,6 +93,74 @@ impl Directory {
         .await
         .ok()
         .flatten()
+    }
+    /// Creates a Drasl account with a password (admin API `POST /users`) and
+    /// returns the stored username. Registration policy is bypassed: the admin
+    /// token creates users directly. A name conflict or an unreachable Drasl
+    /// surfaces as an `AppError` for the admin panel.
+    pub async fn create_user(&self, username: &str, password: &str) -> Result<String, ApiError> {
+        #[derive(serde::Deserialize)]
+        struct Created {
+            username: String,
+        }
+        let Some((base, token)) = self.url.as_ref().zip(self.token.as_ref()) else {
+            return Err(ApiError::new(
+                hyper::StatusCode::BAD_GATEWAY,
+                "network",
+                "Drasl admin API is not configured",
+            ));
+        };
+        let _permit = self
+            .requests
+            .acquire()
+            .await
+            .map_err(|_| internal("Drasl queue closed"))?;
+        let body = serde_json::to_vec(&serde_json::json!({
+            "username": username,
+            "password": password,
+        }))
+        .map_err(|_| internal("account body"))?;
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("{base}/users"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(body)))
+            .map_err(|_| internal("Drasl request"))?;
+        let created = tokio::time::timeout(Duration::from_secs(10), async {
+            let response = self.client.request(req).await.map_err(|_| {
+                ApiError::new(
+                    hyper::StatusCode::BAD_GATEWAY,
+                    "network",
+                    "Drasl unreachable",
+                )
+            })?;
+            let status = response.status();
+            if status == hyper::StatusCode::CONFLICT {
+                return Err(ApiError::invalid_input("Drasl username conflict")
+                    .detail("reason", "usernameTaken"));
+            }
+            if !status.is_success() {
+                return Err(ApiError::new(
+                    hyper::StatusCode::BAD_GATEWAY,
+                    "network",
+                    format!("Drasl rejected the account ({})", status.as_u16()),
+                ));
+            }
+            let bytes = Limited::new(response.into_body(), 64 * 1024)
+                .collect()
+                .await
+                .map_err(|_| {
+                    ApiError::new(hyper::StatusCode::BAD_GATEWAY, "network", "Drasl body")
+                })?
+                .to_bytes();
+            serde_json::from_slice::<Created>(&bytes)
+                .map(|u| u.username)
+                .map_err(|_| ApiError::new(hyper::StatusCode::BAD_GATEWAY, "network", "Drasl body"))
+        })
+        .await
+        .map_err(|_| ApiError::new(hyper::StatusCode::BAD_GATEWAY, "network", "Drasl timeout"))??;
+        Ok(created)
     }
     /// Creates a Drasl invite (admin API `/invites`) and returns its code and
     /// registration link. `None` when the admin API is not configured or fails.
@@ -194,6 +266,45 @@ mod tests {
     use super::*;
     use axum::{extract::Path, http::HeaderMap, routing::get, Json, Router};
     use serde_json::json;
+    #[tokio::test]
+    async fn create_user_posts_admin_credentials_and_maps_conflicts() {
+        let app = Router::new().route(
+            "/users",
+            axum::routing::post(
+                |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                    assert_eq!(headers["authorization"], "Bearer server-only");
+                    if body["username"] == "Taken_1" {
+                        return (axum::http::StatusCode::CONFLICT, Json(json!({})));
+                    }
+                    assert_eq!(body["password"], "secret1");
+                    (
+                        axum::http::StatusCode::OK,
+                        Json(json!({"username": body["username"]})),
+                    )
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut directory = Directory::from_env();
+        directory.url = Some(format!("http://{addr}"));
+        directory.token = Some("server-only".into());
+        assert_eq!(
+            directory.create_user("Free_1", "secret1").await.unwrap(),
+            "Free_1"
+        );
+        let conflict = directory
+            .create_user("Taken_1", "secret1")
+            .await
+            .unwrap_err();
+        assert_eq!(conflict.code, "invalidInput");
+        assert_eq!(
+            conflict.details.unwrap().get("reason").map(String::as_str),
+            Some("usernameTaken")
+        );
+        task.abort();
+    }
     #[tokio::test]
     async fn admin_comes_from_verified_owner_not_player_or_name() {
         let profile = "00000000-0000-0000-0000-000000000001";

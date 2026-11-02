@@ -99,7 +99,8 @@ impl Store {
         &self,
     ) -> Result<Vec<lc_types::social::AccountRequest>, ApiError> {
         let mut stmt = self.db.prepare(
-            "SELECT uuid,name,request,created_at FROM users WHERE request IS NOT NULL ORDER BY created_at DESC LIMIT 200",
+            "SELECT uuid,name,request,created_at FROM users WHERE request_password IS NOT NULL \
+             ORDER BY created_at DESC LIMIT 200",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(lc_types::social::AccountRequest {
@@ -114,23 +115,41 @@ impl Store {
 
     /// Every account the launcher knows, newest first: joined players, chat
     /// guests and offline nicknames waiting for an account request.
-    pub(super) fn admin_accounts(&self) -> Result<Vec<lc_types::social::AdminAccount>, ApiError> {
+    ///
+    /// The response adds `accountCreated` and the requested `username` to
+    /// [`lc_types::social::AdminAccount`]; the typed DTO has no such fields yet.
+    pub(super) fn admin_accounts(&self) -> Result<Vec<serde_json::Value>, ApiError> {
         let mut stmt = self.db.prepare(
-            "SELECT u.uuid,u.name,u.guest,u.display_name,u.created_at,i.code,i.url \
+            "SELECT u.uuid,u.name,u.guest,u.display_name,u.created_at,i.code,i.url,u.account_created,u.username_hint,u.request \
              FROM users u LEFT JOIN invites i ON i.request=u.uuid \
              ORDER BY CASE WHEN u.created_at='' THEN 1 ELSE 0 END, u.created_at DESC LIMIT 500",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(lc_types::social::AdminAccount {
-                uuid: r.get(0)?,
-                name: r.get(1)?,
-                guest: r.get::<_, i64>(2)? != 0,
-                display_name: r.get(3)?,
-                created_at: r.get(4)?,
-                invite: r.get::<_, Option<String>>(5)?,
-                invite_url: r.get::<_, Option<String>>(6)?,
-            })
+            Ok((
+                lc_types::social::AdminAccount {
+                    uuid: r.get(0)?,
+                    name: r.get(1)?,
+                    guest: r.get::<_, i64>(2)? != 0,
+                    display_name: r.get(3)?,
+                    created_at: r.get(4)?,
+                    invite: r.get::<_, Option<String>>(5)?,
+                    invite_url: r.get::<_, Option<String>>(6)?,
+                },
+                r.get::<_, bool>(7)?,
+                r.get::<_, Option<String>>(8)?,
+                r.get::<_, Option<String>>(9)?,
+            ))
         })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        let accounts = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(accounts
+            .into_iter()
+            .map(|(a, created, username, request)| {
+                serde_json::json!({"uuid": a.uuid, "name": a.name, "guest": a.guest,
+                    "displayName": a.display_name, "createdAt": a.created_at,
+                    "invite": a.invite, "inviteUrl": a.invite_url,
+                    "accountCreated": created,
+                    "username": if request.is_some() { username } else { None }})
+            })
+            .collect())
     }
 }

@@ -134,7 +134,7 @@ impl Store {
 }
 
 /// Guest nicknames follow the Minecraft rule: 3–16 letters, digits or `_`.
-fn validate_name(name: &str) -> Result<String, ApiError> {
+pub(super) fn validate_name(name: &str) -> Result<String, ApiError> {
     let name = name.trim();
     if !(3..=16).contains(&name.chars().count())
         || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -144,4 +144,14 @@ fn validate_name(name: &str) -> Result<String, ApiError> {
         ));
     }
     Ok(name.to_owned())
+}
+/// Requested account passwords: 6–64 printable ASCII characters, no spaces.
+pub(super) fn validate_password(password: &str) -> Result<String, ApiError> {
+    if !(6..=64).contains(&password.len()) || !password.bytes().all(|b| (0x21..=0x7e).contains(&b))
+    {
+        return Err(
+            invalid("password must be 6..=64 characters without spaces").detail("required", "6")
+        );
+    }
+    Ok(password.to_owned())
 }

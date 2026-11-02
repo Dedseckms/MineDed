@@ -1,9 +1,10 @@
 //! Durable chat state. Every mutation runs on the blocking pool under one transaction lock.
-use super::{denied, invalid, Chat};
+use super::{denied, guest, invalid, Chat};
 use crate::{auth::Identity, error::ApiError, rfc3339};
 use lc_types::social::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -25,6 +26,26 @@ pub(super) fn uuid(id: &str) -> Result<String, ApiError> {
         .filter(|v| !v.is_nil())
         .map(|v| v.simple().to_string())
         .ok_or_else(|| invalid("invalid profile UUID"))
+}
+/// Salted SHA-256 of the request profile UUID and the password: it ti one password, and the random guest id salts it.
+pub(super) fn seal_password(request: &str, password: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(request.as_bytes());
+    digest.update([0]);
+    digest.update(password.as_bytes());
+    format!("{:x}", digest.finalize())
+}
+/// Recovers the plaintext password from [`seal_password`].
+///
+/// The launcher sends the password twice: `password` is the salted hash that is
+/// kept and `key` is the plaintext sealed by the same salt. The salt is the
+/// request UUID, so a copy of the database serves neither another request nor a
+/// renamed profile; plaintext is never stored.
+pub(super) fn unseal_password(request: &str, stored: &str, key: &str) -> Result<String, ApiError> {
+    if seal_password(request, key) != stored {
+        return Err(invalid("password does not match its hash"));
+    }
+    Ok(key.to_owned())
 }
 fn pair(a: &str, b: &str) -> (String, String) {
     if a < b {
@@ -109,6 +130,17 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         // Schema v3: first-contact time and the guest's account request.
         ensure_column(&db, "users", "created_at", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&db, "users", "request", "TEXT")?;
+        // Schema v4: account requests carry a salted password hash, so the admin
+        // can create the Drasl account directly instead of issuing an invite.
+        ensure_column(&db, "users", "request_password", "TEXT")?;
+        // Name the guest asked for; it may differ from the offline nickname.
+        ensure_column(&db, "users", "username_hint", "TEXT")?;
+        ensure_column(
+            &db,
+            "users",
+            "account_created",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
         // Schema v3: the uploaded original is kept for "save as" (older rows have none).
         ensure_column(&db, "attachments", "original", "TEXT")?;
         let files: Option<String> = db
@@ -608,7 +640,17 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         chat: &Chat,
     ) -> Result<Value, ApiError> {
         match (method, path) {
-            ("GET", ["me"]) => Ok(serde_json::to_value(self.user(me, me, chat)?)?),
+            ("GET", ["me"]) => {
+                let mut user = serde_json::to_value(self.user(me, me, chat)?)?;
+                // SocialUser has no accountCreated field yet: extra JSON key.
+                if let Some(object) = user.as_object_mut() {
+                    object.insert(
+                        "accountCreated".into(),
+                        json!(self.account_created_state(me)?),
+                    );
+                }
+                Ok(user)
+            }
             ("GET", ["channels"]) => {
                 let mut stmt=self.db.prepare("SELECT c.id FROM channels c LEFT JOIN messages m ON m.channel=c.id WHERE c.id='global' OR c.a=?1 OR c.b=?1 GROUP BY c.id ORDER BY (c.id='global') DESC,max(m.id) DESC")?;
                 let mut ids = stmt
@@ -821,9 +863,14 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                 }
                 let note = body["note"].as_str().unwrap_or_default();
                 validate_text(note, 300)?;
+                // The requested name is validated now and used by the admin flow;
+                // stored in the note as the JSON envelope-free prefix.
+                let username = guest::validate_name(body["username"].as_str().unwrap_or_default())?;
+                let password =
+                    guest::validate_password(body["password"].as_str().unwrap_or_default())?;
                 self.db.execute(
-                    "UPDATE users SET request=?1 WHERE uuid=?2",
-                    params![note, me],
+                    "UPDATE users SET request=?1,username_hint=?2,request_password=?3,account_created=0 WHERE uuid=?4",
+                    params![note, username, seal_password(me, &password), me],
                 )?;
                 let _ = chat.events.send(super::Notice::Admin);
                 Ok(Value::Null)
@@ -872,13 +919,24 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                         super::presence::admin_presence(chat, self)?,
                     )?),
                     ("GET", ["admin", "audit"]) => Ok(serde_json::to_value(self.audit_page()?)?),
-                    // Every launcher account the hub knows: joined players,
-                    // guests and guests who asked for an account.
                     ("GET", ["admin", "accounts"]) => {
                         Ok(serde_json::to_value(self.admin_accounts()?)?)
                     }
                     ("GET", ["admin", "requests"]) => {
-                        Ok(serde_json::to_value(self.account_requests()?)?)
+                        let requests = self.account_requests()?.into_iter().map(|request| {
+                            let (username, password) = self
+                                .account_credentials(&request.id)
+                                .ok()
+                                .flatten()
+                                .map(|(username, _)| (Some(username), Some("<redacted>")))
+                                .unwrap_or_default();
+                            let created =
+                                self.account_created_state(&request.id).unwrap_or_default();
+                            json!({"id": request.id, "name": request.name, "note": request.note,
+                        "createdAt": request.created_at, "username": username,
+                        "password": password, "accountCreated": created})
+                        });
+                        Ok(Value::Array(requests.collect()))
                     }
                     _ => Err(ApiError::not_found("no such route")),
                 }
@@ -906,15 +964,55 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
     }
     /// Whether `request` is a guest waiting for an account.
     pub(super) fn has_account_request(&self, request: &str) -> Result<bool, ApiError> {
+        Ok(self.account_credentials(request)?.is_some())
+    }
+    /// Username and salted password hash of an open account request.
+    pub(super) fn account_credentials(
+        &self,
+        request: &str,
+    ) -> Result<Option<(String, String)>, ApiError> {
         Ok(self
             .db
             .query_row(
-                "SELECT 1 FROM users WHERE uuid=?1 AND request IS NOT NULL",
+                "SELECT COALESCE(username_hint,name),request_password FROM users \
+                 WHERE uuid=?1 AND request IS NOT NULL AND request_password IS NOT NULL",
                 [request],
-                |r| r.get::<_, i64>(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+    /// Whether a Drasl account was already created for the request.
+    pub(super) fn account_created_state(&self, request: &str) -> Result<bool, ApiError> {
+        Ok(self
+            .db
+            .query_row(
+                "SELECT account_created FROM users WHERE uuid=?1",
+                [request],
+                |r| r.get(0),
             )
             .optional()?
-            .is_some())
+            .unwrap_or(false))
+    }
+    /// Records a created Drasl account: the request is served, the password kept
+    /// there is removed so that a copy of the database cannot log in as anyone.
+    pub(super) fn request_served(
+        &self,
+        actor: &str,
+        request: &str,
+        sealed: &str,
+        account: &str,
+    ) -> Result<(), ApiError> {
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE users SET account_created=1,request_password=NULL WHERE uuid=?1 AND request_password=?2",
+            params![request, sealed],
+        )?;
+        tx.execute(
+            "INSERT OR REPLACE INTO invites(request,code,url,created) VALUES(?1,'',?2,?3)",
+            params![request, account, rfc3339::format(SystemTime::now())],
+        )?;
+        tx.commit()?;
+        self.audit(actor, "accountCreate", Some(request), Some(account))
     }
     fn moderation(
         &self,
