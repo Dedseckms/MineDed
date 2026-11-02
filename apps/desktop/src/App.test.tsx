@@ -44,7 +44,7 @@ describe("App shell (mocks)", () => {
     expect(await screen.findByText("Sodium")).toBeTruthy();
     expect(await screen.findByText(/^(Update all|Обновить всё)$/)).toBeTruthy();
     await act(async () => useNavStore.getState().setInstanceTab("shaders"));
-    expect(await screen.findByText(/OptiFine/, { selector: "a span" })).toBeTruthy();
+    expect(await screen.findByText(/OptiFine/, { selector: "button span" })).toBeTruthy();
     await act(async () => useNavStore.getState().setInstanceTab("browse"));
     expect(await screen.findByText("Fabric API")).toBeTruthy();
     await act(async () => useNavStore.getState().go("skins"));

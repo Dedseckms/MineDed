@@ -1,12 +1,15 @@
 // @vitest-environment happy-dom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { InstalledContent, Instance } from "../../bindings";
 import { api, unwrap } from "../../api/client";
 import i18n from "../../i18n";
 import { InstalledList } from "./InstalledList";
+
+const opener = vi.hoisted(() => ({ openUrl: vi.fn(async (_url: string) => {}) }));
+vi.mock("@tauri-apps/plugin-opener", () => opener);
 
 afterEach(cleanup);
 beforeEach(async () => {
@@ -64,11 +67,17 @@ describe("installed content rows", () => {
       item({ fileName: "c.jar", source: "local", projectId: null }),
     ]);
     const link = (name: string) =>
-      rowOf(name).getByTestId("project-page-link") as HTMLAnchorElement;
-    expect(link("a.jar").href).toBe("https://modrinth.com/project/AANobbMI");
-    expect(link("b.jar").href).toBe("https://www.curseforge.com/minecraft/mc-mods/306612");
-    expect(link("a.jar").getAttribute("target")).toBe("_blank");
-    expect(link("a.jar").getAttribute("rel")).toContain("noopener");
+      rowOf(name).getByTestId("project-page-link");
+    fireEvent.click(link("a.jar"));
+    await waitFor(() =>
+      expect(opener.openUrl).toHaveBeenCalledWith("https://modrinth.com/project/AANobbMI"),
+    );
+    fireEvent.click(link("b.jar"));
+    await waitFor(() =>
+      expect(opener.openUrl).toHaveBeenCalledWith(
+        "https://www.curseforge.com/minecraft/mc-mods/306612",
+      ),
+    );
     expect(rowOf("c.jar").queryByTestId("project-page-link")).toBeNull();
   });
 });
