@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { SocialChannel, SocialUser } from "../../bindings";
+import type { SocialChannel } from "../../bindings";
 import { Icon } from "../../components/ui/Icon";
 import { Badge } from "../../components/ui/feedback";
 import { displayNameOf } from "../../lib/socialProfile";
@@ -12,26 +12,20 @@ export interface ChatChannelListProps {
   channels: SocialChannel[];
   selected: string;
   onSelect: (channel: SocialChannel) => void;
-  /** Player search results for the current query. */
-  users: SocialUser[];
-  searching: boolean;
   search: string;
   onSearch: (value: string) => void;
-  onOpenProfile: (user: SocialUser) => void;
   /** Guests have no friends and no direct chats: hide the whole section. */
   showDirect?: boolean;
 }
 
-/** Telegram-style left column: search, sections, unread badges. */
+
+/** Telegram-style left column: chat filter, sections, unread badges. */
 export function ChatChannelList({
   channels,
   selected,
   onSelect,
-  users,
-  searching,
   search,
   onSearch,
-  onOpenProfile,
   showDirect = true,
 }: ChatChannelListProps) {
   const { t } = useTranslation();
@@ -51,40 +45,14 @@ export function ChatChannelList({
         <input
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          placeholder={t("social.search")}
-          aria-label={t("social.search")}
+          placeholder={t("social.filterChats")}
+          aria-label={t("social.filterChats")}
           spellCheck={false}
           autoComplete="off"
           className="h-9 w-full rounded-lg border border-border bg-surface-2 pr-3 pl-8 text-sm text-text outline-none placeholder:text-muted focus:border-accent"
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-        {term && (users.length > 0 || searching) ? (
-          <>
-            <SectionLabel>{t("social.players")}</SectionLabel>
-            {searching && users.length === 0 ? (
-              <p role="status" className="px-3 py-2 text-xs text-muted">
-                {t("common.loading")}
-              </p>
-            ) : null}
-            {users.map((user) => (
-              <button
-                key={user.uuid}
-                type="button"
-                className="flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left hover:bg-surface-2"
-                onClick={() => onOpenProfile(user)}
-              >
-                <ChatAvatar user={user} size="sm" />
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  {displayNameOf(user)}
-                </span>
-                <span className="shrink-0 text-[11px] text-muted">
-                  {t(`social.status.${user.status ?? "hidden"}`)}
-                </span>
-              </button>
-            ))}
-          </>
-        ) : null}
         <SectionLabel>{t("social.sections.global")}</SectionLabel>
         {global.map((channel) => (
           <ChannelRow
@@ -110,7 +78,11 @@ export function ChatChannelList({
               <p className="px-3 py-2 text-xs text-muted">
                 {t("social.noChats")}
               </p>
-            ) : null}
+            ) : (
+              <p className="px-3 py-2 text-xs text-muted">
+                {t("social.noChatMatches")}
+              </p>
+            )}
           </>
         ) : null}
       </div>

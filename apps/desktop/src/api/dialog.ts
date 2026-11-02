@@ -1,6 +1,15 @@
-// Native "open file" dialog (tauri-plugin-dialog). In mock mode a stand-in
-// picker returns a sample path, so screens work without Tauri; tests replace it.
+// Native "save as" dialog (tauri-plugin-dialog). In mock mode a stand-in accepts
+// the suggested name, so the screen works without Tauri; tests replace it.
 import { isMock } from "./client";
+
+export interface SaveOptions {
+  /** Suggested file name or path; its folder is pre-selected in the dialog. */
+  defaultPath?: string;
+  /** Without dots: `["png", "jpg"]`. */
+  extensions?: string[];
+}
+
+export type SavePicker = (options: SaveOptions) => Promise<string | null>;
 
 export interface FileFilter {
   name: string;
@@ -62,5 +71,39 @@ export async function pickFile(filters: FileFilter[] = []): Promise<string | nul
   if (isMock) return mockPicker(filters);
   const { open } = await import("@tauri-apps/plugin-dialog");
   const res = await open({ multiple: false, directory: false, filters: filters.length > 0 ? filters : undefined });
+  return typeof res === "string" ? res : null;
+}
+
+function folderOf(path: string): string {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return cut > 0 ? path.slice(0, cut + 1) : "";
+}
+
+const defaultMockSave: SavePicker = async (options) => {
+  const suggested = options?.defaultPath || "document.txt";
+  return `${folderOf(suggested) || "C:/Downloads/"}${suggested.replace(/^.*[\\/]/, "")}`;
+};
+
+let mockSave: SavePicker = defaultMockSave;
+
+/** Mock mode only: replaces the stand-in save dialog (`null` restores the default). */
+export function setMockSavePicker(picker: SavePicker | null): void {
+  mockSave = picker ?? defaultMockSave;
+}
+
+/**
+ * Asks where to save and returns the chosen path (`null` when cancelled). The
+ * native dialog opens with `defaultPath` filled in, so the file keeps the name
+ * and extension offered here.
+ */
+export async function pickSavePath(options: SaveOptions = {}): Promise<string | null> {
+  if (isMock) return mockSave(options);
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const res = await save({
+    defaultPath: options.defaultPath,
+    filters: options.extensions?.length
+      ? [{ name: "File", extensions: options.extensions }]
+      : undefined,
+  });
   return typeof res === "string" ? res : null;
 }
