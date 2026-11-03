@@ -417,12 +417,12 @@
       "hostTooOld": "The host has an old launcher version — ask them to update.",
       "usernameTaken": "This login is already taken — ask the player to choose another.",
       "weakPassword": "The requested password is too weak — ask the player to pick another.",
-      "packRoomBusy": "Leave the current room before downloading a shared pack."
+      "packRoomBusy": "Leave the current room before downloading a shared pack.",
+      "connectionRefused": "The server closed chat access",
+      "chatBanned": "You are banned from the chat. Contact a server admin."
     },
     "serverRejected": "The server rejected the file",
-    "serverRejectedHint": "The server reason is shown below. Often the size or the image format.",
-    "connectionRefused": "The server closed chat access",
-    "chatBanned": "You are banned from the chat. Contact a server admin."
+    "serverRejectedHint": "The server reason is shown below. Often the size or the image format."
   },
   "dialog": {
     "png": "PNG image",
@@ -1095,8 +1095,8 @@
         "issuedToast": "Invite issued",
         "create": "Create account",
         "created": "Account created",
-      "reject": "Reject",
-      "rejectedToast": "Request rejected",
+        "reject": "Reject",
+        "rejectedToast": "Request rejected",
         "createdToast": "Account created",
         "createHint": "The account gets the login and password from the request. The guest token is kept — the player only has to sign in in the launcher."
       },
