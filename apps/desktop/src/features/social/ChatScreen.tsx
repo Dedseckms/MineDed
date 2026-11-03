@@ -352,9 +352,13 @@ export function ChatScreen() {
         <h2 className="mr-auto text-xl font-semibold">{t("social.title")}</h2>
         <OnlineBadge enabled={session.connected} />
         {guestMode ? <Badge tone="info">{t("social.guestBadge")}</Badge> : null}
-        <Badge tone={session.connected ? "accent" : "warning"}>
-          {t(session.connected ? "social.connected" : "social.reconnecting")}
-        </Badge>
+        {banned ? (
+          <Badge tone="danger">{t("social.chatClosed")}</Badge>
+        ) : (
+          <Badge tone={session.connected ? "accent" : "warning"}>
+            {t(session.connected ? "social.connected" : "social.reconnecting")}
+          </Badge>
+        )}
         {canEditProfile(self) ? (
           <Button
             size="sm"
@@ -383,6 +387,18 @@ export function ChatScreen() {
           ))}
         </div>
       </div>
+      {banned ? (
+        <div className="rounded-xl border border-danger/40 bg-danger/5 p-3 text-sm">
+          <p className="font-medium">{t("social.ban.title")}</p>
+          <p className="text-muted">{t("social.ban.hint")}</p>
+          <div className="mt-2">
+            <Button variant="primary" onClick={() => setAppealOpen(true)}>
+              {t("social.appeal.open")}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      <AppealDialog open={appealOpen} onClose={() => setAppealOpen(false)} />
       <ErrorMessage
         error={
           session.error ??
