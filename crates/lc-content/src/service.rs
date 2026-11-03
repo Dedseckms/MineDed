@@ -62,6 +62,8 @@ pub(crate) struct DiskFile {
     pub enabled: bool,
     /// Unpacked pack folder (not a mod).
     pub is_dir: bool,
+    /// Size on disk; `0` for a file the downloader created but never filled.
+    pub size: u64,
 }
 
 impl DiskFile {
@@ -220,6 +222,7 @@ impl Inner {
                     enabled: !name.ends_with(".disabled"),
                     name,
                     is_dir,
+                    size: if is_dir { 0 } else { meta.len() },
                 });
             }
         }
@@ -621,14 +624,49 @@ impl ContentService for ContentServices {
                 HashMap::new()
             }
         };
+        // Slugs written by older versions are missing; fetch them once per
+        // project so the project link opens the real page.
+        let mut slugs: HashMap<(ContentSourceKind, String), Option<String>> = HashMap::new();
+        for e in idx.files.values() {
+            if e.slug.is_some() || e.source == ContentSourceKind::Local {
+                continue;
+            }
+            let key = (e.source, e.project_id.clone());
+            if slugs.contains_key(&key) {
+                continue;
+            }
+            let slug = match self.inner.catalog(e.source) {
+                Ok(cat) => cat.project(&e.project_id).await.ok().map(|p| p.slug),
+                Err(_) => None,
+            };
+            slugs.insert(key, slug);
+        }
+        let enabled_keys: std::collections::HashSet<String> = files
+            .iter()
+            .filter(|f| f.enabled)
+            .map(DiskFile::key)
+            .collect();
         Ok(files
             .into_iter()
+            // In-progress downloads are not content.
+            .filter(|f| !f.base().ends_with(".part"))
+            // A disabled twin of an enabled file (left by a toggle) is not a
+            // separate entry.
+            .filter(|f| f.enabled || !enabled_keys.contains(&format!("{}/{}", f.dir, f.base())))
             .map(|f| {
                 // Local entries only carry hashes; they have no catalogue ids.
                 let e = idx
                     .files
                     .get(&f.key())
                     .filter(|e| e.source != ContentSourceKind::Local);
+                let slug = e.and_then(|e| {
+                    e.slug.clone().or_else(|| {
+                        slugs
+                            .get(&(e.source, e.project_id.clone()))
+                            .cloned()
+                            .flatten()
+                    })
+                });
                 InstalledContent {
                     file_name: f.base().to_owned(),
                     kind: f.kind,
@@ -636,12 +674,13 @@ impl ContentService for ContentServices {
                     source: e.map(|e| e.source).unwrap_or(ContentSourceKind::Local),
                     project_id: e.map(|e| e.project_id.clone()),
                     version_id: e.map(|e| e.version_id.clone()),
-                    slug: e.and_then(|e| e.slug.clone()),
+                    slug,
                     title: e.and_then(|e| e.title.clone()),
                     version_number: e.and_then(|e| e.version_number.clone()),
                     update_available: e
                         .map(|e| updates.contains_key(&(e.source, e.project_id.clone())))
                         .unwrap_or(false),
+                    broken: !f.is_dir && f.size == 0,
                 }
             })
             .collect())
