@@ -48,6 +48,7 @@ function Row({
           {item.fileName}
         </p>
       </div>
+      {item.broken ? <Badge tone="warning">{t("content.broken")}</Badge> : null}
       {item.updateAvailable ? <Badge tone="info">{t("content.updateAvailable")}</Badge> : null}
       <Badge tone={sourceTone(item.source)}>{t(`content.source.${item.source}`)}</Badge>
       <ProjectPageLink source={item.source} projectId={item.projectId} slug={item.slug} kind={item.kind} iconOnly />

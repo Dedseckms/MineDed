@@ -600,7 +600,9 @@
     "manual": {
       "title": "Files to download by hand: {{count}}",
       "open": "Open the file page"
-    }
+    },
+    "broken": "Broken",
+    "brokenHint": "Empty file — remove and install again"
   },
   "skins": {
     "library": "Skin library",

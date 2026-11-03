@@ -443,6 +443,8 @@ export type InstalledContent = {
 	title: string | null,
 	versionNumber: string | null,
 	updateAvailable: boolean,
+	/**  An empty file or a leftover `.part`: installed but unusable, offers repair. */
+	broken?: boolean,
 };
 
 export type Instance = {
