@@ -420,7 +420,9 @@
       "packRoomBusy": "Leave the current room before downloading a shared pack."
     },
     "serverRejected": "The server rejected the file",
-    "serverRejectedHint": "The server reason is shown below. Often the size or the image format."
+    "serverRejectedHint": "The server reason is shown below. Often the size or the image format.",
+    "connectionRefused": "The server closed chat access",
+    "chatBanned": "You are banned from the chat. Contact a server admin."
   },
   "dialog": {
     "png": "PNG image",

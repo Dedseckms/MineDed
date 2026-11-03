@@ -117,7 +117,8 @@ export function useSocialSync() {
           error: {
             code: "permissionDenied",
             message: event.reason,
-            details: null,
+            // The reason drives the message text (`errors.reason.<reason>`).
+            details: { reason: event.reason },
           },
         });
       applySocialEvent(qc, event);

@@ -76,6 +76,8 @@ export const KNOWN_REASONS = [
   "vpnNotRunning",
   "hostTooOld",
   "serverRejected",
+  "connectionRefused",
+  "chatBanned",
 ] as const;
 export type KnownReason = (typeof KNOWN_REASONS)[number];
 

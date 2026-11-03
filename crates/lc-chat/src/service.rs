@@ -835,11 +835,22 @@ async fn socket(
             observer.as_ref(),
         );
         let result = tokio::select! { _ = session.cancel.cancelled() => break, r = run => r };
-        if result
-            .as_ref()
-            .is_err_and(|e| matches!(e.code, ErrorCode::AuthExpired | ErrorCode::AuthRequired))
-        {
+        // Terminal refusals stop the loop: retrying a ban or an expired token
+        // forever only hides the reason behind a reconnecting spinner.
+        if result.as_ref().is_err_and(|e| {
+            matches!(
+                e.code,
+                ErrorCode::AuthExpired | ErrorCode::AuthRequired | ErrorCode::PermissionDenied
+            )
+        }) {
             session.cancel.cancel();
+            let reason = match result.as_ref().err().map(|e| e.code) {
+                Some(ErrorCode::PermissionDenied) => "chatBanned",
+                _ => "connectionRefused",
+            };
+            observer.on_event(SocialEvent::Rejected {
+                reason: reason.to_owned(),
+            });
         }
         observer.on_event(SocialEvent::Connection { connected: false });
         // A connection that lived for a while was healthy: reconnect fast again.
