@@ -1,11 +1,13 @@
 // Soft UI sound cues (Web Audio, generated: no audio files in the bundle).
 
-export type Cue = "pttOn" | "pttOff";
+export type Cue = "pttOn" | "pttOff" | "message";
 
 /** Tone of each cue: rising blip on press, falling on release. */
 export const CUES: Record<Cue, { from: number; to: number; ms: number }> = {
   pttOn: { from: 620, to: 880, ms: 70 },
   pttOff: { from: 760, to: 480, ms: 80 },
+  // Two short notes: a chat message arrived while the window was elsewhere.
+  message: { from: 880, to: 1180, ms: 110 },
 };
 
 /** Peak gain: quiet enough not to cover voices. */

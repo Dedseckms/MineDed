@@ -424,6 +424,13 @@ pub async fn social_create_account(
     state.social.create_account(&request_id).await
 }
 
+/// Admin only: removes an account or a guest from the hub.
+#[tauri::command]
+#[specta::specta]
+pub async fn social_delete_account(state: State<'_, AppState>, uuid: String) -> AppResult<()> {
+    state.social.delete_account(&uuid).await
+}
+
 /// Admin only: drops a waiting account request without creating an account.
 #[tauri::command]
 #[specta::specta]

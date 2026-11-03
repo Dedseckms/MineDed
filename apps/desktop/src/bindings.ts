@@ -62,6 +62,8 @@ export const commands = {
 	accountSetDefault: (id: AccountId) => typedError<null, AppError>(__TAURI_INVOKE("account_set_default", { id })),
 	skinLibrary: () => typedError<Skin[], AppError>(__TAURI_INVOKE("skin_library")),
 	skinAdd: (pngPath: string, name: string, model: SkinModel) => typedError<Skin, AppError>(__TAURI_INVOKE("skin_add", { pngPath, name, model })),
+	/**  PNG data URL of the skin's head (avatar fallback for players without a picture). */
+	skinHead: (skinUrl: string) => typedError<string, AppError>(__TAURI_INVOKE("skin_head", { skinUrl })),
 	/**  Downloads a skin by URL or nickname for preview (not added to the library). */
 	skinFetchRemote: (source: string) => typedError<RemoteSkin, AppError>(__TAURI_INVOKE("skin_fetch_remote", { source })),
 	skinRemove: (id: SkinId) => typedError<null, AppError>(__TAURI_INVOKE("skin_remove", { id })),
@@ -246,6 +248,8 @@ export const commands = {
 	socialCreateAccount: (requestId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_create_account", { requestId })),
 	/**  Admin only: drops a waiting account request without creating an account. */
 	socialRejectAccount: (requestId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_reject_account", { requestId })),
+	/**  Admin only: removes an account or a guest from the hub. */
+	socialDeleteAccount: (uuid: string) => typedError<null, AppError>(__TAURI_INVOKE("social_delete_account", { uuid })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),

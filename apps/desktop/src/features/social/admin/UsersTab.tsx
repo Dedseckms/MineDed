@@ -6,6 +6,8 @@ import type { AdminAccount, SocialUser } from "../../../bindings";
 import { api, unwrap } from "../../../api/client";
 import { Button } from "../../../components/ui/Button";
 import { CopyButton } from "../../../components/ui/CopyButton";
+import { Icon } from "../../../components/ui/Icon";
+import { ConfirmDialog } from "../../../components/ui/Modal";
 import { Badge, ErrorMessage } from "../../../components/ui/feedback";
 import { TextInput } from "../../../components/ui/form";
 import { displayNameOf } from "../../../lib/socialProfile";
@@ -32,6 +34,8 @@ export function matchesAccount(
 export function UsersTab() {
   const { t, i18n } = useTranslation();
   const [search, setSearch] = useState("");
+  /** Deletion of the selected account asks for confirmation first. */
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<SocialUser | null>(null);
   const accounts = useQuery({
@@ -335,6 +339,25 @@ export function UsersTab() {
                 </div>
               </section>
               <section className="space-y-2">
+                <p className="text-sm font-medium">{t("social.admin.delete.section")}</p>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  icon={<Icon name="trash" />}
+                  disabled={action.isPending}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  {t("social.admin.delete.action", { name: selected.name })}
+                </Button>
+                <p className="text-xs text-muted">
+                  {t(
+                    selected.guest === true || selected.role === "guest"
+                      ? "social.admin.delete.guestHint"
+                      : "social.admin.delete.accountHint",
+                  )}
+                </p>
+              </section>
+              <section className="space-y-2">
                 <p className="text-sm font-medium">
                   {t("social.admin.profileSection")}
                 </p>
@@ -355,6 +378,31 @@ export function UsersTab() {
             <p className="text-sm text-muted">{t("social.admin.selectUser")}</p>
           )
         }
+      />
+      <ConfirmDialog
+        open={deleteOpen && selected !== null}
+        title={t("social.admin.delete.title")}
+        message={t("social.admin.delete.confirm", { name: selected?.name ?? "" })}
+        confirmLabel={t("social.admin.delete.confirmAction")}
+        danger
+        loading={action.isPending}
+        error={<ErrorMessage error={action.error} />}
+        onConfirm={() => {
+          const uuid = selected?.uuid;
+          if (!uuid) return;
+          action.mutate(
+            async () => {
+              unwrap(await api.socialDeleteAccount(uuid));
+            },
+            {
+              onSuccess: () => {
+                setDeleteOpen(false);
+                setSelected(null);
+              },
+            },
+          );
+        }}
+        onCancel={() => setDeleteOpen(false)}
       />
     </div>
   );

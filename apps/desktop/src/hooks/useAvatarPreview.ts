@@ -26,3 +26,23 @@ export function useAvatarPreview(
   });
   return isImageDataUrl(query.data) ? (query.data ?? null) : null;
 }
+
+/**
+ * Head of the player's Minecraft skin as a data URL, for players without an
+ * uploaded avatar. Keyed by the skin URL, so a skin change (a new URL on the
+ * profile) fetches a fresh head and no stale one is ever shown.
+ */
+export function useSkinHead(
+  user: Pick<SocialUser, "skinUrl"> | null | undefined,
+): string | null {
+  const skin = user?.skinUrl ?? null;
+  const query = useQuery({
+    queryKey: ["skin", "head", skin ?? ""],
+    queryFn: async () => unwrap(await api.skinHead(skin ?? "")),
+    enabled: !!skin,
+    staleTime: 30 * 60_000,
+    // A player without a reachable skin keeps the initials placeholder.
+    retry: false,
+  });
+  return isImageDataUrl(query.data) ? (query.data ?? null) : null;
+}

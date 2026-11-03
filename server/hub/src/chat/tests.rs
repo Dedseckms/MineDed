@@ -2300,7 +2300,9 @@ async fn rejecting_a_request_clears_it_audits_and_notifies_the_guest() {
 
 #[tokio::test]
 async fn admin_deletes_a_guest_and_its_data() {
-    let (app, chat, _temp) = app_with_chat();
+    // The admin flag comes from Drasl, so the app needs the stub directory.
+    let (base, _created) = drasl_stub(identity(1).user_id).await;
+    let (app, chat, _temp) = app_with_drasl(base);
     let (token, guest) = open_request(&app, "hi").await;
     // Only an admin may delete; the guest cannot remove itself this way.
     for authorization in [Some("Bearer other"), Some(token.as_str())] {
@@ -2356,14 +2358,8 @@ async fn admin_deletes_a_guest_and_its_data() {
     // The deleted guest is no longer listed and its token stops working.
     let (_, requests) = request(&app, "GET", "admin/requests", true, Value::Null).await;
     assert_eq!(requests, json!([]));
-    let (status, error) = request_abs(
-        &app,
-        "GET",
-        "/api/v1/chat/me",
-        Some(&token),
-        Value::Null,
-    )
-    .await;
+    let (status, error) =
+        request_abs(&app, "GET", "/api/v1/chat/me", Some(&token), Value::Null).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{error}");
     // A second delete finds nothing.
     let (status, error) = request(

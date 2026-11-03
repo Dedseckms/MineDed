@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { SocialUser } from "../../bindings";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/feedback";
+import { canModerate } from "../../lib/social";
 import { useMotionPrefs, useResolvedTheme } from "../../hooks/useAppearance";
 import { canContact, userColor } from "../../lib/social";
 import {
@@ -24,6 +25,10 @@ export interface ProfileCardProps {
   onInvite: () => void;
   onToggleFriend: () => void;
   onToggleBlock: () => void;
+  /** Silences this player's message sound (staff cannot be muted). */
+  onToggleMuted: () => void;
+  /** The viewer has already muted this player. */
+  muted: boolean;
   /** The viewer is a guest: no direct chats and no friend requests. */
   guest?: boolean;
 }
@@ -39,6 +44,8 @@ export function ProfileCard({
   onInvite,
   onToggleFriend,
   onToggleBlock,
+  onToggleMuted,
+  muted,
   guest = false,
 }: ProfileCardProps) {
   const { t } = useTranslation();
@@ -64,7 +71,7 @@ export function ProfileCard({
             <p className="truncate text-xs text-muted">@{user.name}</p>
           ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-1">
-            <Badge tone={user.role === "admin" ? "accent" : "neutral"}>
+            <Badge tone={user.role === "admin" ? "accent" : user.role === "moderator" ? "info" : "neutral"}>
               {t(`social.role.${user.role}`)}
             </Badge>
             {user.guest ? (
@@ -122,6 +129,14 @@ export function ProfileCard({
             <Button variant="ghost" onClick={onToggleBlock}>
               {t(blocked ? "social.unblock" : "social.block")}
             </Button>
+            {/* Staff messages always sound: only ordinary players can be muted. */}
+            {canModerate(user.role) ? null : (
+              <Button variant="ghost" onClick={onToggleMuted}>
+                {t(muted ? "social.sound.unmuteUser" : "social.sound.muteUser", {
+                  name,
+                })}
+              </Button>
+            )}
           </>
         )}
       </div>

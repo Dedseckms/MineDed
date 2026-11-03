@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { isDemo, isMock } from "../../api/client";
 import { BRAND_LOGO_URL, BRAND_MARK } from "../../brand";
 import { useAccounts, useAppVersion, useSettings } from "../../api/queries";
+import { useSkinHead } from "../../hooks/useAvatarPreview";
 import { backdropFlags } from "../../lib/backdrop";
 import { usePttSoundCue } from "../../hooks/usePttSoundCue";
 import { AppBackground } from "../appearance/backgrounds";
@@ -145,6 +146,8 @@ function CurrentAccount() {
   const go = useNavStore((s) => s.go);
   const accounts = useAccounts();
   const current = accounts.data?.find((a) => a.isDefault) ?? accounts.data?.[0];
+  // The head of the account's skin fills the empty slot (initials without one).
+  const head = useSkinHead(current ?? null);
   return (
     <button
       type="button"
@@ -152,8 +155,14 @@ function CurrentAccount() {
       className="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2 text-sm hover:bg-surface-2"
       title={t("header.accountHint")}
     >
-      <span className="grid size-7 place-items-center rounded-md bg-surface-2 text-xs font-semibold uppercase">
-        {current ? current.name.slice(0, 1) : "?"}
+      <span className="grid size-7 place-items-center overflow-hidden rounded-md bg-surface-2 text-xs font-semibold uppercase">
+        {head ? (
+          <img src={head} alt="" draggable={false} className="size-full object-cover" />
+        ) : current ? (
+          current.name.slice(0, 1)
+        ) : (
+          "?"
+        )}
       </span>
       {current ? (
         <span className="hidden flex-col items-start leading-tight sm:flex">

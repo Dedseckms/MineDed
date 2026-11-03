@@ -1,6 +1,6 @@
 import type { SocialUser } from "../../bindings";
 import { Icon, type IconName } from "../../components/ui/Icon";
-import { useAvatarPreview } from "../../hooks/useAvatarPreview";
+import { useAvatarPreview, useSkinHead } from "../../hooks/useAvatarPreview";
 import { useResolvedTheme } from "../../hooks/useAppearance";
 import { initials, userColor } from "../../lib/social";
 import { accentColor, displayNameOf } from "../../lib/socialProfile";
@@ -12,8 +12,9 @@ const SIZES = {
 } as const;
 
 /**
- * Round avatar: the uploaded picture when the hub has one, otherwise player
- * initials in the profile accent colour (or the stable per-player hue).
+ * Round avatar: the uploaded picture when the hub has one, else the head of the
+ * player's skin, otherwise initials in the profile accent colour (or the
+ * stable per-player hue).
  * Both variants share the box size, so the list never reflows.
  */
 export function ChatAvatar({
@@ -27,7 +28,10 @@ export function ChatAvatar({
 }) {
   const theme = useResolvedTheme();
   const accent = accentColor(user?.accent, theme);
-  const picture = useAvatarPreview(user);
+  const uploaded = useAvatarPreview(user);
+  // No picture but a skin: the head of that skin stands in for an avatar.
+  const head = useSkinHead(user);
+  const picture = uploaded ?? head;
   return (
     <span
       aria-hidden

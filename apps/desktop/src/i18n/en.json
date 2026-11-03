@@ -222,6 +222,8 @@
     "accentCustom": "Custom color",
     "accentSwatch": "Accent {{color}}",
     "accentHint": "Adjusted automatically to stay readable in both themes.",
+    "chatSoundHint": "A quiet cue when a message arrives. Admins and moderators cannot be silenced.",
+    "chatSound": "Sound for new chat messages",
     "translucent": "Translucent window",
     "translucentHint": "Mica/Acrylic effect on Windows: the desktop shows through slightly.",
     "translucentLightHint": "Not available in light mode.",
@@ -1099,6 +1101,15 @@
       "userUuid": "UUID",
       "roleSection": "Role",
       "sanctions": "Sanctions",
+      "delete": {
+        "section": "Deletion",
+        "action": "Delete {{name}}",
+        "guestHint": "The guest is removed with its tokens and messages.",
+        "accountHint": "The account disappears from the chat; its Drasl profile stays and returns on the next sign-in.",
+        "title": "Delete the account?",
+        "confirm": "{{name}} will be removed from the chat database. This cannot be undone.",
+        "confirmAction": "Delete"
+      },
       "profileSection": "Profile",
       "resetProfile": "Reset profile",
       "resetAvatar": "Reset avatar",
@@ -1161,6 +1172,10 @@
     "migrating": "Moving storage: {{percent}}%",
     "storageHint": "The new disk or external storage must be configured on the server first.",
     "openFullscreen": "Open full screen",
+    "sound": {
+      "muteUser": "Silence notifications from {{name}}",
+      "unmuteUser": "Hear {{name}} again"
+    },
     "photoViewer": "Photo viewer",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",

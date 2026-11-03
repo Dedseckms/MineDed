@@ -39,6 +39,7 @@ import {
 } from "../../lib/social";
 import { canEditProfile, displayNameOf } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
+import { usePrefsStore } from "../../stores/prefsStore";
 import { useSocialStore } from "../../stores/socialStore";
 import { useToastStore } from "../../stores/toastStore";
 import { useTaskStore } from "../../stores/taskStore";
@@ -775,6 +776,8 @@ function Profile({
   const user = refreshed.data ?? initialUser;
   const locallyBlocked = useSocialStore((s) => s.blocked.includes(user.uuid));
   const blocked = user.isBlocked === true || locallyBlocked;
+  const mutedChat = usePrefsStore((s) => s.mutedChat);
+  const toggleMutedChat = usePrefsStore((s) => s.toggleMutedChat);
   return (
     <Modal open onClose={close} title={t("social.profile.title")}>
       <ProfileCard
@@ -800,6 +803,8 @@ function Profile({
             useSocialStore.getState().block(user.uuid, !blocked);
           })
         }
+        muted={mutedChat.includes(user.uuid)}
+        onToggleMuted={() => toggleMutedChat(user.uuid)}
         guest={isGuest(self)}
       />
     </Modal>

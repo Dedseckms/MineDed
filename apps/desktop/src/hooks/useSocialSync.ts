@@ -12,6 +12,29 @@ import { useAccounts, useRoomState } from "../api/queries";
 import { useSocialStore } from "../stores/socialStore";
 import { useGameStore } from "../stores/gameStore";
 import { forgetGuest, savedGuestNick } from "../lib/guestSession";
+import { canModerate } from "../lib/social";
+import { playCue } from "../lib/sound";
+import { usePrefsStore } from "../stores/prefsStore";
+
+/**
+ * Sound for an incoming message: silent for the own messages, for players the
+ * user muted and while the message's channel is the one on screen. Staff
+ * (admins and moderators) can never be silenced.
+ */
+export function shouldPlayMessageSound(
+  event: SocialEvent,
+  selfUuid: string,
+  openChannel: string,
+): boolean {
+  if (event.type !== "message") return false;
+  const author = event.message.author;
+  if (author.uuid === selfUuid) return false;
+  if (openChannel !== "" && event.message.channel === openChannel) return false;
+  const prefs = usePrefsStore.getState();
+  if (!prefs.chatSound) return false;
+  if (canModerate(author.role)) return true;
+  return !prefs.mutedChat.includes(author.uuid);
+}
 
 /** Update loaded pages in place; incoming traffic must not refetch an entire cloud history. */
 export function applySocialEvent(qc: QueryClient, event: SocialEvent) {
@@ -85,6 +108,8 @@ export function useSocialSync() {
     qc.removeQueries({ queryKey: ["social"] });
     const off = subscribe("socialEvent", (event) => {
       if (!alive) return;
+      const state = useSocialStore.getState();
+      if (shouldPlayMessageSound(event, state.self?.uuid ?? "", state.selected)) playCue("message");
       if (event.type === "connection")
         useSocialStore.getState().set({ connected: event.connected });
       if (event.type === "rejected")

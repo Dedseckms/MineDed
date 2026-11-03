@@ -124,6 +124,14 @@ pub trait ChatService: Send + Sync {
             "ChatService::create_account",
         ))
     }
+    /// Admin only: removes an account or a guest from the hub (guests take
+    /// their messages with them; a server account keeps its Drasl profile).
+    async fn delete_account(&self, uuid: &str) -> AppResult<()> {
+        let _ = uuid;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::delete_account",
+        ))
+    }
     /// Admin only: drops a waiting request without creating an account.
     async fn reject_account_request(&self, request_id: &str) -> AppResult<()> {
         let _ = request_id;

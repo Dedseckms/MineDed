@@ -1078,11 +1078,9 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
     pub(super) fn delete_account(&self, actor: &str, target: &str) -> Result<(), ApiError> {
         let (guest,): (bool,) = self
             .db
-            .query_row(
-                "SELECT guest FROM users WHERE uuid=?1",
-                [target],
-                |r| Ok((r.get(0)?,)),
-            )
+            .query_row("SELECT guest FROM users WHERE uuid=?1", [target], |r| {
+                Ok((r.get(0)?,))
+            })
             .optional()?
             .ok_or_else(|| ApiError::not_found("no such account"))?;
         let tx = self.db.unchecked_transaction()?;
@@ -1105,14 +1103,8 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
             tx.execute("DELETE FROM messages WHERE author=?1", [target])?;
             tx.execute("DELETE FROM guest_tokens WHERE uuid=?1", [target])?;
         }
-        tx.execute(
-            "DELETE FROM friends WHERE a=?1 OR b=?1",
-            [target],
-        )?;
-        tx.execute(
-            "DELETE FROM blocks WHERE owner=?1 OR peer=?1",
-            [target],
-        )?;
+        tx.execute("DELETE FROM friends WHERE a=?1 OR b=?1", [target])?;
+        tx.execute("DELETE FROM blocks WHERE owner=?1 OR peer=?1", [target])?;
         tx.execute("DELETE FROM reads WHERE user=?1", [target])?;
         tx.execute("DELETE FROM moderation WHERE user=?1", [target])?;
         tx.execute("DELETE FROM invites WHERE request=?1", [target])?;
@@ -1120,7 +1112,11 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         tx.commit()?;
         self.audit(
             actor,
-            if guest { "deleteGuest" } else { "deleteAccount" },
+            if guest {
+                "deleteGuest"
+            } else {
+                "deleteAccount"
+            },
             Some(target),
             None,
         )

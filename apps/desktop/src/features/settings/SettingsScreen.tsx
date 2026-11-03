@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { usePrefsStore } from "../../stores/prefsStore";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { Language, MemoryCfg, Settings } from "../../bindings";
@@ -32,6 +33,13 @@ import { AboutSection } from "../updates/AboutSection";
 import { VoiceSettingsSection } from "../voice/VoiceSettingsSection";
 
 type ThemeChoice = "dark" | "light" | "system";
+
+/** Chat message sound: a UI preference, kept per machine in localStorage. */
+function useChatSoundPref() {
+  const chatSound = usePrefsStore((s) => s.chatSound);
+  const setChatSound = usePrefsStore((s) => s.setChatSound);
+  return { chatSound, setChatSound };
+}
 
 /**
  * Accent swatches + custom colour. The native colour input fires on every drag
@@ -151,6 +159,7 @@ function AppearanceSection({ settings }: { settings: Settings }) {
   const save = useSaveSettings();
   const set = (patch: Partial<Settings>) => save.mutate({ ...settings, ...patch });
   const theme: ThemeChoice = typeof settings.theme === "string" ? settings.theme : "dark";
+  const { chatSound, setChatSound } = useChatSoundPref();
 
   return (
     <Section title={t("settings.appearance")}>
@@ -188,6 +197,12 @@ function AppearanceSection({ settings }: { settings: Settings }) {
         description={t(settings.lightMode ? "settings.translucentLightHint" : "settings.translucentHint")}
       />
       <BackgroundPicker value={resolveBackground(settings.background)} onChange={(background) => set({ background })} />
+      <Switch
+        checked={chatSound}
+        onChange={setChatSound}
+        label={t("settings.chatSound")}
+        description={t("settings.chatSoundHint")}
+      />
       <Switch
         checked={settings.lightMode}
         onChange={(lightMode) => set({ lightMode })}
