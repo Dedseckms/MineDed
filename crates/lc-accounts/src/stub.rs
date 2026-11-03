@@ -101,6 +101,10 @@ impl SkinService for StubSkins {
     async fn set_cape(&self, _account: AccountId, _cape_id: Option<String>) -> AppResult<()> {
         Err(AppError::not_implemented("SkinService::set_cape"))
     }
+
+    async fn head(&self, _skin_url: &str) -> AppResult<String> {
+        Err(AppError::not_implemented("SkinService::head"))
+    }
 }
 
 #[cfg(test)]

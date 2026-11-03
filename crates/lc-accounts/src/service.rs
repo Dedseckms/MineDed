@@ -151,6 +151,12 @@ impl AccountsService {
         self.downloader.client(Route::Auto)
     }
 
+    /// Shared downloader (mirrors, retries, route policy) for other services
+    /// in this crate.
+    pub(crate) fn downloader(&self) -> &Arc<dyn Downloader> {
+        &self.downloader
+    }
+
     /// Own server API root: `Settings.skin_server` or [`ygg::DEFAULT_API_ROOT`].
     pub async fn own_api_root(&self) -> AppResult<Url> {
         let configured = self.settings.get().await?.skin_server;

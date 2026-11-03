@@ -105,4 +105,6 @@ pub trait SkinService: Send + Sync {
     async fn capes(&self, account: AccountId) -> AppResult<Vec<Cape>>;
     /// Selects a validated local cape or the current remote cape; None removes it.
     async fn set_cape(&self, account: AccountId, cape_id: Option<String>) -> AppResult<()>;
+    /// PNG data URL of the head: the 8x8 face and the hat overlay, scaled to 64x64.
+    async fn head(&self, skin_url: &str) -> AppResult<String>;
 }

@@ -7,6 +7,7 @@ pub mod offline;
 mod remote;
 mod service;
 mod skins;
+mod skins_head;
 mod stub;
 mod tokens;
 pub mod yggdrasil;

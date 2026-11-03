@@ -22,6 +22,7 @@ reqwest = { workspace = true, features = ["multipart"] }
 sha2 = "0.10"
 base64 = "0.23"
 png = "0.18"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 axum.workspace = true
