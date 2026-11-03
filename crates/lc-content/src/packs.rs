@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::contract::PackIo;
 use crate::fallback::{self, ManualFile, Missing};
-use crate::index::{key, ContentIndex, IndexEntry};
+use crate::index::{base_name, key, ContentIndex, IndexEntry};
 use crate::service::{ContentServices, Inner};
 use crate::source::Target;
 use crate::util::{
@@ -1168,6 +1168,10 @@ impl Inner {
 
     /// Pack files the user still has to download by hand. A missing or damaged
     /// list means nothing is outstanding.
+    ///
+    /// A file that already sits in its content folder (put there by hand, or
+    /// dropped in by "add from computer") is no longer listed: the banner only
+    /// shows what is really missing.
     pub(crate) async fn manual_downloads(&self, id: InstanceId) -> Vec<ManualDownload> {
         let path = self.instance_dir(id).join(MANUAL_FILE);
         let Ok(bytes) = tokio::fs::read(&path).await else {
@@ -1176,8 +1180,16 @@ impl Inner {
         let Ok(files) = serde_json::from_slice::<Vec<ManualFile>>(&bytes) else {
             return Vec::new();
         };
+        let game = self.instances.game_dir(id);
+        let on_disk = self.scan(&game).await.unwrap_or_default();
+        let present = |file_name: &str| {
+            on_disk
+                .iter()
+                .any(|f| !f.is_dir && f.size > 0 && f.base() == base_name(file_name))
+        };
         files
             .into_iter()
+            .filter(|file| !present(&file.file_name))
             .map(|file| ManualDownload {
                 project_id: fallback::project_id(&file.url).unwrap_or_default(),
                 file_name: file.file_name,

@@ -27,6 +27,21 @@ export function isImage(attachment: SocialAttachment): boolean {
 }
 
 /**
+ * Full-size original, fetched only once the viewer opens; the bounded preview
+ * shows first so the dialog is never empty. Failed load keeps the preview.
+ */
+function useOriginal(attachment: SocialAttachment, open: boolean) {
+  const query = useQuery({
+    queryKey: ["social", "original", attachment.id],
+    queryFn: async () => unwrap(await api.socialAttachmentOriginal(attachment.id)),
+    enabled: open,
+    staleTime: Infinity,
+    retry: false,
+  });
+  return query.data?.startsWith("data:image/") ? query.data : null;
+}
+
+/**
  * Inline thumbnail with an immediate preview; the save button lives only in the
  * full-screen viewer, never in the bubble.
  */
@@ -42,6 +57,7 @@ export function ImageThumb({
   const { t } = useTranslation();
   const [viewer, setViewer] = useState(false);
   const { src, pending } = usePreview(attachment);
+  const original = useOriginal(attachment, viewer);
   return (
     <div
       className={`relative overflow-hidden rounded-lg bg-surface ${className}`}
@@ -67,7 +83,7 @@ export function ImageThumb({
         </p>
       )}
       <PhotoViewer
-        src={viewer ? src : null}
+        src={viewer ? (original ?? src) : null}
         alt={attachment.fileName}
         onClose={() => setViewer(false)}
         onSave={() => onSave(attachment)}

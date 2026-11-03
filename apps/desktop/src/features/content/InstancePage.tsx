@@ -5,12 +5,13 @@ import type { ContentKind, InstalledContent, Instance, ManualDownload, ProjectSu
 import { api, unwrap } from "../../api/client";
 import { useQuery } from "@tanstack/react-query";
 
-import { qk, useContentList, useContentMarks, useInstances, useStartTask } from "../../api/queries";
+import { qk, useContentList, useContentMarks, useGameDir, useInstances, useStartTask } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { Tabs } from "../../components/ui/Tabs";
 import { Badge, ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import { type SearchKind, hasShaderLoader, installedOfKind, shaderLoaderFor } from "../../lib/content";
+import { openFolder } from "../../lib/openExternal";
 import { useContentStore } from "../../stores/contentStore";
 import { INSTANCE_TABS, type InstanceTab, useNavStore } from "../../stores/navStore";
 import { useTaskView } from "../../stores/taskStore";
@@ -31,6 +32,15 @@ const TAB_KIND: Record<Exclude<InstanceTab, "browse">, ContentKind> = {
 };
 
 export const OPTIFINE_URL = "https://optifine.net/downloads";
+/** Sub-folder of the game directory that holds each content kind. */
+const KIND_FOLDER: Record<ContentKind, string> = {
+  mod: "mods",
+  resourcePack: "resourcepacks",
+  shader: "shaderpacks",
+  dataPack: "datapacks",
+  modpack: "",
+};
+
 /** Modrinth project ids of the shader loaders. */
 const SHADER_LOADER_IDS = { iris: "YL57xq9U", oculus: "GchcoXML" } as const;
 
@@ -110,6 +120,8 @@ function InstanceContent({ instance }: { instance: Instance }) {
   const content = useContentList(instance.id);
   // Badges arrive later: the installed list itself never waits for the network.
   const markList = useContentMarks(instance.id, content.isSuccess);
+  // "Open folder": the game directory of this instance plus the kind's sub-folder.
+  const gameDir = useGameDir(instance.id);
   // Pack files that still need a manual download (CurseForge opt-out, failed CDN).
   const manual = useQuery({
     queryKey: ["content", "manual", instance.id, content.dataUpdatedAt],
@@ -157,6 +169,19 @@ function InstanceContent({ instance }: { instance: Instance }) {
           badge: v !== "browse" && content.data ? <Badge>{count(TAB_KIND[v])}</Badge> : undefined,
         }))}
       />
+      {tab !== "browse" ? (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Icon name="folder" />}
+            onClick={() => void openFolder(gameDir.data, KIND_FOLDER[TAB_KIND[tab]])}
+            disabled={!gameDir.data}
+          >
+            {t("content.openFolder")}
+          </Button>
+        </div>
+      ) : null}
       <div role="tabpanel" aria-labelledby={`inst-tab-${tab}`} className="flex flex-col gap-4">
         {tab === "browse" ? (
           <Catalog instance={instance} installed={installed} onOpen={setProject} onInstall={(p) => installProject(p)} />

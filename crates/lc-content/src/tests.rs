@@ -1708,6 +1708,17 @@ async fn manual_downloads_are_reported_until_the_pack_is_complete() {
         .unwrap();
     assert!(e.svc.manual_downloads(&full.id).await.unwrap().is_empty());
 
+    // Manual download is no longer listed once the file is placed in the folder.
+    let game = e.inst.game_dir(inst.id);
+    std::fs::write(
+        game.join("mods").join("geckolib-forge-1.20.1-4.4.9.jar"),
+        b"downloaded",
+    )
+    .unwrap();
+    assert!(e.svc.manual_downloads(&inst.id).await.unwrap().is_empty());
+    // Re-check that the scan also sees the previous files: everything is accounted for.
+    assert!(!e.svc.list(inst.id).await.unwrap().is_empty());
+
     // Unknown instance fails, a damaged list is not an error.
     assert_eq!(
         e.svc
