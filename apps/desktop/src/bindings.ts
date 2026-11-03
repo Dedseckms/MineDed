@@ -244,6 +244,8 @@ export const commands = {
 	socialAccountRequests: () => typedError<AccountRequest[], AppError>(__TAURI_INVOKE("social_account_requests")),
 	socialIssueInvite: (requestId: string) => typedError<string, AppError>(__TAURI_INVOKE("social_issue_invite", { requestId })),
 	socialCreateAccount: (requestId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_create_account", { requestId })),
+	/**  Admin only: drops a waiting account request without creating an account. */
+	socialRejectAccount: (requestId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_reject_account", { requestId })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
@@ -310,6 +312,8 @@ export type AccountRequest = {
 	/**  Stable id of the request (the requesting guest UUID). */
 	id: string,
 	name: string,
+	/**  Login the guest asked for (may differ from the nickname). */
+	login?: string | null,
 	note: string,
 	createdAt: string,
 };
@@ -329,6 +333,9 @@ export type AdminAccount = {
 	/**  Drasl invite already issued for this account request. */
 	invite?: string | null,
 	inviteUrl?: string | null,
+	/**  End of an active mute (RFC 3339); `None` when the player is not muted. */
+	mutedUntil?: string | null,
+	banned?: boolean,
 };
 
 export type AdminPresence = {

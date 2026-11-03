@@ -189,12 +189,14 @@ export function createSocialMocks(
     {
       id: "44444444444444444444444444444444",
       name: "NotchFan",
+      login: "NotchFan",
       note: "Играю гостём третий день, хочу свой ник.",
       createdAt: minutesAgo(40),
     },
     {
       id: "55555555555555555555555555555555",
       name: "Kefir",
+      login: "Kefir",
       note: "",
       createdAt: minutesAgo(60 * 26),
     },
@@ -209,6 +211,8 @@ export function createSocialMocks(
       createdAt: minutesAgo(60 * 24 * 12),
       invite: null,
       inviteUrl: null,
+      mutedUntil: null,
+      banned: false,
     },
     {
       uuid: "66666666666666666666666666666666",
@@ -218,6 +222,8 @@ export function createSocialMocks(
       createdAt: minutesAgo(60 * 5),
       invite: null,
       inviteUrl: null,
+      mutedUntil: minutesAgo(-90),
+      banned: false,
     },
     ...requests
       .filter((r) => approved.has(r.id))
@@ -227,6 +233,8 @@ export function createSocialMocks(
         guest: false,
         displayName: null,
         createdAt: r.createdAt,
+        mutedUntil: null,
+        banned: false,
         invite: null,
         inviteUrl: null,
       })),
@@ -599,6 +607,7 @@ export function createSocialMocks(
         {
           id: self.uuid,
           name: login,
+          login,
           note: text ?? "",
           createdAt: new Date().toISOString(),
         },
@@ -640,6 +649,15 @@ export function createSocialMocks(
       const request = requests.find((r) => r.id === requestId);
       if (!request) return invalid("mock: unknown request");
       approved.add(requestId);
+      // The request is served: it leaves the list, an account exists now.
+      requests.splice(requests.indexOf(request), 1);
+      return ok(null);
+    },
+    socialRejectAccount: async (requestId) => {
+      if (self?.role !== "admin") return denied();
+      const request = requests.find((r) => r.id === requestId);
+      if (!request) return invalid("mock: unknown request");
+      requests.splice(requests.indexOf(request), 1);
       return ok(null);
     },
     socialAdminAccounts: async () =>

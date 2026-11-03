@@ -343,6 +343,11 @@ pub struct AdminAccount {
     pub invite: Option<String>,
     #[serde(default)]
     pub invite_url: Option<String>,
+    /// End of an active mute (RFC 3339); `None` when the player is not muted.
+    #[serde(default)]
+    pub muted_until: Option<String>,
+    #[serde(default)]
+    pub banned: bool,
 }
 
 /// A guest asking the admin for a real account.
@@ -352,6 +357,9 @@ pub struct AccountRequest {
     /// Stable id of the request (the requesting guest UUID).
     pub id: String,
     pub name: String,
+    /// Login the guest asked for (may differ from the nickname).
+    #[serde(default)]
+    pub login: Option<String>,
     pub note: String,
     pub created_at: String,
 }

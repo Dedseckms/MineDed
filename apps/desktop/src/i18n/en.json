@@ -1071,6 +1071,8 @@
         "filterPlaceholder": "Nickname or UUID",
         "empty": "No accounts yet",
         "real": "Account",
+        "banned": "Banned",
+        "mutedUntil": "Muted until {{date}}",
         "firstSeen": "First seen {{date}}",
         "invited": "Invite issued",
         "invite": "Issued invite",
@@ -1088,6 +1090,8 @@
         "issuedToast": "Invite issued",
         "create": "Create account",
         "created": "Account created",
+      "reject": "Reject",
+      "rejectedToast": "Request rejected",
         "createdToast": "Account created",
         "createHint": "The account gets the login and password from the request. The guest token is kept — the player only has to sign in in the launcher."
       },

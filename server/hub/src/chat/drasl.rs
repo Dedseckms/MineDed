@@ -49,6 +49,14 @@ pub(super) struct PublicPlayer {
     pub skin: Option<String>,
 }
 impl Directory {
+    /// Directory bound to a local admin API regardless of the environment (tests).
+    #[cfg(test)]
+    pub(super) fn local(url: String) -> Self {
+        let mut directory = Self::from_env();
+        directory.url = Some(url);
+        directory.token = Some("server-only".into());
+        directory
+    }
     pub fn from_env() -> Self {
         Self {
             url: std::env::var("HUB_DRASL_ADMIN_URL").ok().and_then(|s| {

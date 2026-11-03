@@ -52,23 +52,20 @@ impl Plan {
 }
 impl Chat {
     /// `POST /chat/admin/create-account/{uuid}`: creates the Drasl account the
-    /// guest asked for, with the username and password of the request.
+    /// guest asked for, with the username and the sealed password of the request.
     ///
-    /// `password` is the salted hash stored for the request, `key` the plaintext
-    /// sealed by the same salt ([`super::store::unseal_password`]). The Drasl
-    /// call runs outside the store lock; only a confirmed account is recorded.
+    /// The body is ignored (older launchers send `{"key": ...}`). The Drasl call
+    /// runs outside the store lock; the request is only cleared after Drasl
+    /// confirmed the account, so a failure leaves it open for a retry.
     pub(super) async fn create_account(
         self: &Arc<Self>,
         me: String,
         request: String,
-        body: &Value,
     ) -> Result<(), ApiError> {
-        let key = body["key"].as_str().unwrap_or_default().to_owned();
         let request = store::uuid(&request)?;
-        let payload = self
+        let (username, password, sealed) = self
             .run({
                 let request = request.clone();
-                let key = key.clone();
                 let actor = me.clone();
                 move |db, _| {
                     // Unknown callers lack the admin row: same error as a non-admin.
@@ -78,15 +75,10 @@ impl Chat {
                     if db.account_created_state(&request)? {
                         return Err(conflict("account already created"));
                     }
-                    let (username, stored) = db
-                        .account_credentials(&request)?
-                        .ok_or_else(|| ApiError::not_found("no such account request"))?;
-                    let password = store::unseal_password(&request, &stored, &key)?;
-                    Ok((username, password, stored))
+                    db.request_credentials(&request)
                 }
             })
             .await?;
-        let (username, password, sealed) = payload;
         let account = self.directory.create_user(&username, &password).await?;
         if !account.eq_ignore_ascii_case(&username) {
             eprintln!("hub: Drasl created account {account} for a different request name");
@@ -94,6 +86,32 @@ impl Chat {
         self.run({
             let request = request.clone();
             move |db, _| db.request_served(&me, &request, &sealed, &account)
+        })
+        .await?;
+        let _ = self.events.send(Notice::Account(request));
+        Ok(())
+    }
+    /// `POST /chat/admin/reject/{uuid}`: drops an open account request so it
+    /// leaves the admin list and the guest can ask again.
+    ///
+    /// A request that is no longer open (served, rejected already, or never
+    /// existed) answers 404 `notFound`.
+    pub(super) async fn reject_account(
+        self: &Arc<Self>,
+        me: String,
+        request: String,
+    ) -> Result<(), ApiError> {
+        let request = store::uuid(&request)?;
+        self.run({
+            let request = request.clone();
+            move |db, _| {
+                if db.role(&me)? != SocialRole::Admin {
+                    return Err(denied());
+                }
+                db.request_rejected(&me, &request)?
+                    .then_some(())
+                    .ok_or_else(|| ApiError::not_found("no such account request"))
+            }
         })
         .await?;
         let _ = self.events.send(Notice::Account(request));

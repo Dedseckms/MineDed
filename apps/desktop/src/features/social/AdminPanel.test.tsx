@@ -314,10 +314,39 @@ describe("requests tab", () => {
     expect(
       useToastStore.getState().toasts.map((x) => x.messageKey),
     ).toContain("social.admin.requests.createdToast");
-    const done = await screen.findByRole("button", {
-      name: i18n.t("social.admin.requests.created"),
+    // The handled request leaves the list (the query may lag behind).
+    await waitFor(() =>
+      expect(screen.queryAllByText("NotchFan")).toHaveLength(0),
+    );
+  });
+
+  it("drops a rejected request without creating an account", async () => {
+    const rejected: string[] = [];
+    const created: string[] = [];
+    mount(ADMIN, {
+      socialAccountRequests: async () => ok(REQUESTS),
+      socialRejectAccount: async (id) => {
+        rejected.push(id);
+        return ok(null);
+      },
+      socialCreateAccount: async (id) => {
+        created.push(id);
+        return ok(null);
+      },
     });
-    expect((done as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(tab("requests"));
+    fireEvent.click((await screen.findAllByText("NotchFan"))[0]!);
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("social.admin.requests.reject") }),
+    );
+    await waitFor(() => expect(rejected).toEqual([REQUESTS[0]!.id]));
+    expect(created).toEqual([]);
+    await waitFor(() =>
+      expect(screen.queryAllByText("NotchFan")).toHaveLength(0),
+    );
+    expect(
+      useToastStore.getState().toasts.map((x) => x.messageKey),
+    ).toContain("social.admin.requests.rejectedToast");
   });
 
   it("shows a taken login next to the request", async () => {

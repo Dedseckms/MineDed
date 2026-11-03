@@ -5,11 +5,16 @@ use crate::error::ApiError;
 use crate::rfc3339;
 use lc_types::social::AuditEntry;
 use rusqlite::params;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Entries returned by the admin panel; the table is trimmed at four times that.
 const AUDIT_PAGE: usize = 200;
 const AUDIT_KEEP: usize = AUDIT_PAGE * 4;
+
+/// End of a running mute as RFC 3339; `0` (never muted) and an expired mute are `None`.
+fn mute_end(mute: i64, now: u64) -> Option<String> {
+    (mute > now as i64).then(|| rfc3339::format(UNIX_EPOCH + Duration::from_secs(mute as u64)))
+}
 
 impl Store {
     /// Records an action. `actor` and `target` are profile UUIDs; the actor name
@@ -94,13 +99,14 @@ impl Store {
         self.audit(actor, "invite", Some(request), Some(code))
     }
 
-    /// Guests waiting for an account, newest first.
+    /// Guests waiting for an account, newest first. `login` is the Drasl name the
+    /// guest asked for when it differs from the chat nickname.
     pub(super) fn account_requests(
         &self,
     ) -> Result<Vec<lc_types::social::AccountRequest>, ApiError> {
         let mut stmt = self.db.prepare(
-            "SELECT uuid,name,request,created_at FROM users WHERE request_password IS NOT NULL \
-             ORDER BY created_at DESC LIMIT 200",
+            "SELECT uuid,name,request,created_at,username_hint FROM users \
+             WHERE request_password IS NOT NULL ORDER BY created_at DESC LIMIT 200",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(lc_types::social::AccountRequest {
@@ -108,6 +114,7 @@ impl Store {
                 name: r.get(1)?,
                 note: r.get(2)?,
                 created_at: r.get(3)?,
+                login: r.get(4)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -116,12 +123,16 @@ impl Store {
     /// Every account the launcher knows, newest first: joined players, chat
     /// guests and offline nicknames waiting for an account request.
     ///
-    /// The response adds `accountCreated` and the requested `username` to
-    /// [`lc_types::social::AdminAccount`]; the typed DTO has no such fields yet.
+    /// The response adds `accountCreated`, the requested `username` and the
+    /// moderation state (`mutedUntil`, `banned`) to
+    /// [`lc_types::social::AdminAccount`]; `mutedUntil` is RFC 3339 and `null`
+    /// when no mute is running (expired mutes included).
     pub(super) fn admin_accounts(&self) -> Result<Vec<serde_json::Value>, ApiError> {
+        let now = super::store::now();
         let mut stmt = self.db.prepare(
-            "SELECT u.uuid,u.name,u.guest,u.display_name,u.created_at,i.code,i.url,u.account_created,u.username_hint,u.request \
+            "SELECT u.uuid,u.name,u.guest,u.display_name,u.created_at,i.code,i.url,u.account_created,u.username_hint,u.request,m.mute,m.ban \
              FROM users u LEFT JOIN invites i ON i.request=u.uuid \
+             LEFT JOIN moderation m ON m.user=u.uuid \
              ORDER BY CASE WHEN u.created_at='' THEN 1 ELSE 0 END, u.created_at DESC LIMIT 500",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -134,21 +145,25 @@ impl Store {
                     created_at: r.get(4)?,
                     invite: r.get::<_, Option<String>>(5)?,
                     invite_url: r.get::<_, Option<String>>(6)?,
+                    muted_until: None,
+                    banned: r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
                 },
                 r.get::<_, bool>(7)?,
                 r.get::<_, Option<String>>(8)?,
                 r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<i64>>(10)?.unwrap_or(0),
             ))
         })?;
         let accounts = rows.collect::<Result<Vec<_>, _>>()?;
         Ok(accounts
             .into_iter()
-            .map(|(a, created, username, request)| {
+            .map(|(a, created, username, request, mute)| {
                 serde_json::json!({"uuid": a.uuid, "name": a.name, "guest": a.guest,
                     "displayName": a.display_name, "createdAt": a.created_at,
                     "invite": a.invite, "inviteUrl": a.invite_url,
                     "accountCreated": created,
-                    "username": if request.is_some() { username } else { None }})
+                    "username": if request.is_some() { username } else { None },
+                    "mutedUntil": mute_end(mute, now), "banned": a.banned})
             })
             .collect())
     }

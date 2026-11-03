@@ -156,6 +156,16 @@ export function UsersTab() {
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
                         {account.displayName || account.name}
                       </span>
+                      {account.banned ? (
+                        <Badge tone="danger">{t("social.admin.accounts.banned")}</Badge>
+                      ) : null}
+                      {account.mutedUntil ? (
+                        <Badge tone="warning">
+                          {t("social.admin.accounts.mutedUntil", {
+                            date: when(account.mutedUntil),
+                          })}
+                        </Badge>
+                      ) : null}
                       <Badge tone={account.guest ? "warning" : "accent"}>
                         {t(
                           account.guest

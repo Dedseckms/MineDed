@@ -367,6 +367,70 @@ paths:
         "204": { description: OK }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /chat/account-request:
+    post:
+      tags: [chat]
+      operationId: chatRequestAccount
+      summary: Guest only - body {username, password, note}; asks an admin for a server account
+      responses:
+        "204": { description: OK }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/admin/accounts:
+    get:
+      tags: [chat]
+      operationId: chatAdminAccounts
+      summary: Admin only - every known account with role, invite state and moderation (mutedUntil, banned)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Social" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/admin/requests:
+    get:
+      tags: [chat]
+      operationId: chatAccountRequests
+      summary: Admin only - guests waiting for an account {id, name, login, note, createdAt}
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Social" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /chat/admin/create-account/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [chat]
+      operationId: chatCreateAccount
+      summary: Admin only - creates the Drasl account of a request with its own login and password; the request disappears
+      responses:
+        "204": { description: OK }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /chat/admin/reject/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [chat]
+      operationId: chatRejectAccountRequest
+      summary: Admin only - drops a waiting request without creating an account
+      responses:
+        "204": { description: OK }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /chat/admin/invite/{uuid}:
+    parameters:
+      - { name: uuid, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [chat]
+      operationId: chatIssueInvite
+      summary: Admin only - Drasl invite link for a waiting request {url}
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Social" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /chat/admin/roles/{uuid}:
     parameters:
       - { name: uuid, in: path, required: true, schema: { type: string } }

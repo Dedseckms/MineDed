@@ -12,6 +12,8 @@ pub(super) struct Store {
     pub db: Connection,
     pub files: PathBuf,
     dictionary: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Sealing key of account-request passwords, loaded from `settings` on first use.
+    pub(super) request_key: std::sync::Mutex<Option<chacha20poly1305::XChaCha20Poly1305>>,
 }
 
 pub(super) fn now() -> u64 {
@@ -27,25 +29,14 @@ pub(super) fn uuid(id: &str) -> Result<String, ApiError> {
         .map(|v| v.simple().to_string())
         .ok_or_else(|| invalid("invalid profile UUID"))
 }
-/// Salted SHA-256 of the request profile UUID and the password: it ti one password, and the random guest id salts it.
+/// Salted SHA-256 of the request profile UUID and the password: a copy of the
+/// database alone does not reveal the password, the random guest id salts it.
 pub(super) fn seal_password(request: &str, password: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(request.as_bytes());
     digest.update([0]);
     digest.update(password.as_bytes());
     format!("{:x}", digest.finalize())
-}
-/// Recovers the plaintext password from [`seal_password`].
-///
-/// The launcher sends the password twice: `password` is the salted hash that is
-/// kept and `key` is the plaintext sealed by the same salt. The salt is the
-/// request UUID, so a copy of the database serves neither another request nor a
-/// renamed profile; plaintext is never stored.
-pub(super) fn unseal_password(request: &str, stored: &str, key: &str) -> Result<String, ApiError> {
-    if seal_password(request, key) != stored {
-        return Err(invalid("password does not match its hash"));
-    }
-    Ok(key.to_owned())
 }
 fn pair(a: &str, b: &str) -> (String, String) {
     if a < b {
@@ -141,6 +132,9 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
             "account_created",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+        // Schema v5: the request password is also kept sealed, so approving the
+        // request can create the Drasl account without asking the admin for it.
+        ensure_column(&db, "users", "request_secret", "BLOB")?;
         // Schema v3: the uploaded original is kept for "save as" (older rows have none).
         ensure_column(&db, "attachments", "original", "TEXT")?;
         let files: Option<String> = db
@@ -165,6 +159,7 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
             db,
             files,
             dictionary: std::sync::Mutex::new(dictionary),
+            request_key: std::sync::Mutex::new(None),
         })
     }
     pub fn identify(
@@ -878,9 +873,13 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                 let username = guest::validate_name(body["username"].as_str().unwrap_or_default())?;
                 let password =
                     guest::validate_password(body["password"].as_str().unwrap_or_default())?;
+                // The hash keeps the old check; the sealed copy is what creates
+                // the Drasl account once an admin approves the request.
+                let hash = seal_password(me, &password);
+                let secret = self.seal_secret(me, &password)?;
                 self.db.execute(
-                    "UPDATE users SET request=?1,username_hint=?2,request_password=?3,account_created=0 WHERE uuid=?4",
-                    params![note, username, seal_password(me, &password), me],
+                    "UPDATE users SET request=?1,username_hint=?2,request_password=?3,request_secret=?4,account_created=0 WHERE uuid=?5",
+                    params![note, username, hash, secret, me],
                 )?;
                 let _ = chat.events.send(super::Notice::Admin);
                 Ok(Value::Null)
@@ -944,6 +943,7 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                                 self.account_created_state(&request.id).unwrap_or_default();
                             json!({"id": request.id, "name": request.name, "note": request.note,
                         "createdAt": request.created_at, "username": username,
+                        "login": request.login,
                         "password": password, "accountCreated": created})
                         });
                         Ok(Value::Array(requests.collect()))
@@ -991,6 +991,33 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
             )
             .optional()?)
     }
+    /// Username and sealed password of an open account request, decrypted here.
+    ///
+    /// A request that predates the sealed column (schema v4) has no password to
+    /// recover: `details.reason = requestHasNoPassword` instead of a crash.
+    pub(super) fn request_credentials(
+        &self,
+        request: &str,
+    ) -> Result<(String, String, Vec<u8>), ApiError> {
+        let row: Option<(String, Option<Vec<u8>>)> = self
+            .db
+            .query_row(
+                "SELECT COALESCE(username_hint,name),request_secret FROM users \
+                 WHERE uuid=?1 AND request IS NOT NULL AND request_password IS NOT NULL",
+                [request],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let (username, sealed) =
+            row.ok_or_else(|| ApiError::not_found("no such account request"))?;
+        let sealed = sealed.ok_or_else(|| {
+            invalid("request has no stored password").detail("reason", "requestHasNoPassword")
+        })?;
+        let password = self.open_secret(request, &sealed).map_err(|_| {
+            invalid("request password cannot be recovered").detail("reason", "requestHasNoPassword")
+        })?;
+        Ok((username, password, sealed))
+    }
     /// Whether a Drasl account was already created for the request.
     pub(super) fn account_created_state(&self, request: &str) -> Result<bool, ApiError> {
         Ok(self
@@ -1005,24 +1032,45 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
     }
     /// Records a created Drasl account: the request is served, the password kept
     /// there is removed so that a copy of the database cannot log in as anyone.
+    ///
+    /// `sealed` identifies the request row that was approved; a request rewritten
+    /// or rejected while Drasl was busy keeps its newer state.
     pub(super) fn request_served(
         &self,
         actor: &str,
         request: &str,
-        sealed: &str,
+        sealed: &[u8],
         account: &str,
     ) -> Result<(), ApiError> {
         let tx = self.db.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE users SET account_created=1,request_password=NULL WHERE uuid=?1 AND request_password=?2",
+        let served = tx.execute(
+            "UPDATE users SET account_created=1,request_password=NULL,request_secret=NULL \
+             WHERE uuid=?1 AND request_password IS NOT NULL AND request_secret=?2",
             params![request, sealed],
         )?;
+        if served == 0 {
+            return Err(super::conflict("account request changed during approval"));
+        }
         tx.execute(
             "INSERT OR REPLACE INTO invites(request,code,url,created) VALUES(?1,'',?2,?3)",
             params![request, account, rfc3339::format(SystemTime::now())],
         )?;
         tx.commit()?;
         self.audit(actor, "accountCreate", Some(request), Some(account))
+    }
+    /// Drops an open request after the admin declined it. `Ok(false)` = nothing
+    /// to drop any more (already served or rejected).
+    pub(super) fn request_rejected(&self, actor: &str, request: &str) -> Result<bool, ApiError> {
+        let dropped = self.db.execute(
+            "UPDATE users SET request=NULL,request_password=NULL,request_secret=NULL,\
+             username_hint=NULL,account_created=0 WHERE uuid=?1 AND request_password IS NOT NULL",
+            [request],
+        )?;
+        if dropped == 0 {
+            return Ok(false);
+        }
+        self.audit(actor, "rejectAccount", Some(request), None)?;
+        Ok(true)
     }
     fn moderation(
         &self,

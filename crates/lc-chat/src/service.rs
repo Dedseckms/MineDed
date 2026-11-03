@@ -1478,6 +1478,10 @@ impl ChatService for ChatClient {
     async fn account_requests(&self) -> AppResult<Vec<AccountRequest>> {
         self.api(Method::GET, &["admin", "requests"], None).await
     }
+    async fn reject_account_request(&self, request_id: &str) -> AppResult<()> {
+        self.empty(Method::POST, &["admin", "reject", request_id], None)
+            .await
+    }
     async fn issue_invite(&self, request_id: &str) -> AppResult<String> {
         #[derive(serde::Deserialize)]
         struct Issued {

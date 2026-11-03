@@ -124,6 +124,13 @@ pub trait ChatService: Send + Sync {
             "ChatService::create_account",
         ))
     }
+    /// Admin only: drops a waiting request without creating an account.
+    async fn reject_account_request(&self, request_id: &str) -> AppResult<()> {
+        let _ = request_id;
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::reject_account_request",
+        ))
+    }
     /// Admin only: creates a Drasl invite for a waiting request, returns its
     /// registration link.
     async fn issue_invite(&self, request_id: &str) -> AppResult<String> {

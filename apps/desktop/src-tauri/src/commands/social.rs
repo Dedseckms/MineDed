@@ -424,6 +424,16 @@ pub async fn social_create_account(
     state.social.create_account(&request_id).await
 }
 
+/// Admin only: drops a waiting account request without creating an account.
+#[tauri::command]
+#[specta::specta]
+pub async fn social_reject_account(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> AppResult<()> {
+    state.social.reject_account_request(&request_id).await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn social_admin_accounts(state: State<'_, AppState>) -> AppResult<Vec<AdminAccount>> {

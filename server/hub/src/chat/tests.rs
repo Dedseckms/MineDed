@@ -1088,21 +1088,25 @@ async fn account_request_stores_a_salted_password_hash_and_admin_creates_it() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    // Only the salted hash is kept: the plaintext never reaches the database.
+    // Only the salted hash and a sealed copy are kept: the plaintext never
+    // reaches the database readable.
     {
         let db = chat.store.lock().unwrap();
-        let stored: Option<String> = db
+        let (stored, sealed): (Option<String>, Option<Vec<u8>>) = db
             .db
             .query_row(
-                "SELECT request_password FROM users WHERE uuid=?1",
+                "SELECT request_password,request_secret FROM users WHERE uuid=?1",
                 [&guest],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
         let stored = stored.unwrap();
         assert_eq!(stored.len(), 64);
         assert_ne!(stored, "secret1");
         assert_eq!(stored, super::store::seal_password(&guest, "secret1"));
+        let sealed = sealed.expect("sealed copy");
+        assert!(!sealed.windows(7).any(|w| w == b"secret1"));
+        assert_eq!(db.open_secret(&guest, &sealed).unwrap(), "secret1");
         assert!(!db.account_created_state(&guest).unwrap());
     }
     let (status, me) = request_abs(&app, "GET", "/api/v1/chat/me", Some(&token), Value::Null).await;
@@ -1110,7 +1114,6 @@ async fn account_request_stores_a_salted_password_hash_and_admin_creates_it() {
     assert_eq!(me["accountCreated"], false); // The admin panel sees the request without any secret of its own.
     let (status, requests) = request(&app, "GET", "admin/requests", true, Value::Null).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{requests}");
-    // A wrong key is rejected before Drasl is contacted.
     let admin = identity(1).user_id;
     chat.run({
         let admin = admin.clone();
@@ -1123,28 +1126,12 @@ async fn account_request_stores_a_salted_password_hash_and_admin_creates_it() {
     .await
     .unwrap();
     let error = chat
-        .create_account(
-            admin.clone(),
-            guest.clone(),
-            &json!({"key":"not-the-password"}),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code, "invalidInput");
-    let error = chat
-        .create_account(
-            "00000000000000000000000000000002".into(),
-            guest.clone(),
-            &json!({}),
-        )
+        .create_account("00000000000000000000000000000002".into(), guest.clone())
         .await
         .unwrap_err();
     assert_eq!(error.code, "permissionDenied");
-    // Without a Drasl admin URL the call is refused and nothing is recorded.
-    let error = chat
-        .create_account(admin, guest.clone(), &json!({"key":"secret1"}))
-        .await
-        .unwrap_err();
+    // Without a Drasl admin URL the call is refused and the request stays open.
+    let error = chat.create_account(admin, guest.clone()).await.unwrap_err();
     assert_eq!(error.code, "network");
     let db = chat.store.lock().unwrap();
     assert_eq!(
@@ -1160,22 +1147,35 @@ fn created_account_is_recorded_once_and_audited() {
     let db = chat.store.lock().unwrap();
     seed(&db);
     let guest = db.guest_login("GuestNick", &chat).unwrap().user.uuid;
+    let secret = db.seal_secret(&guest, "secret1").unwrap();
     db.db
         .execute(
-            "UPDATE users SET request='hi',username_hint='My_Account',request_password=?1 WHERE uuid=?2",
-            rusqlite::params![super::store::seal_password(&guest, "secret1"), guest],
+            "UPDATE users SET request='hi',username_hint='My_Account',request_password=?1,request_secret=?2 WHERE uuid=?3",
+            rusqlite::params![super::store::seal_password(&guest, "secret1"), secret, guest],
         )
         .unwrap();
     let admin = identity(1).user_id;
     db.db
         .execute("UPDATE users SET admin=1 WHERE uuid=?1", [&admin])
         .unwrap();
-    let sealed = super::store::seal_password(&guest, "secret1");
-    db.request_served(&admin, &guest, &sealed, "My_Account")
+    db.request_served(&admin, &guest, &secret, "My_Account")
         .unwrap();
     assert!(db.account_created_state(&guest).unwrap());
-    // A served request no longer offers its password.
+    // A served request no longer offers its password or its sealed copy.
     assert!(db.account_credentials(&guest).unwrap().is_none());
+    let left: Option<Vec<u8>> = db
+        .db
+        .query_row(
+            "SELECT request_secret FROM users WHERE uuid=?1",
+            [&guest],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(left.is_none());
+    // A stale approval of the same row cannot overwrite the served state.
+    assert!(db
+        .request_served(&admin, &guest, &secret, "My_Account")
+        .is_err());
     let audit = db.audit_page().unwrap();
     assert_eq!(audit[0].action, "accountCreate");
     assert_eq!(audit[0].target.as_deref(), Some(guest.as_str()));
@@ -1907,4 +1907,431 @@ async fn avatar_uploaded_before_a_restart_is_still_served() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(bytes.starts_with(b"RIFF"), "WebP container");
+}
+
+/// A local Drasl admin API: records created users and reports `admin` as the only
+/// administrator (the hub takes the admin flag from the directory, never from the
+/// token or a local row).
+async fn drasl_stub(admin: String) -> (String, Arc<std::sync::Mutex<Vec<(String, String)>>>) {
+    let created = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = created.clone();
+    let directory = admin.clone();
+    let app = Router::new()
+        .route(
+            "/users",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let log = log.clone();
+                async move {
+                    let username = body["username"].as_str().unwrap().to_owned();
+                    let password = body["password"].as_str().unwrap().to_owned();
+                    log.lock().unwrap().push((username.clone(), password));
+                    (StatusCode::OK, axum::Json(json!({"username": username})))
+                }
+            }),
+        )
+        .route(
+            "/players/{id}",
+            axum::routing::get(
+                |axum::extract::Path(id): axum::extract::Path<String>| async move {
+                    axum::Json(json!({"uuid": id, "userUuid": id, "name":"Player1","skinUrl":null}))
+                },
+            ),
+        )
+        .route(
+            "/users/{id}",
+            axum::routing::get(
+                move |axum::extract::Path(id): axum::extract::Path<String>| {
+                    let directory = directory.clone();
+                    async move {
+                        let uuid = uuid::Uuid::parse_str(&id).unwrap();
+                        let is_admin =
+                            uuid.to_string().replace('-', "") == directory.to_ascii_lowercase();
+                        axum::Json(json!({"isAdmin": is_admin, "isLocked": false,
+                        "players":[{"uuid":id,"userUuid":id,"name":"Player1","skinUrl":null}]}))
+                    }
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), created)
+}
+
+/// Hub whose Drasl admin API is the local stub; the guest flow needs it before
+/// the first request, so the chat is built by hand.
+fn app_with_drasl(base: String) -> (Router, Arc<Chat>, Temp) {
+    let temp = Temp::new();
+    let mut chat = Chat::open(&temp.0).unwrap();
+    chat.directory = drasl::Directory::local(base);
+    let state = AppState::new(crate::Config::default(), Arc::new(Fake)).with_chat(chat);
+    let chat = state.chat.clone().unwrap();
+    (crate::router(state), chat, temp)
+}
+
+/// Presents a guest account request exactly as the launcher does.
+async fn open_request(app: &Router, note: &str) -> (String, String) {
+    let (_, issued) = request_abs(
+        app,
+        "POST",
+        "/api/v1/chat/guest",
+        None,
+        json!({"name":"Guest_Nick"}),
+    )
+    .await;
+    let token = format!("Bearer {}", issued["token"].as_str().unwrap());
+    let (status, _) = request_abs(
+        app,
+        "POST",
+        "/api/v1/chat/account-request",
+        Some(&token),
+        json!({"note":note,"username":"My_Account","password":"secret1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    (token, issued["user"]["uuid"].as_str().unwrap().to_owned())
+}
+
+#[tokio::test]
+async fn approving_a_request_creates_the_drasl_account_from_the_sealed_password() {
+    let (base, created) = drasl_stub(identity(1).user_id).await;
+    let (app, chat, _temp) = app_with_drasl(base);
+    let (token, guest) = open_request(&app, "hi").await;
+    let (status, body) = request(
+        &app,
+        "POST",
+        &format!("admin/create-account/{guest}"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        *created.lock().unwrap(),
+        vec![("My_Account".to_owned(), "secret1".to_owned())]
+    );
+    {
+        let db = chat.store.lock().unwrap();
+        assert!(db.account_created_state(&guest).unwrap());
+        assert!(db.account_credentials(&guest).unwrap().is_none());
+        let (password, secret): (Option<String>, Option<Vec<u8>>) = db
+            .db
+            .query_row(
+                "SELECT request_password,request_secret FROM users WHERE uuid=?1",
+                [&guest],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(password.is_none() && secret.is_none());
+    }
+    // The request leaves the admin list and the guest sees the account.
+    let (status, requests) = request(&app, "GET", "admin/requests", true, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(requests, json!([]));
+    let (_, me) = request_abs(&app, "GET", "/api/v1/chat/me", Some(&token), Value::Null).await;
+    assert_eq!(me["accountCreated"], true);
+    let (status, accounts) = request(&app, "GET", "admin/accounts", true, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let row = accounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["uuid"] == guest.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(row["accountCreated"], true);
+    assert_eq!(row["username"], "My_Account");
+    // Approving again is a conflict, Drasl is not asked twice.
+    let (status, error) = request(
+        &app,
+        "POST",
+        &format!("admin/create-account/{guest}"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["code"], "invalidInput");
+    assert_eq!(created.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn approving_is_admin_only_and_ignores_the_legacy_key_body() {
+    let (base, created) = drasl_stub(identity(1).user_id).await;
+    let (app, _chat, _temp) = app_with_drasl(base);
+    let (_, guest) = open_request(&app, "hi").await;
+    // Every request goes through the directory: `other` is not an administrator.
+    for body in [json!({"key":"not-the-password"}), json!({})] {
+        let (status, error) = request_abs(
+            &app,
+            "POST",
+            &format!("/api/v1/chat/admin/create-account/{guest}"),
+            Some("Bearer other"),
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(error["code"], "permissionDenied");
+    }
+    assert!(created.lock().unwrap().is_empty());
+    // The unknown key in the body changes nothing: the sealed password is used.
+    let (status, _) = request(
+        &app,
+        "POST",
+        &format!("admin/create-account/{guest}"),
+        true,
+        json!({"key":"not-the-password"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(created.lock().unwrap()[0].1, "secret1");
+}
+
+#[test]
+fn a_request_without_a_sealed_password_is_refused_cleanly() {
+    let (chat, _temp) = chat();
+    let db = chat.store.lock().unwrap();
+    seed(&db);
+    let admin = identity(1).user_id;
+    db.db
+        .execute("UPDATE users SET admin=1 WHERE uuid=?1", [&admin])
+        .unwrap();
+    // Schema v4 rows only have the salted hash.
+    let guest = db.guest_login("GuestNick", &chat).unwrap().user.uuid;
+    db.db
+        .execute(
+            "UPDATE users SET request='hi',username_hint='My_Account',request_password=?1 WHERE uuid=?2",
+            rusqlite::params![super::store::seal_password(&guest, "secret1"), guest],
+        )
+        .unwrap();
+    let error = db.request_credentials(&guest).unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.code, "invalidInput");
+    assert_eq!(reason(&error), "requestHasNoPassword");
+    // The request stays as it was, so a rejection still works.
+    assert!(db.account_credentials(&guest).unwrap().is_some());
+    assert_eq!(
+        db.request_credentials(&identity(2).user_id)
+            .unwrap_err()
+            .status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[test]
+fn the_sealing_key_persists_in_settings_and_is_bound_to_the_request() {
+    let (chat, temp) = chat();
+    let guest = {
+        let db = chat.store.lock().unwrap();
+        seed(&db);
+        db.guest_login("GuestNick", &chat).unwrap().user.uuid
+    };
+    let secret = {
+        let db = chat.store.lock().unwrap();
+        let secret = db.seal_secret(&guest, "secret1").unwrap();
+        let key: String = db
+            .db
+            .query_row(
+                "SELECT value FROM settings WHERE key='request-key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(key.len(), 44, "32 bytes in base64");
+        secret
+    };
+    drop(chat);
+    // A restart reuses the stored key: open requests stay decryptable.
+    let chat = Chat::open(&temp.0).unwrap();
+    let db = chat.store.lock().unwrap();
+    assert_eq!(db.open_secret(&guest, &secret).unwrap(), "secret1");
+    assert_eq!(
+        db.seal_secret(&guest, "secret1").unwrap().len(),
+        24 + 7 + 16
+    );
+    // The request id is associated data: another profile cannot reuse the blob.
+    assert!(db
+        .open_secret("00000000000000000000000000000009", &secret)
+        .is_err());
+    assert!(db.open_secret(&guest, b"short").is_err());
+    let mut tampered = secret.clone();
+    *tampered.last_mut().unwrap() ^= 1;
+    assert!(db.open_secret(&guest, &tampered).is_err());
+}
+
+#[tokio::test]
+async fn rejecting_a_request_clears_it_audits_and_notifies_the_guest() {
+    let (base, _created) = drasl_stub(identity(1).user_id).await;
+    let (app, chat, _temp) = app_with_drasl(base);
+    let (token, guest) = open_request(&app, "hi").await;
+    let mut events = chat.events.subscribe();
+    // A plain player and the guest itself are refused.
+    for authorization in [Some("Bearer other"), Some(token.as_str())] {
+        let (status, error) = request_abs(
+            &app,
+            "POST",
+            &format!("/api/v1/chat/admin/reject/{guest}"),
+            authorization,
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(error["code"], "permissionDenied");
+        let (status, error) = request_abs(
+            &app,
+            "GET",
+            "/api/v1/chat/admin/requests",
+            authorization,
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(error["code"], "permissionDenied");
+    }
+    let (status, requests) = request(&app, "GET", "admin/requests", true, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(requests[0]["login"], "My_Account");
+    assert_eq!(requests[0]["id"], guest.as_str());
+    let (status, body) = request(
+        &app,
+        "POST",
+        &format!("admin/reject/{guest}"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert!(matches!(
+        events.try_recv(),
+        Ok(Notice::Account(request)) if request == guest
+    ));
+    let (status, requests) = request(&app, "GET", "admin/requests", true, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(requests, json!([]));
+    {
+        let db = chat.store.lock().unwrap();
+        let (request, hint, password, secret): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<Vec<u8>>,
+        ) = db
+            .db
+            .query_row(
+                "SELECT request,username_hint,request_password,request_secret \
+                 FROM users WHERE uuid=?1",
+                [&guest],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert!(request.is_none(), "note cleared");
+        assert!(hint.is_none(), "login cleared");
+        assert!(password.is_none(), "hash cleared");
+        assert!(secret.is_none(), "sealed copy cleared");
+        assert!(!db.account_created_state(&guest).unwrap());
+        assert_eq!(db.audit_page().unwrap()[0].action, "rejectAccount");
+        assert_eq!(
+            db.audit_page().unwrap()[0].target.as_deref(),
+            Some(guest.as_str())
+        );
+    }
+    // The guest still sees the read-only role and can ask again.
+    let (_, me) = request_abs(&app, "GET", "/api/v1/chat/me", Some(&token), Value::Null).await;
+    assert_eq!(me["accountCreated"], false);
+    let (status, _) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/chat/account-request",
+        Some(&token),
+        json!({"note":"again","username":"My_Account","password":"secret1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, requests) = request(&app, "GET", "admin/requests", true, Value::Null).await;
+    assert_eq!(requests.as_array().unwrap().len(), 1);
+    // The path id is normalized: a hyphenated UUID still reaches the request.
+    let (status, _) = request_abs(
+        &app,
+        "POST",
+        &format!(
+            "/api/v1/chat/admin/reject/{}",
+            uuid::Uuid::parse_str(&guest).unwrap().hyphenated()
+        ),
+        Some("Bearer good"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // A repeated rejection has nothing left to drop and leaves no second audit row.
+    let (status, error) = request(
+        &app,
+        "POST",
+        &format!("admin/reject/{guest}"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["code"], "notFound");
+    {
+        let db = chat.store.lock().unwrap();
+        let rejected = db
+            .audit_page()
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.action == "rejectAccount")
+            .count();
+        assert_eq!(rejected, 2, "one per dropped request, no more");
+    }
+    let (status, error) = request(
+        &app,
+        "POST",
+        &format!("admin/reject/{guest}"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["code"], "notFound");
+    let (status, error) = request(&app, "POST", "admin/reject/not-a-uuid", true, Value::Null).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["code"], "invalidInput");
+}
+
+#[test]
+fn admin_accounts_report_running_mutes_and_bans() {
+    let (chat, _temp) = chat();
+    let db = chat.store.lock().unwrap();
+    seed(&db);
+    let muted = identity(2).user_id;
+    let expired = identity(3).user_id;
+    let future = super::store::now() + 600;
+    db.db
+        .execute(
+            "INSERT INTO moderation(user,mute) VALUES(?1,?2)",
+            rusqlite::params![muted, future],
+        )
+        .unwrap();
+    db.db
+        .execute(
+            "INSERT INTO moderation(user,mute,ban) VALUES(?1,1,1)",
+            rusqlite::params![expired],
+        )
+        .unwrap();
+    let accounts = db.admin_accounts().unwrap();
+    let row = |id: &str| accounts.iter().find(|a| a["uuid"] == id).cloned().unwrap();
+    let active = row(&muted);
+    assert_eq!(active["banned"], false);
+    let until = active["mutedUntil"].as_str().unwrap();
+    assert!(until.ends_with('Z'), "{until}");
+    assert_eq!(
+        until,
+        crate::rfc3339::format(std::time::UNIX_EPOCH + std::time::Duration::from_secs(future))
+    );
+    let gone = row(&expired);
+    assert_eq!(gone["mutedUntil"], Value::Null);
+    assert_eq!(gone["banned"], true);
+    let clean = row(&identity(1).user_id);
+    assert_eq!(clean["mutedUntil"], Value::Null);
+    assert_eq!(clean["banned"], false);
 }

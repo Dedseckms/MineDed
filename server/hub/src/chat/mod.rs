@@ -6,6 +6,7 @@ mod files;
 mod filter;
 mod guest;
 mod presence;
+mod secret;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -275,6 +276,9 @@ fn denied() -> ApiError {
         "permissionDenied",
         "chat permission denied",
     )
+}
+fn conflict(message: &str) -> ApiError {
+    ApiError::new(StatusCode::CONFLICT, "invalidInput", message)
 }
 /// Guests are unverified offline nicks: reading the global chat is all they get.
 fn guest_read_only() -> ApiError {
@@ -580,10 +584,15 @@ async fn dispatch(
         }
         return Ok(Json(json!({ "code": code, "url": url })).into_response());
     }
-    // The account is created in Drasl with the password of the request; the
-    // admin API call runs outside the store lock.
+    // The account is created in Drasl with the password sealed at request time;
+    // the admin API call runs outside the store lock. Any body is ignored.
     if let ("POST", Some(request)) = (method.as_str(), path.strip_prefix("admin/create-account/")) {
-        chat.create_account(me, request.to_owned(), &body).await?;
+        chat.create_account(me, request.to_owned()).await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    // A declined request leaves the admin list and the guest may ask again.
+    if let ("POST", Some(request)) = (method.as_str(), path.strip_prefix("admin/reject/")) {
+        chat.reject_account(me, request.to_owned()).await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     if method == "POST" && path == "admin/migrate" {
@@ -684,7 +693,8 @@ async fn send_frame(socket: &mut WebSocket, frame: Message) -> Result<(), ()> {
         .map_err(|_| ())
 }
 /// Delivers an event; `accountCreated` is not a [`SocialEvent`] variant yet, so
-/// the guest account event is a plain JSON frame with the same field.
+/// the guest account event is a plain JSON frame with the same field. The flag
+/// follows the stored state, so a declined request reaches the guest as `false`.
 async fn send_own_account(socket: &mut WebSocket, user: &SocialUser) -> Result<(), ()> {
     let mut frame = serde_json::to_value(SocialEvent::Presence {
         uuid: user.uuid.clone(),
@@ -693,7 +703,7 @@ async fn send_own_account(socket: &mut WebSocket, user: &SocialUser) -> Result<(
     .map_err(|_| ())?;
     let object = frame.as_object_mut().ok_or(())?;
     object.insert("type".into(), Value::String("account_created".into()));
-    object.insert("accountCreated".into(), Value::Bool(true));
+    object.insert("accountCreated".into(), Value::Bool(user.account_created));
     send_frame(socket, Message::Text(frame.to_string().into())).await
 }
 async fn socket_loop(

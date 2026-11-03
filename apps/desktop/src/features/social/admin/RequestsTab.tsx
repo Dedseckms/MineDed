@@ -16,8 +16,8 @@ import { AdminSplit, ListRow, useSocialAction } from "./shared";
 export function RequestsTab() {
   const { t, i18n } = useTranslation();
   const [selected, setSelected] = useState<string | null>(null);
-  /** Requests approved in this session: the list query may lag behind. */
-  const [created, setCreated] = useState<Record<string, true>>({});
+  /** Requests handled in this session: the list query may lag behind. */
+  const [handled, setHandled] = useState<Record<string, "created" | "rejected">>({});
   /** Per-request failure of the last "create account" action. */
   const [failed, setFailed] = useState<{ id: string; error: unknown } | null>(null);
   const requests = useQuery({
@@ -26,7 +26,7 @@ export function RequestsTab() {
     refetchInterval: 30000,
   });
   const action = useSocialAction();
-  const list = requests.data ?? [];
+  const list = (requests.data ?? []).filter((r) => !handled[r.id]);
   const current = list.find((r) => r.id === selected) ?? list[0] ?? null;
   const when = (at: string) => new Date(at).toLocaleString(i18n.language);
 
@@ -38,11 +38,32 @@ export function RequestsTab() {
       },
       {
         onSuccess: () => {
-          setCreated((prev) => ({ ...prev, [request.id]: true }));
+          setHandled((prev) => ({ ...prev, [request.id]: "created" }));
+          setSelected(null);
           useToastStore.getState().push({
             tone: "info",
             messageKey: "social.admin.requests.createdToast",
             dedupeKey: "accountCreated",
+          });
+        },
+        onError: (error) => setFailed({ id: request.id, error }),
+      },
+    );
+
+  const reject = (request: AccountRequest) =>
+    action.mutate(
+      async () => {
+        setFailed(null);
+        unwrap(await api.socialRejectAccount(request.id));
+      },
+      {
+        onSuccess: () => {
+          setHandled((prev) => ({ ...prev, [request.id]: "rejected" }));
+          setSelected(null);
+          useToastStore.getState().push({
+            tone: "info",
+            messageKey: "social.admin.requests.rejectedToast",
+            dedupeKey: "accountRejected",
           });
         },
         onError: (error) => setFailed({ id: request.id, error }),
@@ -58,7 +79,6 @@ export function RequestsTab() {
     return failure ? t(`errors.reason.${failure}`) : null;
   };
   const failure = current ? inlineFailure(current.id) : null;
-  const isCreated = current ? !!created[current.id] : false;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto lg:overflow-hidden">
@@ -81,11 +101,7 @@ export function RequestsTab() {
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">
                     {request.name}
                   </span>
-                  {created[request.id] ? (
-                    <span className="text-accent" aria-hidden>
-                      <Icon name="check" />
-                    </span>
-                  ) : null}
+
                 </span>
                 <span className="truncate text-xs text-muted">
                   {when(request.createdAt)}
@@ -108,21 +124,28 @@ export function RequestsTab() {
               <header className="flex items-center gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-lg font-semibold">{current.name}</p>
-                  <p className="text-xs text-muted">{when(current.createdAt)}</p>
+                  <p className="text-xs text-muted">
+                    {current.login ? `@${current.login} · ` : ""}
+                    {when(current.createdAt)}
+                  </p>
                 </div>
                 <Button
                   size="sm"
                   variant="primary"
-                  loading={action.isPending && !isCreated}
-                  disabled={isCreated}
-                  icon={<Icon name={isCreated ? "check" : "user"} />}
+                  loading={action.isPending}
+                  icon={<Icon name="user" />}
                   onClick={() => create(current)}
                 >
-                  {t(
-                    isCreated
-                      ? "social.admin.requests.created"
-                      : "social.admin.requests.create",
-                  )}
+                  {t("social.admin.requests.create")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-danger"
+                  icon={<Icon name="x" />}
+                  onClick={() => reject(current)}
+                >
+                  {t("social.admin.requests.reject")}
                 </Button>
               </header>
               {failure ? (

@@ -147,6 +147,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             social::social_account_requests,
             social::social_issue_invite,
             social::social_create_account,
+            social::social_reject_account,
             settings::settings_get,
             settings::settings_set,
             tasks::tasks_list,
