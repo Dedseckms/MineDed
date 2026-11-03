@@ -45,6 +45,8 @@ pub trait InstanceService: Send + Sync {
     ) -> AppResult<Instance>;
     async fn update(&self, id: InstanceId, patch: InstancePatch) -> AppResult<Instance>;
     async fn delete(&self, id: InstanceId) -> AppResult<()>;
+    /// Deletes every instance on disk (uninstall cleanup).
+    async fn delete_all(&self) -> AppResult<()>;
     /// Re-verifies all files and reinstalls the loader.
     async fn repair(&self, id: InstanceId, sink: &dyn ProgressSink) -> AppResult<()>;
     /// Game directory of the instance (for "open folder", mods, packs).

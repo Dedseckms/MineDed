@@ -56,6 +56,10 @@ impl AccountService for Accounts {
     async fn set_default(&self, _: AccountId) -> AppResult<()> {
         Ok(())
     }
+    async fn remove_all(&self) -> AppResult<()> {
+        self.valid.store(false, Ordering::SeqCst);
+        Ok(())
+    }
 }
 #[async_trait]
 impl AuthProvider for Accounts {

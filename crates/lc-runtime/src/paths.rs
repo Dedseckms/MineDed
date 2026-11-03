@@ -64,6 +64,14 @@ impl Paths {
     pub fn mihomo(&self) -> PathBuf {
         self.root.join("sidecars").join("mihomo")
     }
+
+    /// Game folder one level up: it holds `--data-dir` and the game files.
+    pub fn game_dir(&self) -> PathBuf {
+        self.root
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| self.root.clone(), Path::to_path_buf)
+    }
 }
 
 #[cfg(test)]

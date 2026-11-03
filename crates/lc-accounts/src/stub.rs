@@ -56,6 +56,10 @@ impl AccountService for StubAccounts {
         Err(AppError::not_implemented("AccountService::remove"))
     }
 
+    async fn remove_all(&self) -> AppResult<()> {
+        Err(AppError::not_implemented("AccountService::remove_all"))
+    }
+
     async fn set_default(&self, _id: AccountId) -> AppResult<()> {
         Err(AppError::not_implemented("AccountService::set_default"))
     }

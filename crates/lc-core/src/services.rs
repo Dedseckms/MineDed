@@ -757,6 +757,13 @@ impl InstanceService for CoreServices {
         self.inner.store.delete(id).await
     }
 
+    async fn delete_all(&self) -> AppResult<()> {
+        for inst in self.inner.store.list().await? {
+            self.inner.ensure_not_running(inst.id)?;
+        }
+        self.inner.store.delete_all().await
+    }
+
     async fn repair(&self, id: InstanceId, sink: &dyn ProgressSink) -> AppResult<()> {
         self.inner.repair(id, sink).await
     }

@@ -174,6 +174,18 @@ pub struct InstalledContent {
     pub broken: bool,
 }
 
+/// Late badges for an installed file (`ContentService::marks`): the list itself
+/// is served from disk, catalogue lookups arrive afterwards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledMark {
+    pub file_name: String,
+    /// Provider page slug when the index lacks it.
+    #[serde(default)]
+    pub slug: Option<String>,
+    pub update_available: bool,
+}
+
 /// What is wrong with a dependency declared inside a local mod jar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

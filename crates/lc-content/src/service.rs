@@ -11,7 +11,8 @@ use lc_http::{DownloadReq, Downloader, ResourceKind};
 use lc_runtime::{Paths, ProgressSink};
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, InstalledMark, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage,
+    SearchQuery,
 };
 use lc_types::instance::Instance;
 use lc_types::version::LoaderKind;
@@ -413,6 +414,36 @@ impl Inner {
         Ok(out)
     }
 
+    /// Page slugs of index entries that have none, keyed by source and project.
+    /// Batched per provider (fifty ids per request); failures are skipped.
+    pub async fn slugs(
+        &self,
+        idx: &ContentIndex,
+    ) -> HashMap<(ContentSourceKind, String), Option<String>> {
+        let mut out: HashMap<(ContentSourceKind, String), Option<String>> = HashMap::new();
+        for source in [ContentSourceKind::Modrinth, ContentSourceKind::CurseForge] {
+            let mut ids: Vec<String> = Vec::new();
+            for e in idx.files.values() {
+                if e.source != source || e.slug.is_some() {
+                    continue;
+                }
+                if !ids.contains(&e.project_id) {
+                    ids.push(e.project_id.clone());
+                }
+            }
+            if ids.is_empty() {
+                continue;
+            }
+            let Ok(cat) = self.catalog(source) else {
+                continue;
+            };
+            for (id, slug) in cat.slugs(&ids).await {
+                out.insert((source, id), Some(slug));
+            }
+        }
+        out
+    }
+
     pub async fn resolve_for(
         &self,
         inst: &Instance,
@@ -610,37 +641,12 @@ impl ContentService for ContentServices {
             .await
     }
 
+    /// Served from disk and the local index only: no catalogue calls, so the
+    /// list paints at once even for packs with hundreds of files.
     async fn list(&self, instance: InstanceId) -> AppResult<Vec<InstalledContent>> {
-        let inst = self.inner.instances.get(instance).await?;
         let game = self.inner.instances.game_dir(instance);
         let idx = ContentIndex::load(&self.inner.instance_dir(instance)).await?;
         let files = self.inner.scan(&game).await?;
-        // Update check is best effort: a CurseForge/Modrinth outage only drops
-        // the update badges and never empties the installed list.
-        let updates = match self.inner.updates(&inst, &idx, false).await {
-            Ok(updates) => updates,
-            Err(e) => {
-                eprintln!("content update check failed: {e}");
-                HashMap::new()
-            }
-        };
-        // Slugs written by older versions are missing; fetch them once per
-        // project so the project link opens the real page.
-        let mut slugs: HashMap<(ContentSourceKind, String), Option<String>> = HashMap::new();
-        for e in idx.files.values() {
-            if e.slug.is_some() || e.source == ContentSourceKind::Local {
-                continue;
-            }
-            let key = (e.source, e.project_id.clone());
-            if slugs.contains_key(&key) {
-                continue;
-            }
-            let slug = match self.inner.catalog(e.source) {
-                Ok(cat) => cat.project(&e.project_id).await.ok().map(|p| p.slug),
-                Err(_) => None,
-            };
-            slugs.insert(key, slug);
-        }
         let enabled_keys: std::collections::HashSet<String> = files
             .iter()
             .filter(|f| f.enabled)
@@ -659,14 +665,6 @@ impl ContentService for ContentServices {
                     .files
                     .get(&f.key())
                     .filter(|e| e.source != ContentSourceKind::Local);
-                let slug = e.and_then(|e| {
-                    e.slug.clone().or_else(|| {
-                        slugs
-                            .get(&(e.source, e.project_id.clone()))
-                            .cloned()
-                            .flatten()
-                    })
-                });
                 InstalledContent {
                     file_name: f.base().to_owned(),
                     kind: f.kind,
@@ -674,14 +672,40 @@ impl ContentService for ContentServices {
                     source: e.map(|e| e.source).unwrap_or(ContentSourceKind::Local),
                     project_id: e.map(|e| e.project_id.clone()),
                     version_id: e.map(|e| e.version_id.clone()),
-                    slug,
+                    slug: e.and_then(|e| e.slug.clone()),
                     title: e.and_then(|e| e.title.clone()),
                     version_number: e.and_then(|e| e.version_number.clone()),
-                    update_available: e
-                        .map(|e| updates.contains_key(&(e.source, e.project_id.clone())))
-                        .unwrap_or(false),
+                    update_available: false,
                     broken: !f.is_dir && f.size == 0,
                 }
+            })
+            .collect())
+    }
+
+    async fn marks(&self, instance: InstanceId) -> AppResult<Vec<InstalledMark>> {
+        let inst = self.inner.instances.get(instance).await?;
+        let idx = ContentIndex::load(&self.inner.instance_dir(instance)).await?;
+        // Both lookups are best effort: an outage only drops the badges.
+        let updates = self
+            .inner
+            .updates(&inst, &idx, false)
+            .await
+            .unwrap_or_default();
+        let slugs = self.inner.slugs(&idx).await;
+        Ok(idx
+            .files
+            .iter()
+            .filter(|(_, e)| e.source != ContentSourceKind::Local)
+            .map(|(key, e)| InstalledMark {
+                // Index keys are `<dir>/<file name without .disabled>`.
+                file_name: key.rsplit('/').next().unwrap_or(key).to_owned(),
+                slug: e.slug.clone().or_else(|| {
+                    slugs
+                        .get(&(e.source, e.project_id.clone()))
+                        .cloned()
+                        .flatten()
+                }),
+                update_available: updates.contains_key(&(e.source, e.project_id.clone())),
             })
             .collect())
     }

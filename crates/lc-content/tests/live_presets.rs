@@ -77,6 +77,9 @@ impl InstanceService for Mem {
     async fn delete(&self, _id: InstanceId) -> AppResult<()> {
         Ok(())
     }
+    async fn delete_all(&self) -> AppResult<()> {
+        Ok(())
+    }
     async fn repair(&self, _id: InstanceId, _s: &dyn ProgressSink) -> AppResult<()> {
         Ok(())
     }

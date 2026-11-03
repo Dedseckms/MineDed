@@ -131,6 +131,9 @@ impl ChatService for StubChat {
     async fn guest_login(&self, _name: &str) -> AppResult<SocialUser> {
         ni("ChatService::guest_login")
     }
+    async fn server_account(&self) -> AppResult<Option<SocialUser>> {
+        ni("ChatService::server_account")
+    }
     async fn update_profile(&self, _patch: ProfileUpdate) -> AppResult<SocialUser> {
         ni("ChatService::update_profile")
     }

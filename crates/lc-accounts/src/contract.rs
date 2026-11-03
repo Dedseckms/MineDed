@@ -66,6 +66,8 @@ pub trait AccountService: Send + Sync {
     ) -> AppResult<Account>;
     async fn yggdrasil_servers(&self) -> AppResult<Vec<YggdrasilServer>>;
     async fn remove(&self, id: AccountId) -> AppResult<()>;
+    /// Removes every account and its stored tokens (uninstall cleanup).
+    async fn remove_all(&self) -> AppResult<()>;
     async fn set_default(&self, id: AccountId) -> AppResult<()>;
 }
 
@@ -76,6 +78,8 @@ pub trait TokenStore: Send + Sync {
     async fn get(&self, key: &str) -> AppResult<Option<Secret>>;
     async fn set(&self, key: &str, value: &Secret) -> AppResult<()>;
     async fn delete(&self, key: &str) -> AppResult<()>;
+    /// Drops every stored secret (uninstall / "delete all data").
+    async fn clear(&self) -> AppResult<()>;
 }
 
 /// Skin library (local + own skin server) and capes.

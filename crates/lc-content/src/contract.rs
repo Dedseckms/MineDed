@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, InstalledMark, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage,
+    SearchQuery,
 };
 use lc_types::instance::{Instance, PackFormat, PerfPreset};
 use lc_types::{AppResult, InstanceId};
@@ -51,6 +52,9 @@ pub trait ContentService: Send + Sync {
         sink: &dyn ProgressSink,
     ) -> AppResult<()>;
     async fn list(&self, instance: InstanceId) -> AppResult<Vec<InstalledContent>>;
+    /// Update badges and missing page slugs of the installed files. Network
+    /// bound, so the UI calls it after [`ContentService::list`] has painted.
+    async fn marks(&self, instance: InstanceId) -> AppResult<Vec<InstalledMark>>;
     /// Renames `x.jar` ↔ `x.jar.disabled`.
     async fn set_enabled(
         &self,

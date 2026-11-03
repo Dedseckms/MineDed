@@ -76,6 +76,18 @@ pub(crate) struct UpdateItem {
 pub(crate) trait Catalog: ContentSource {
     async fn project(&self, id: &str) -> AppResult<ProjectInfo>;
 
+    /// Page slugs of several projects at once (missing/unknown ids are skipped).
+    /// Providers with a batch endpoint override the sequential default.
+    async fn slugs(&self, ids: &[String]) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for id in ids {
+            if let Ok(p) = self.project(id).await {
+                out.insert(id.clone(), p.slug);
+            }
+        }
+        out
+    }
+
     /// Versions with a "release" flag, newest first.
     async fn versions_ranked(
         &self,
