@@ -3,7 +3,7 @@
 use lc_types::content::ManualDownload;
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, InstalledMark, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{PackFormat, PerfPreset};
 use lc_types::task::{TaskEvent, TaskKind};
@@ -71,6 +71,17 @@ pub async fn content_list(
     instance: InstanceId,
 ) -> AppResult<Vec<InstalledContent>> {
     state.content.list(instance).await
+}
+
+/// Update badges and page slugs of the installed files (network bound; the
+/// list itself comes at once from `content_list`).
+#[tauri::command]
+#[specta::specta]
+pub async fn content_marks(
+    state: State<'_, AppState>,
+    instance: InstanceId,
+) -> AppResult<Vec<InstalledMark>> {
+    state.content.marks(instance).await
 }
 
 #[tauri::command]

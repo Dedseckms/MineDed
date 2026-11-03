@@ -40,6 +40,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             content::content_resolve,
             content::content_install,
             content::content_list,
+            content::content_marks,
             content::content_set_enabled,
             content::content_remove,
             content::content_add_local,
@@ -102,6 +103,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             voice::voice_mic_test,
             // lead
             social::social_connect,
+            social::social_server_account,
             social::social_disconnect,
             social::social_set_presence,
             social::social_channels,
@@ -152,6 +154,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             // release
             app::app_version,
             app::app_quit,
+            app::app_reset_data,
             app::update_check,
             app::update_install,
         ])
