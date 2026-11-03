@@ -1007,7 +1007,10 @@ impl ChatClient {
             .map(|a| a.id)
             .collect();
         for id in own {
-            if own_account(self.accounts.as_ref(), id).await.unwrap_or(false) {
+            if own_account(self.accounts.as_ref(), id)
+                .await
+                .unwrap_or(false)
+            {
                 return self
                     .start_session(Credential::Account(id), &id.to_string())
                     .await;
