@@ -118,6 +118,41 @@ impl Chat {
         Ok(())
     }
 
+    /// `POST /chat/appeal`: a banned player asks to be unbanned.
+    ///
+    /// The text is short and rate limited like chat messages; one open appeal
+    /// per player, so repeated attempts do not pile up.
+    pub(super) async fn appeal(self: &Arc<Self>, me: String, text: String) -> Result<(), ApiError> {
+        if !(3..=500).contains(&text.chars().count()) {
+            return Err(invalid("invalid appeal text"));
+        }
+        self.run(move |db, _| db.appeal(&me, text.trim())).await?;
+        let _ = self.events.send(Notice::Admin);
+        Ok(())
+    }
+
+    /// `POST /chat/admin/appeals/{uuid}`: accepts (`accept: true` lifts the ban)
+    /// or dismisses the appeal.
+    pub(super) async fn resolve_appeal(
+        self: &Arc<Self>,
+        me: String,
+        user: String,
+        accept: bool,
+    ) -> Result<(), ApiError> {
+        let user = store::uuid(&user)?;
+        self.run(move |db, _| {
+            if db.role(&me)? != SocialRole::Admin {
+                return Err(denied());
+            }
+            db.resolve_appeal(&me, &user, accept)?
+                .then_some(())
+                .ok_or_else(|| ApiError::not_found("no open appeal"))
+        })
+        .await?;
+        let _ = self.events.send(Notice::Admin);
+        Ok(())
+    }
+
     /// `DELETE /chat/admin/accounts/{uuid}`: removes an account from the hub.
     ///
     /// Guests (offline nicknames) are deleted with their tokens, messages,

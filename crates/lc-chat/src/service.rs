@@ -1495,6 +1495,18 @@ impl ChatService for ChatClient {
     async fn account_requests(&self) -> AppResult<Vec<AccountRequest>> {
         self.api(Method::GET, &["admin", "requests"], None).await
     }
+    async fn appeal(&self, text: &str) -> AppResult<()> {
+        self.empty(Method::POST, &["appeal"], Some(json!({ "text": text })))
+            .await
+    }
+    async fn appeals(&self) -> AppResult<Vec<lc_types::social::SocialAppeal>> {
+        self.api(Method::GET, &["admin", "appeals"], None).await
+    }
+    async fn resolve_appeal(&self, uuid: &str, accept: bool) -> AppResult<()> {
+        let action = if accept { "accept" } else { "dismiss" };
+        self.empty(Method::POST, &["admin", "appeals", uuid, action], None)
+            .await
+    }
     async fn delete_account(&self, uuid: &str) -> AppResult<()> {
         self.empty(Method::DELETE, &["admin", "accounts", uuid], None)
             .await

@@ -1144,6 +1144,11 @@
         "profileReset": "Reset profile",
         "avatarReset": "Reset avatar",
         "migrate": "Moved storage"
+      },
+      "appeals": {
+        "title": "Appeals ({{count}})",
+        "accept": "Unban",
+        "dismiss": "Dismiss"
       }
     },
     "write": "Message",
@@ -1285,7 +1290,17 @@
     "reportSent": "Report sent",
     "friendRequestSent": "Friend request sent",
     "friendRequestAccepted": "Friend request accepted",
-    "friendRequestDeclined": "Friend request declined"
+    "friendRequestDeclined": "Friend request declined",
+    "appeal": {
+      "open": "File an appeal",
+      "title": "Ban appeal",
+      "hint": "If the ban was a mistake or you are ready to come back, write to the admins. The chat reopens once they lift it.",
+      "text": "Message",
+      "placeholder": "Briefly: what happened and why you should be unbanned",
+      "submit": "Send",
+      "sent": "Appeal sent",
+      "tooShort": "Write at least a few words"
+    }
   },
   "chat": {
     "upload": "Uploading file",

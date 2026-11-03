@@ -350,6 +350,18 @@ pub struct AdminAccount {
     pub banned: bool,
 }
 
+/// A banned player asking to be let back into the chat.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SocialAppeal {
+    /// Undashed profile UUID of the banned player.
+    pub uuid: String,
+    pub name: String,
+    /// What the player wrote to the admin.
+    pub text: String,
+    pub created_at: String,
+}
+
 /// A guest asking the admin for a real account.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

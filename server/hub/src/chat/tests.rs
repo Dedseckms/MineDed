@@ -1275,7 +1275,16 @@ async fn guest_avatar_and_ban_revocation() {
         .db
         .execute("INSERT INTO moderation(user,ban) VALUES(?1,1)", [&guest])
         .unwrap();
-    let error = chat.guest_identity(&issued.token).await.unwrap_err();
+    // The identity keeps resolving after a ban (the guest must still see the
+    // reason and file an appeal); sending and the socket are what close.
+    let who = chat.guest_identity(&issued.token).await.unwrap();
+    assert!(who.is_some());
+    let error = chat
+        .store
+        .lock()
+        .unwrap()
+        .can_send(&guest, "global", false)
+        .unwrap_err();
     assert_eq!(error.status, StatusCode::FORBIDDEN);
 }
 
@@ -2296,6 +2305,88 @@ async fn rejecting_a_request_clears_it_audits_and_notifies_the_guest() {
     let (status, error) = request(&app, "POST", "admin/reject/not-a-uuid", true, Value::Null).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["code"], "invalidInput");
+}
+
+#[tokio::test]
+async fn a_banned_guest_appeals_and_an_admin_lifts_the_ban() {
+    let (base, _created) = drasl_stub(identity(1).user_id).await;
+    let (app, chat, _temp) = app_with_drasl(base);
+    let (token, guest) = open_request(&app, "hi").await;
+    // Approved, so the guest exists as a chat account; then banned.
+    {
+        let db = chat.store.lock().unwrap();
+        db.db
+            .execute(
+                "INSERT INTO moderation(user,ban) VALUES(?1,1)                  ON CONFLICT(user) DO UPDATE SET ban=1",
+                rusqlite::params![guest],
+            )
+            .unwrap();
+    }
+    // The socket refuses a banned player instead of connecting.
+    let (status, error) =
+        request_abs(&app, "GET", "/api/v1/chat/ws", Some(&token), Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+
+    // Appeal: only banned players, text is validated, one open appeal at a time.
+    let (status, _) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/chat/appeal",
+        Some(&token),
+        json!({"text":"I am sorry, please unban me"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, error) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/chat/appeal",
+        Some(&token),
+        json!({"text":"one more"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    let (status, error) = request_abs(
+        &app,
+        "POST",
+        "/api/v1/chat/appeal",
+        Some(&token),
+        json!({"text":"no"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+
+    // The admin sees it and lifts the ban.
+    let (status, appeals) = request(&app, "GET", "admin/appeals", true, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{appeals}");
+    assert_eq!(appeals[0]["uuid"], guest.as_str());
+    assert_eq!(appeals[0]["text"], "I am sorry, please unban me");
+    let (status, _) = request(
+        &app,
+        "POST",
+        &format!("admin/appeals/{guest}/accept"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    {
+        let db = chat.store.lock().unwrap();
+        assert!(!db.is_banned(&guest).unwrap(), "ban lifted");
+        assert!(db.appeals().unwrap().is_empty(), "appeal closed");
+        assert_eq!(db.audit_page().unwrap()[0].action, "appealAccept");
+    }
+    // A second verdict finds nothing to resolve.
+    let (status, error) = request(
+        &app,
+        "POST",
+        &format!("admin/appeals/{guest}/dismiss"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["code"], "notFound");
 }
 
 #[tokio::test]

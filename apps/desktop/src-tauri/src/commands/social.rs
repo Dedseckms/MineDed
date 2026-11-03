@@ -424,6 +424,33 @@ pub async fn social_create_account(
     state.social.create_account(&request_id).await
 }
 
+/// Banned player: asks the admins for a second chance.
+#[tauri::command]
+#[specta::specta]
+pub async fn social_appeal(state: State<'_, AppState>, text: String) -> AppResult<()> {
+    state.social.appeal(&text).await
+}
+
+/// Admin only: open ban appeals.
+#[tauri::command]
+#[specta::specta]
+pub async fn social_appeals(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<lc_types::social::SocialAppeal>> {
+    state.social.appeals().await
+}
+
+/// Admin only: accepts (`accept` = lift the ban) or dismisses an appeal.
+#[tauri::command]
+#[specta::specta]
+pub async fn social_resolve_appeal(
+    state: State<'_, AppState>,
+    uuid: String,
+    accept: bool,
+) -> AppResult<()> {
+    state.social.resolve_appeal(&uuid, accept).await
+}
+
 /// Admin only: removes an account or a guest from the hub.
 #[tauri::command]
 #[specta::specta]

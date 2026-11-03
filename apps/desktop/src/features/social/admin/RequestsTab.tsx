@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { AccountRequest } from "../../../bindings";
+import type { AccountRequest, SocialAppeal } from "../../../bindings";
 import { api, unwrap } from "../../../api/client";
 import { Button } from "../../../components/ui/Button";
 import { Icon } from "../../../components/ui/Icon";
@@ -29,6 +29,17 @@ export function RequestsTab() {
   const list = (requests.data ?? []).filter((r) => !handled[r.id]);
   const current = list.find((r) => r.id === selected) ?? list[0] ?? null;
   const when = (at: string) => new Date(at).toLocaleString(i18n.language);
+
+  // Ban appeals of banned players: accept lifts the ban, dismiss closes it.
+  const appeals = useQuery({
+    queryKey: ["social", "appeals"],
+    queryFn: async () => unwrap(await api.socialAppeals()),
+    refetchInterval: 30000,
+  });
+  const resolveAppeal = (appeal: SocialAppeal, accept: boolean) =>
+    action.mutate(async () => {
+      unwrap(await api.socialResolveAppeal(appeal.uuid, accept));
+    });
 
   const create = (request: AccountRequest) =>
     action.mutate(
@@ -83,6 +94,39 @@ export function RequestsTab() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto lg:overflow-hidden">
       <ErrorMessage error={requests.error} className="shrink-0" />
+      {(appeals.data ?? []).length > 0 ? (
+        <section className="shrink-0 rounded-lg border border-warning/40 bg-warning/5 p-3">
+          <p className="mb-2 text-sm font-medium">
+            {t("social.admin.appeals.title", { count: appeals.data?.length ?? 0 })}
+          </p>
+          <ul className="flex flex-col gap-2">
+            {(appeals.data ?? []).map((appeal) => (
+              <li key={appeal.uuid} className="flex flex-wrap items-center gap-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{appeal.name}</span>
+                  <span className="block text-xs break-words text-muted">{appeal.text}</span>
+                </span>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={action.isPending}
+                  onClick={() => resolveAppeal(appeal, true)}
+                >
+                  {t("social.admin.appeals.accept")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={action.isPending}
+                  onClick={() => resolveAppeal(appeal, false)}
+                >
+                  {t("social.admin.appeals.dismiss")}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <AdminSplit
         list={
           <div className="min-h-0 flex-1 overflow-y-auto">

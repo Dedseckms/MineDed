@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS guest_tokens(token BLOB PRIMARY KEY,uuid TEXT NOT NUL
 CREATE INDEX IF NOT EXISTS guest_tokens_user ON guest_tokens(uuid);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT,at TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,target TEXT,note TEXT);
 CREATE TABLE IF NOT EXISTS invites(request TEXT PRIMARY KEY,code TEXT NOT NULL,url TEXT NOT NULL,created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS appeals(user TEXT PRIMARY KEY,text TEXT NOT NULL,created TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open');
 CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         // Schema v2: guest accounts, profile fields and the avatar blob.
         ensure_column(&db, "users", "guest", "INTEGER NOT NULL DEFAULT 0")?;
@@ -931,6 +932,7 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
                     ("GET", ["admin", "accounts"]) => {
                         Ok(serde_json::to_value(self.admin_accounts()?)?)
                     }
+                    ("GET", ["admin", "appeals"]) => Ok(serde_json::to_value(self.appeals()?)?),
                     ("GET", ["admin", "requests"]) => {
                         let requests = self.account_requests()?.into_iter().map(|request| {
                             let (username, password) = self
@@ -1058,6 +1060,83 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         tx.commit()?;
         self.audit(actor, "accountCreate", Some(request), Some(account))
     }
+    /// Whether the chat is closed for this player (a moderation ban).
+    pub(super) fn is_banned(&self, user: &str) -> Result<bool, ApiError> {
+        Ok(self
+            .db
+            .query_row("SELECT ban FROM moderation WHERE user=?1", [user], |r| {
+                r.get::<_, bool>(0)
+            })
+            .optional()?
+            .unwrap_or(false))
+    }
+    /// Stores a ban appeal; a player keeps one open appeal at a time.
+    pub(super) fn appeal(&self, user: &str, text: &str) -> Result<(), ApiError> {
+        if !self.is_banned(user)? {
+            return Err(invalid("appeals are for banned players only"));
+        }
+        let open: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM appeals WHERE user=?1 AND status='open')",
+            [user],
+            |r| r.get(0),
+        )?;
+        if open {
+            return Err(super::conflict("an appeal is already waiting"));
+        }
+        self.db.execute(
+            "INSERT INTO appeals(user,text,created,status) VALUES(?1,?2,?3,'open')              ON CONFLICT(user) DO UPDATE SET text=excluded.text,created=excluded.created,status='open'",
+            params![user, text, rfc3339::format(SystemTime::now())],
+        )?;
+        Ok(())
+    }
+    /// Open appeals, newest first, with the player's name.
+    pub(super) fn appeals(&self) -> Result<Vec<lc_types::social::SocialAppeal>, ApiError> {
+        let mut stmt = self.db.prepare(
+            "SELECT a.user,COALESCE(u.name,a.user),a.text,a.created FROM appeals a              LEFT JOIN users u ON u.uuid=a.user WHERE a.status='open' ORDER BY a.created DESC LIMIT 200",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(lc_types::social::SocialAppeal {
+                uuid: r.get(0)?,
+                name: r.get(1)?,
+                text: r.get(2)?,
+                created_at: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Closes an appeal; `accept` also lifts the ban. `Ok(false)` = no open appeal.
+    pub(super) fn resolve_appeal(
+        &self,
+        actor: &str,
+        user: &str,
+        accept: bool,
+    ) -> Result<bool, ApiError> {
+        let closed = self.db.execute(
+            "UPDATE appeals SET status=?2 WHERE user=?1 AND status='open'",
+            params![user, if accept { "accepted" } else { "dismissed" }],
+        )?;
+        if closed == 0 {
+            return Ok(false);
+        }
+        if accept {
+            self.db.execute(
+                "INSERT INTO moderation(user,ban) VALUES(?1,0)                  ON CONFLICT(user) DO UPDATE SET ban=0",
+                [user],
+            )?;
+        }
+        self.audit(
+            actor,
+            if accept {
+                "appealAccept"
+            } else {
+                "appealDismiss"
+            },
+            Some(user),
+            None,
+        )?;
+        Ok(true)
+    }
+
     /// Drops an open request after the admin declined it. `Ok(false)` = nothing
     /// to drop any more (already served or rejected).
     pub(super) fn request_rejected(&self, actor: &str, request: &str) -> Result<bool, ApiError> {

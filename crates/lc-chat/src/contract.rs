@@ -124,6 +124,23 @@ pub trait ChatService: Send + Sync {
             "ChatService::create_account",
         ))
     }
+    /// Asks the admins for a second chance after a chat ban. One open appeal
+    /// per player; the text is 3–500 characters.
+    async fn appeal(&self, text: &str) -> AppResult<()> {
+        let _ = text;
+        Err(lc_types::AppError::not_implemented("ChatService::appeal"))
+    }
+    /// Admin only: appeals of banned players, newest first.
+    async fn appeals(&self) -> AppResult<Vec<lc_types::social::SocialAppeal>> {
+        Err(lc_types::AppError::not_implemented("ChatService::appeals"))
+    }
+    /// Admin only: accepts (lifts the ban) or dismisses the appeal.
+    async fn resolve_appeal(&self, uuid: &str, accept: bool) -> AppResult<()> {
+        let _ = (uuid, accept);
+        Err(lc_types::AppError::not_implemented(
+            "ChatService::resolve_appeal",
+        ))
+    }
     /// Admin only: removes an account or a guest from the hub (guests take
     /// their messages with them; a server account keeps its Drasl profile).
     async fn delete_account(&self, uuid: &str) -> AppResult<()> {

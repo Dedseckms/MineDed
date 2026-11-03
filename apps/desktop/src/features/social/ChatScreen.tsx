@@ -37,6 +37,7 @@ import {
   isGuest,
   privacyOptions,
 } from "../../lib/social";
+import { toAppError } from "../../lib/errors";
 import { canEditProfile, displayNameOf } from "../../lib/socialProfile";
 import { useNavStore } from "../../stores/navStore";
 import { usePrefsStore } from "../../stores/prefsStore";
@@ -58,6 +59,7 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatTimeline } from "./ChatTimeline";
 import { type TimelineRow, buildTimeline, chronological } from "./chat";
 import { SharePack } from "./PackShare";
+import { AppealDialog } from "./AppealDialog";
 import { GuestLoginDialog } from "./GuestLoginDialog";
 import { OnlineBadge } from "./OnlineBadge";
 import { PlayerSearch } from "./PlayerSearch";
@@ -95,6 +97,7 @@ export function ChatScreen() {
   const [tab, setTab] = useState("chat");
   const [pane, setPane] = useState<"list" | "chat">("list");
   const [guestLogin, setGuestLogin] = useState(false);
+  const [appealOpen, setAppealOpen] = useState(false);
   const [accountDialog, setAccountDialog] = useState(false);
   const [accountRequested, setAccountRequested] = useState(() =>
     hasRequestedAccount(self?.uuid ?? ""),
@@ -104,6 +107,8 @@ export function ChatScreen() {
     setAccountDialog(false);
   }, [self?.uuid]);
   const [taskId, setTaskId] = useState<string | null>(null);
+  // The hub refused the socket because of a ban (not a network hiccup).
+  const banned = toAppError(session.error).details?.reason === "chatBanned";
   // Guests can be told their server account exists; poll until the flag flips.
   const accountCreated = useQuery({
     queryKey: ["social", "profile", self?.uuid ?? "", "created"],
@@ -253,7 +258,14 @@ export function ChatScreen() {
           <Button variant="secondary" onClick={() => setGuestLogin(true)}>
             {t("social.guestLogin")}
           </Button>
+          {/* A ban closes the chat: the only way out is an appeal to the admins. */}
+          {banned ? (
+            <Button variant="primary" onClick={() => setAppealOpen(true)}>
+              {t("social.appeal.open")}
+            </Button>
+          ) : null}
         </div>
+        <AppealDialog open={appealOpen} onClose={() => setAppealOpen(false)} />
         <GuestLoginDialog
           open={guestLogin}
           onClose={() => setGuestLogin(false)}

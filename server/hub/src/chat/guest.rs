@@ -124,12 +124,9 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        match row {
-            // A chat ban revokes guest access together with its tokens.
-            Some((_, _, true)) => Err(super::denied()),
-            Some((user_id, name, false)) => Ok(Some(Identity { user_id, name })),
-            None => Ok(None),
-        }
+        // A ban is enforced when sending and on the socket, not here: the guest
+        // still needs its identity to read the reason and to file an appeal.
+        Ok(row.map(|(user_id, name, _banned)| Identity { user_id, name }))
     }
 }
 

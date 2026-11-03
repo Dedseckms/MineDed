@@ -590,6 +590,22 @@ async fn dispatch(
         chat.create_account(me, request.to_owned()).await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
+    // A banned player asks the admin for a second chance.
+    if method == "POST" && path == "appeal" {
+        let text = body["text"].as_str().unwrap_or_default().to_owned();
+        chat.appeal(me, text).await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    // Open appeals, and the admin's verdict on one of them.
+    if let ("POST", Some(rest)) = (method.as_str(), path.strip_prefix("admin/appeals/")) {
+        let (user, accept) = match rest.rsplit_once('/') {
+            Some((user, "accept")) => (user, true),
+            Some((user, "dismiss")) => (user, false),
+            _ => return Err(invalid("unknown appeal action")),
+        };
+        chat.resolve_appeal(me, user.to_owned(), accept).await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     // A declined request leaves the admin list and the guest may ask again.
     if let ("POST", Some(request)) = (method.as_str(), path.strip_prefix("admin/reject/")) {
         chat.reject_account(me, request.to_owned()).await?;
@@ -628,6 +644,20 @@ async fn socket(
     req: Request,
 ) -> Result<Response, ApiError> {
     let chat = s.chat.clone().ok_or_else(internal)?;
+
+    // A ban closes the chat for this player: the client shows the reason and
+    // offers an appeal instead of retrying the socket forever.
+    {
+        let banned = chat
+            .run({
+                let me = me.clone();
+                move |db, _| db.is_banned(&me)
+            })
+            .await?;
+        if banned {
+            return Err(denied());
+        }
+    }
     let token = crate::bearer(req.headers())
         .ok_or_else(ApiError::auth_required)?
         .to_owned();

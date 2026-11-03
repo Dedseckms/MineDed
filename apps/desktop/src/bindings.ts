@@ -258,6 +258,12 @@ export const commands = {
 	socialRejectAccount: (requestId: string) => typedError<null, AppError>(__TAURI_INVOKE("social_reject_account", { requestId })),
 	/**  Admin only: removes an account or a guest from the hub. */
 	socialDeleteAccount: (uuid: string) => typedError<null, AppError>(__TAURI_INVOKE("social_delete_account", { uuid })),
+	/**  Banned player: asks the admins for a second chance. */
+	socialAppeal: (text: string) => typedError<null, AppError>(__TAURI_INVOKE("social_appeal", { text })),
+	/**  Admin only: open ban appeals. */
+	socialAppeals: () => typedError<SocialAppeal[], AppError>(__TAURI_INVOKE("social_appeals")),
+	/**  Admin only: accepts (`accept` = lift the ban) or dismisses an appeal. */
+	socialResolveAppeal: (uuid: string, accept: boolean) => typedError<null, AppError>(__TAURI_INVOKE("social_resolve_appeal", { uuid, accept })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSet: (settings: Settings) => typedError<null, AppError>(__TAURI_INVOKE("settings_set", { settings })),
 	tasksList: () => typedError<TaskSummary[], AppError>(__TAURI_INVOKE("tasks_list")),
@@ -939,6 +945,16 @@ export type SkinModel =
 "classic" | 
 /**  Alex, 3px arms. */
 "slim";
+
+/**  A banned player asking to be let back into the chat. */
+export type SocialAppeal = {
+	/**  Undashed profile UUID of the banned player. */
+	uuid: string,
+	name: string,
+	/**  What the player wrote to the admin. */
+	text: string,
+	createdAt: string,
+};
 
 export type SocialAttachment = {
 	id: string,
