@@ -3534,6 +3534,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "chacha20poly1305",
+ "image",
  "keyring",
  "lc-http",
  "lc-runtime",
