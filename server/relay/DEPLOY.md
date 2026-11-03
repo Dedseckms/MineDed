@@ -170,8 +170,14 @@ mihomo/caddy active, Drasl 200. Тег образа остаётся `mineup/hub
 Откат: `sudo docker compose -p mineup-relay stop site`, переименовать `caddy/site.caddy` в
 `site.caddy.off` + validate/reload.
 
-### 2026-10-26 вЂ” hub /me/vpn (server-ops)
-hub (musl, sha256 `be745282вЂ¦2929`) with `/me/vpn` GET/POST: one s-ui client per profile
+### 2026-10-26 — moved to VPS 31.59.192.133 (server-ops)
+Full log: /opt/DEPLOY.md (repo: server/deploy/vps/DEPLOY.md), section Phase 2.
+
+## 2026-10-26: MineDed VPN route
+relay.caddy now has \import /opt/vpn/caddy/vpn.caddy\ inside the relay.dedseckms.ru block (s-ui panel + subscriptions on secret paths). Backup: /opt/vpn/backups/relay.caddy.20261026-085642. Details: /opt/vpn/DEPLOY.md.
+
+### 2026-10-26 — hub /me/vpn (server-ops)
+hub (musl, sha256 `be745282…2929`) with `/me/vpn` GET/POST: one s-ui client per profile
 (remark `mc-<uuid>`, random name = subscription secret, 256 GiB, inbounds 1+2).
 New `compose.vpn.yaml` (start.sh adds it when `HUB_VPN_API_URL` is set): hub joins the external
 network `mineded-vpn_default` and calls `http://mineded-vpn:2095/<panel>/apiv2`; s-ui ports unchanged
@@ -185,6 +191,172 @@ token invalidated. All containers healthy.
 Rollback: restore the three backups (`.env`, `hub/hub`, `start.sh`), `./start.sh`
 (without `HUB_VPN_API_URL` the vpn override is not applied and `/me/vpn` returns 503).
 
-## 2026-10-27 security headers
-- Site block: HSTS, nosniff, X-Frame-Options DENY, Referrer-Policy, -Server. Backup on server: caddy/*.caddy.bak-20261027-060540. Rollback: restore backup, caddy validate, systemctl reload caddy.
+## 20261026-125415: site synced from main (excl. README.md, og.html); backup backups/site-20261026-125415.tgz
 
+## 20261026-193147: site synced from main; backup backups/site-20261026-193147.tgz
+
+### 2026-10-27 - join/invite page (server-ops)
+Added site/join.html, site/join.js; caddy/site.caddy now rewrites /join/* and /invite/* to /join.html. Backup: /opt/relay/backups/site.caddy.20261027-join. validate+reload OK; /join/X 200, / 200, mineup 301. Rollback: cp backup back to caddy/site.caddy + systemctl reload caddy.
+
+## 2026-10-27 security headers
+- Added HSTS, nosniff, X-Frame-Options DENY, Referrer-Policy, -Server to the site block. Backup: *.caddy.bak-20261027-060540. Rollback: restore backup, caddy validate, systemctl reload caddy.
+
+## 2026-10-30 - public static site without VPN promotion
+
+- Scope: existing `/opt/relay/site` bind mount only. No hub/chat deployment,
+  container restart, daemon operation, network change, or home-server access.
+- Preflight: canonical path `/opt/relay/site`; existing site mount verified;
+  no Git repository in relay/site. Site, hub and Drasl checks passed before changes.
+- Source: Git archive of `site/` from repository commit
+  `7025e9a908ef947930b6f2d30108233c76eeaf7b` (site content change `719bacb`).
+  README and unused VPN screenshots excluded. Existing search verification files retained.
+- Backup: `/opt/relay/backups/site-before-20261030-033602.tar.gz`.
+- Git snapshots: `/opt/relay/backups/site-snapshot-20261030-033602.git`
+  (outside the public web root): before `bbd7738`, deployed `a77f99c`; clean worktree.
+- Uploaded archive: `/opt/relay/backups/site-upload-20261030-033602.tar`;
+  SHA-256 `2620f18d12829cd6936a172042cef57fb1dc15b492f1f51d235d7c0a9c5b51d9` verified.
+- Checks: no VPN text in served HTML/JS sources; public root, install, privacy,
+  share-image HTML, app.js?v=10, og.png and play screenshot all HTTP 200.
+  Public index/app.js SHA-256 match deployed files. Hub health 200/status ok
+  (existing version 1.0.7); Drasl authlib-injector metadata HTTP 200.
+- Rollback if authorized: from `/opt/relay`, extract the pre-change tar archive
+  over `site/` using `tar -xzf backups/site-before-20261030-033602.tar.gz
+  --no-same-owner --no-same-permissions`, then repeat public/health checks.
+  No service restart is necessary. New unreferenced screenshot files may remain.
+
+## 2026-10-30 — hub 1.3.0 on the VPS
+
+- Image `mineup/hub:1.3.0` built on the VPS from repository commit `1c9ffe3`
+  (merged to `main` as `5d54e42`, tag `v1.3.0`). Static musl binary built in
+  `rust:1.99.1-bookworm` (`/opt/relay/hub-1.3/build-hub.sh`).
+- Backups: `/opt/relay/backups/20261030-hub13/` (env, compose, DEPLOY.md) and
+  `/opt/relay/backups/hub-dir-20261030-hub13.tar.gz`; previous image
+  `mineup/hub:0.1.0` kept for rollback; previous hub directory left as
+  `/opt/relay/hub.bak-20261030`.
+- Changed: `hub/hub` + `hub/Dockerfile` replaced; `compose.yaml` now passes
+  `CURSEFORGE_API_KEY` and chat storage; `HUB_VERSION=1.3.0` and the optional
+  catalogue and Drasl admin credentials live in `.env` (mode 600, never printed).
+- Restart: `docker compose -p mineup-relay -f compose.yaml -f compose.qad.yaml
+  -f compose.vpn.yaml up -d hub` — only the hub container was recreated.
+- Checks: `/api/v1/health` 200 `{"status":"ok","version":"1.3.0"}`;
+  `/api/v1/chat/me` and `/api/v1/chat/channels` 401 without a token;
+  `/api/v1/catalog/curseforge/mods/search` 200; `authlib-injector` 200;
+  `/api/v1/rooms` 405 for GET (rooms are POST); hub logs clean.
+- Rollback: set `HUB_VERSION=0.1.0` in `.env` (or restore the backup) and run the
+  same `up -d hub`; the old image is local, no rebuild needed.
+
+## 2026-11-03 — hub 1.5.31 (server-ops)
+
+- Source: `git archive` of repository `main` at `17cd2c7` (workspace version 1.5.31), uploaded to
+  `/opt/relay/hub-1.3/ws-1.5.31.tgz` (sha256 `47ca7fd0…72af`), extracted over
+  `/opt/relay/hub-1.3/ws`. `server/hub` code unchanged in this batch, only the version number.
+- Build: `./build-hub.sh` (throwaway `rust:1.99.1-bookworm`), 2m38s on 1 vCPU. The earlier 1.5.3
+  attempt (`build14.log`) failed on `--locked`: `Cargo.lock` was stale; the 1.5.31 archive carries
+  a matching lock file.
+- Binary: `/opt/relay/hub-1.3/hub` sha256 `5f55966f…7a80` → copied to `/opt/relay/hub/hub`.
+- Backups: `/opt/relay/backups/hub-1.5.31-20261103-110608/` (previous binary `hub-prev`
+  sha256 `0243049a…9f12` + Dockerfile); previous image kept as `mineup/hub:prev-20261103-110608`.
+- Image: `mineup/hub:1.3.0` rebuilt; the tag is unchanged by design (`HUB_VERSION` in `.env`
+  untouched), the reported version comes from the binary.
+- Smoke test: throwaway container on `127.0.0.1:18081` answered
+  `{"status":"ok","version":"1.5.31"}`, then removed.
+- Restart: `docker compose -p mineup-relay -f compose.yaml -f compose.qad.yaml -f compose.vpn.yaml
+  up -d --force-recreate hub` — only the hub container was recreated (restart count 0).
+- Checks: public `/api/v1/health` `{"status":"ok","version":"1.5.31"}` (repeated three times);
+  `/api/v1/presence` 200 `{"online":1}`; `/api/v1/chat/me` 401 without a token; `GET /api/v1/rooms`
+  405 (rooms are POST); Drasl `127.0.0.1:25585/authlib-injector` 200; hub container healthy; caddy
+  active; drasl, iroh-relay, updates, site, tg-bot and s-ui containers untouched (7–8 days uptime).
+- Rollback: `cp /opt/relay/backups/hub-1.5.31-20261103-110608/hub-prev /opt/relay/hub/hub` then
+  `docker compose -p mineup-relay -f compose.yaml -f compose.qad.yaml -f compose.vpn.yaml
+  up -d --build hub`, or `docker tag mineup/hub:prev-20261103-110608 mineup/hub:1.3.0` followed by
+  `up -d hub` (no rebuild).
+
+## 2026-11-03 — hub 1.5.33 (server-ops)
+
+First release where `server/hub` code changed: approving an account request creates the Drasl
+account, the request password is stored sealed (`users.request_secret`, XChaCha20-Poly1305, key
+in the `settings` row `request-key`), new `POST /chat/admin/reject/{uuid}`, `mutedUntil`/`banned`
+in `/chat/admin/accounts`, `login` in `/chat/admin/requests`. `chacha20poly1305` is new in
+`Cargo.lock`.
+
+- Backup first, because of the additive schema migration: `/opt/relay/backups/hub-1.5.33-20261103-104713/`
+  (mode 700): `chat.sqlite3` from the SQLite online backup API (`PRAGMA integrity_check` = ok,
+  17 users, 1 open request), `files.tar.gz` (42 entries), previous binary `hub-prev`
+  (sha256 `5f55966f…7a80`), `Dockerfile`, `image-prev-id.txt`. Previous image kept as
+  `mineup/hub:prev-20261103-104713`; previous binary also as `/opt/relay/hub/hub.prev-1.5.31`.
+- Source: `git archive` of `main` at `b8d2af6` (1.5.33) -> `ws-1.5.33.tgz`
+  (sha256 `70549a68…ad12`), extracted over `/opt/relay/hub-1.3/ws`; only five stale frontend
+  files remained, none in the hub crate. `Cargo.lock` carries `chacha20poly1305`, so `--locked`
+  passes.
+- Build: `./build-hub.sh` (throwaway `rust:1.99.1-bookworm`), 2m54s, log `build-1.5.33.log`.
+  Binary `/opt/relay/hub-1.3/hub` sha256 `e8b8dc1c…836c`, static-pie musl -> `/opt/relay/hub/hub`.
+- Image `mineup/hub:1.3.0` rebuilt (`HUB_VERSION` untouched by design; the version comes from the
+  binary), new id `sha256:233c0bad…4bde7`.
+- Smoke test before the switch, on a throwaway volume holding a copy of the backup DB: health
+  `{"status":"ok","version":"1.5.33"}`, `/presence` 200, `/chat/me` and `/chat/admin/requests` 401,
+  no panic. A plain `busybox` container is NOT a valid smoke host for this binary: without the
+  image's `/etc/ssl/cert.pem` the reqwest client cannot be built and startup fails with
+  "could not configure catalogue broker".
+- Restart: `docker compose -p mineup-relay -f compose.yaml -f compose.qad.yaml -f compose.vpn.yaml
+  up -d --force-recreate hub` — only hub was recreated (restarts 0), the other seven containers
+  kept their uptime.
+- Checks: public `/api/v1/health` `{"status":"ok","version":"1.5.33"}`, `/presence` 200,
+  `/chat/admin/accounts` and `/chat/admin/requests` 401 without a token, Drasl
+  `https://skins.dedseckms.ru/authlib-injector` 200, hub healthy, caddy active. Logs: `vpn: on`,
+  `hub 1.5.33 listening on 0.0.0.0:8080`, chat sockets opening, no error/panic/migration lines.
+- Migration verified on a copy of the live DB: `PRAGMA integrity_check` ok, `journal_mode` wal,
+  column `users.request_secret` present, 17 users, 58 messages, 8 audit rows. The `request-key`
+  settings row is created on the first account request, so it is absent until then.
+- Live traffic confirmed the new endpoints: an admin `rejectAccount` audit entry appeared at
+  2026-11-03T11:06:58Z; the open request from before the deploy was handled, so
+  `SELECT count(*) FROM users WHERE request_password IS NOT NULL` is 0 now.
+- Rollback: `cp backups/hub-1.5.33-20261103-104713/hub-prev hub/hub` then
+  `docker compose -p mineup-relay -f compose.yaml -f compose.qad.yaml -f compose.vpn.yaml up -d
+  --build hub`; or `docker tag mineup/hub:prev-20261103-104713 mineup/hub:1.3.0` + `up -d hub`
+  (no rebuild). The schema change is additive and nullable, so 1.5.31 runs on the migrated DB;
+  the chat volume is never touched. Restoring `chat.sqlite3` from the backup is only needed if
+  the DB itself is damaged.
+
+
+## 2026-11-03 — hub 1.6.0 (server-ops)
+
+Ban appeals for guests and accounts: `POST /chat/appeal`, `GET /chat/admin/appeals`,
+`POST /chat/admin/appeals/{uuid}/accept|dismiss`. Also new here: `POST /chat/admin/reject/{uuid}`,
+`DELETE /chat/admin/accounts/{uuid}`, the account-request password sealed with XChaCha20-Poly1305 into
+`users.request_secret` (key in the `settings` row `request-key`, created on the first account request),
+a ban now closes the member's WebSocket, and `guest_identity` no longer refuses a banned guest (the
+client needs an identity to render the ban/appeal screen). New table `appeals`.
+
+- Backup first, because of the schema migration:
+  `/opt/relay/backups/hub-1.6.0-20261103-225601/` (mode 700): `chat.sqlite3` from the SQLite online
+  backup API (`PRAGMA integrity_check` = ok, 19 users, 62 messages, 15 audit rows), `files.tar.gz`,
+  previous binary `hub-prev` (sha256 `e8b8dc1c…836c`), `Dockerfile`, `image-prev-id.txt`.
+  Previous image kept as `mineup/hub:prev-20261103-225601`.
+- Source: `git archive` of `main` at `3e7409f` (1.6.0) -> `ws-1.6.0.tgz`
+  (sha256 `ab76b5fad68e4ec49003deda071d3ab55b386a7d0649b3776077c88c43e8e063`), extracted over
+  `/opt/relay/hub-1.3/ws`; five stale frontend files removed afterwards, none in `server/hub`.
+- Build: `./build-hub.sh` (incremental, 2m15s), log `build-1.6.0.log`. Binary
+  `/opt/relay/hub-1.3/hub` sha256 `40ecf20aa8fb33ea4654477461d077f6c3782fc143b7ca415e9ab13ec5c85812`,
+  static-pie musl -> `/opt/relay/hub/hub`. Image `mineup/hub:1.3.0` rebuilt, new id
+  `sha256:685b084f…` (`HUB_VERSION` untouched by design; the version comes from the binary).
+- Smoke test before the switch, on a throwaway volume holding a copy of the backup DB and files:
+  health `{"status":"ok","version":"1.6.0"}`, `/presence` 200, `401` without a token for `/chat/me`,
+  `/chat/appeal`, `/chat/admin/appeals` and `/chat/admin/reject/<uuid>` (so the new routes exist,
+  they are not 404), guest identity 200, no panic. Migration on that copy: `integrity_check` ok,
+  table `appeals` present, columns `users.request_secret` and `users.username_hint` present,
+  19 users / 62 messages unchanged. Throwaway container and volume removed afterwards.
+- Restart: `docker compose -p mineup-relay -f compose.yaml -f compose.qad.yaml -f compose.vpn.yaml
+  up -d --force-recreate hub` — only hub was recreated, the other seven containers kept their uptime.
+- Checks: local and public `/api/v1/health` `{"status":"ok","version":"1.6.0"}`, `/presence` 200,
+  `/chat/appeal` 401, Drasl `https://skins.dedseckms.ru/authlib-injector` 200, hub healthy, caddy
+  active. Logs: `vpn: on`, `hub 1.6.0 listening on 0.0.0.0:8080`, chat sockets opening, no
+  error/panic/migration lines.
+- Live DB after the migration: `PRAGMA integrity_check` ok, `journal_mode` wal, table `appeals`
+  present (0 rows), `users.request_secret` and `users.username_hint` present, 19 users / 62 messages /
+  15 audit rows (unchanged by the migration).
+- Rollback: `cp backups/hub-1.6.0-20261103-225601/hub-prev hub/hub` then
+  `docker compose -p mineup-relay -f compose.yaml -f compose.qad.yaml -f compose.vpn.yaml up -d
+  --build hub`; or `docker tag mineup/hub:prev-20261103-225601 mineup/hub:1.3.0` + `up -d hub`
+  (no rebuild). The schema change is additive (a new table and nullable columns), so 1.5.33 runs on
+  the migrated DB; the chat volume is never touched. Restoring `chat.sqlite3` from the backup is only
+  needed if the DB itself is damaged.
