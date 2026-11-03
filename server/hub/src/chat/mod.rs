@@ -595,6 +595,11 @@ async fn dispatch(
         chat.reject_account(me, request.to_owned()).await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
+    // Removing an account (or a guest) from the admin panel.
+    if let ("DELETE", Some(target)) = (method.as_str(), path.strip_prefix("admin/accounts/")) {
+        chat.delete_account(me, target.to_owned()).await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     if method == "POST" && path == "admin/migrate" {
         chat.start_migration(me, body).await?;
         return Ok(StatusCode::ACCEPTED.into_response());

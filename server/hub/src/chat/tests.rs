@@ -2298,6 +2298,86 @@ async fn rejecting_a_request_clears_it_audits_and_notifies_the_guest() {
     assert_eq!(error["code"], "invalidInput");
 }
 
+#[tokio::test]
+async fn admin_deletes_a_guest_and_its_data() {
+    let (app, chat, _temp) = app_with_chat();
+    let (token, guest) = open_request(&app, "hi").await;
+    // Only an admin may delete; the guest cannot remove itself this way.
+    for authorization in [Some("Bearer other"), Some(token.as_str())] {
+        let (status, error) = request_abs(
+            &app,
+            "DELETE",
+            &format!("/api/v1/chat/admin/accounts/{guest}"),
+            authorization,
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+        assert_eq!(error["code"], "permissionDenied");
+    }
+    {
+        let db = chat.store.lock().unwrap();
+        db.db
+            .execute(
+                "INSERT INTO guest_tokens(token,uuid,created,expires) VALUES(?1,?2,'',9999999999)",
+                rusqlite::params![b"tok".to_vec(), guest],
+            )
+            .unwrap();
+    }
+    let (status, body) = request(
+        &app,
+        "DELETE",
+        &format!("admin/accounts/{guest}"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    {
+        let db = chat.store.lock().unwrap();
+        let users: i64 = db
+            .db
+            .query_row("SELECT count(*) FROM users WHERE uuid=?1", [&guest], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(users, 0, "profile gone");
+        let tokens: i64 = db
+            .db
+            .query_row(
+                "SELECT count(*) FROM guest_tokens WHERE uuid=?1",
+                [&guest],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tokens, 0, "tokens revoked");
+        assert_eq!(db.audit_page().unwrap()[0].action, "deleteGuest");
+    }
+    // The deleted guest is no longer listed and its token stops working.
+    let (_, requests) = request(&app, "GET", "admin/requests", true, Value::Null).await;
+    assert_eq!(requests, json!([]));
+    let (status, error) = request_abs(
+        &app,
+        "GET",
+        "/api/v1/chat/me",
+        Some(&token),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{error}");
+    // A second delete finds nothing.
+    let (status, error) = request(
+        &app,
+        "DELETE",
+        &format!("admin/accounts/{guest}"),
+        true,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["code"], "notFound");
+}
+
 #[test]
 fn admin_accounts_report_running_mutes_and_bans() {
     let (chat, _temp) = chat();

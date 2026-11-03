@@ -117,6 +117,38 @@ impl Chat {
         let _ = self.events.send(Notice::Account(request));
         Ok(())
     }
+
+    /// `DELETE /chat/admin/accounts/{uuid}`: removes an account from the hub.
+    ///
+    /// Guests (offline nicknames) are deleted with their tokens, messages,
+    /// friendships, blocks and moderation. A server account is only hidden from
+    /// the hub: its Drasl profile stays, because the hub does not own it, and
+    /// the account reappears the next time it signs in.
+    pub(super) async fn delete_account(
+        self: &Arc<Self>,
+        me: String,
+        target: String,
+    ) -> Result<(), ApiError> {
+        let target = store::uuid(&target)?;
+        self.run({
+            let target = target.clone();
+            move |db, _| {
+                if db.role(&me)? != SocialRole::Admin {
+                    return Err(denied());
+                }
+                if target == me {
+                    return Err(invalid("an admin cannot delete own account"));
+                }
+                if db.role(&target).ok() == Some(SocialRole::Admin) {
+                    return Err(denied());
+                }
+                db.delete_account(&me, &target)
+            }
+        })
+        .await?;
+        let _ = self.events.send(Notice::Admin);
+        Ok(())
+    }
 }
 
 impl Chat {

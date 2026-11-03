@@ -1072,6 +1072,59 @@ CREATE INDEX IF NOT EXISTS user_name ON users(lower(name));")?;
         self.audit(actor, "rejectAccount", Some(request), None)?;
         Ok(true)
     }
+    /// Removes one account and everything that hangs off it. Guests take their
+    /// messages and attachments with them; a server account keeps its messages
+    /// (the Drasl profile still exists and may sign in again).
+    pub(super) fn delete_account(&self, actor: &str, target: &str) -> Result<(), ApiError> {
+        let (guest,): (bool,) = self
+            .db
+            .query_row(
+                "SELECT guest FROM users WHERE uuid=?1",
+                [target],
+                |r| Ok((r.get(0)?,)),
+            )
+            .optional()?
+            .ok_or_else(|| ApiError::not_found("no such account"))?;
+        let tx = self.db.unchecked_transaction()?;
+        if guest {
+            // Related attachment rows and their files go with the messages.
+            tx.execute(
+                "DELETE FROM reports WHERE message IN (SELECT id FROM messages WHERE author=?1) \
+                 OR reporter=?1",
+                [target],
+            )?;
+            tx.execute(
+                "DELETE FROM message_files WHERE message IN \
+                 (SELECT id FROM messages WHERE author=?1)",
+                [target],
+            )?;
+            tx.execute(
+                "DELETE FROM attachments WHERE owner=?1 AND id NOT IN (SELECT file FROM message_files)",
+                [target],
+            )?;
+            tx.execute("DELETE FROM messages WHERE author=?1", [target])?;
+            tx.execute("DELETE FROM guest_tokens WHERE uuid=?1", [target])?;
+        }
+        tx.execute(
+            "DELETE FROM friends WHERE a=?1 OR b=?1",
+            [target],
+        )?;
+        tx.execute(
+            "DELETE FROM blocks WHERE owner=?1 OR peer=?1",
+            [target],
+        )?;
+        tx.execute("DELETE FROM reads WHERE user=?1", [target])?;
+        tx.execute("DELETE FROM moderation WHERE user=?1", [target])?;
+        tx.execute("DELETE FROM invites WHERE request=?1", [target])?;
+        tx.execute("DELETE FROM users WHERE uuid=?1", params![target])?;
+        tx.commit()?;
+        self.audit(
+            actor,
+            if guest { "deleteGuest" } else { "deleteAccount" },
+            Some(target),
+            None,
+        )
+    }
     fn moderation(
         &self,
         me: &str,
