@@ -240,6 +240,19 @@ export const useLoaderVersions = (loader: LoaderKind, mc: string) =>
 export const useContentList = (id: InstanceId) =>
   useQuery({ queryKey: qk.content(id), queryFn: async () => unwrap(await api.contentList(id)) });
 
+/**
+ * Update badges and page slugs, fetched after the list has painted: the
+ * catalogue lookups of a big pack take seconds and must not block the list.
+ */
+export const useContentMarks = (id: InstanceId, enabled: boolean) =>
+  useQuery({
+    queryKey: [...qk.content(id), "marks"],
+    queryFn: async () => unwrap(await api.contentMarks(id)),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
 /** Paged catalog search (infinite scroll); `query.offset` is ignored. */
 export function useContentSearch(query: SearchQuery, enabled = true) {
   return useInfiniteQuery({

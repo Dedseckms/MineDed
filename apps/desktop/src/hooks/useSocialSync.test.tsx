@@ -76,9 +76,10 @@ const session = vi.hoisted(() =>
 );
 vi.mock("../api/queries", () => ({
   useAccounts: () => ({
-    data: [
-      { id: fixture.account, isDefault: true, kind: "yggdrasil", valid: true },
-    ],
+    data:
+      fixture.account === ""
+        ? []
+        : [{ id: fixture.account, isDefault: true, kind: "yggdrasil", valid: true }],
   }),
   useRoomState: () => ({ data: fixture.room ? { roomId: "room" } : null }),
 }));
@@ -95,6 +96,8 @@ vi.mock("../api/client", () => ({
     socialSetPresence: presence,
     socialSession: session,
     socialGuestLogin: guestLogin,
+    // A server account beats any leftover guest session (same as the backend).
+    socialServerAccount: async () => connect(fixture.account),
   },
 }));
 function wrapper({ children }: { children: ReactNode }) {
@@ -131,19 +134,31 @@ describe("social connection synchronization", () => {
       expect(useSocialStore.getState().self?.uuid).toBe("second"),
     );
     expect(useSocialStore.getState().blocked).toEqual([]);
-    const second = fixture.order.indexOf("connect:second");
-    expect(fixture.order[second - 1]).toBe("disconnect");
+    // The backend replaces the session in place: no guest logout in between.
+    expect(fixture.order.filter((x) => x.startsWith("connect:"))).toEqual([
+      "connect:first",
+      "connect:second",
+    ]);
   });
-  it("keeps a live guest session and never touches the game account", async () => {
+  it("replaces a leftover guest session with the server account", async () => {
     fixture.guest = true;
+    renderHook(() => useSocialSync(), { wrapper });
+    await waitFor(() =>
+      expect(useSocialStore.getState().self?.uuid).toBe("first"),
+    );
+    expect(fixture.order).toContain("connect:first");
+  });
+  it("keeps a guest session when no server account is signed in", async () => {
+    fixture.guest = true;
+    fixture.account = "";
     renderHook(() => useSocialSync(), { wrapper });
     await waitFor(() =>
       expect(useSocialStore.getState().self?.uuid).toBe("guest-saved"),
     );
-    expect(fixture.order).not.toContain("disconnect");
     expect(fixture.order.some((x) => x.startsWith("connect:"))).toBe(false);
   });
   it("resumes the saved guest session from localStorage without a game account", async () => {
+    fixture.account = "";
     localStorage.setItem("mineded.guestSession", "OldNick");
     renderHook(() => useSocialSync(), { wrapper });
     await waitFor(() =>

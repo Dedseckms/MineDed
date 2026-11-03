@@ -101,38 +101,59 @@ export function useSocialSync() {
     connection = connection
       .catch(() => {})
       .then(async () => {
-        // A guest session is independent of game accounts: keep it as is.
         const existing = await api.socialSession().catch(() => null);
         if (!alive) return;
-        if (existing?.status === "ok" && existing.data)
-          useSocialStore
-            .getState()
-            .set({ self: existing.data, connected: true, error: null });
-        const guest = existing?.status === "ok" && existing.data?.guest === true;
-        if (guest) return;
-        const nick = savedGuestNick();
-        if (nick) {
-          try {
-            const user = unwrap(await api.socialGuestLogin(nick));
-            if (alive)
-              useSocialStore
-                .getState()
-                .set({ self: user, connected: true, error: null });
-            return;
-          } catch {
-            forgetGuest();
-          }
-        }
-        await api.socialDisconnect();
-        if (!alive || !account) return;
-        try {
-          const user = unwrap(await api.socialConnect(account));
-          if (alive)
+        const current = existing?.status === "ok" ? existing.data : null;
+        if (!account) {
+          // No server account: keep a live guest session, drop everything else.
+          if (current?.guest === true) {
             useSocialStore
               .getState()
-              .set({ self: user, connected: true, error: null });
+              .set({ self: current, connected: true, error: null });
+            return;
+          }
+          const nick = savedGuestNick();
+          if (nick) {
+            try {
+              const user = unwrap(await api.socialGuestLogin(nick));
+              if (alive)
+                useSocialStore
+                  .getState()
+                  .set({ self: user, connected: true, error: null });
+              return;
+            } catch {
+              forgetGuest();
+            }
+          }
+          await api.socialDisconnect();
+          useSocialStore
+            .getState()
+            .set({ self: null, connected: false, error: null });
+          return;
+        }
+        // A server account on this device always wins over a leftover guest session.
+        if (current && current.guest !== true) {
+          useSocialStore
+            .getState()
+            .set({ self: current, connected: true, error: null });
+          return;
+        }
+        try {
+          const user = unwrap(await api.socialServerAccount());
+          if (!alive) return;
+          if (!user) {
+            await api.socialDisconnect();
+            useSocialStore
+              .getState()
+              .set({ self: null, connected: false, error: null });
+            return;
+          }
+          useSocialStore
+            .getState()
+            .set({ self: user, connected: true, error: null });
         } catch (error) {
-          if (alive) useSocialStore.getState().set({ error });
+          if (!alive) return;
+          useSocialStore.getState().set({ self: null, error });
         }
       });
     return () => {

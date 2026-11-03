@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { ContentKind, InstalledContent, Instance, ManualDownload, ProjectSummary } from "../../bindings";
 import { api, unwrap } from "../../api/client";
 import { useQuery } from "@tanstack/react-query";
 
-import { qk, useContentList, useInstances, useStartTask } from "../../api/queries";
+import { qk, useContentList, useContentMarks, useInstances, useStartTask } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { Tabs } from "../../components/ui/Tabs";
@@ -108,6 +108,8 @@ function InstanceContent({ instance }: { instance: Instance }) {
   const setTab = useNavStore((s) => s.setInstanceTab);
   const browseKind = useContentStore((s) => s.browse);
   const content = useContentList(instance.id);
+  // Badges arrive later: the installed list itself never waits for the network.
+  const markList = useContentMarks(instance.id, content.isSuccess);
   // Pack files that still need a manual download (CurseForge opt-out, failed CDN).
   const manual = useQuery({
     queryKey: ["content", "manual", instance.id, content.dataUpdatedAt],
@@ -116,7 +118,17 @@ function InstanceContent({ instance }: { instance: Instance }) {
   });
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [request, setRequest] = useState<InstallRequest | null>(null);
-  const installed = content.data ?? [];
+  const installed = useMemo(() => {
+    const list = content.data ?? [];
+    const marks = markList.data ?? [];
+    if (marks.length === 0) return list;
+    const byFile = new Map(marks.map((m) => [m.fileName, m]));
+    return list.map((c) => {
+      const m = byFile.get(c.fileName);
+      if (!m) return c;
+      return { ...c, slug: c.slug ?? m.slug, updateAvailable: c.updateAvailable || m.updateAvailable };
+    });
+  }, [content.data, markList.data]);
 
   const browse = (kind: SearchKind) => {
     browseKind(kind);
