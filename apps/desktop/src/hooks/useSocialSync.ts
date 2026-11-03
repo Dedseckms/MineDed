@@ -131,28 +131,17 @@ export function useSocialSync() {
             .set({ self: null, connected: false, error: null });
           return;
         }
-        // A server account on this device always wins over a leftover guest session.
-        if (current && current.guest !== true) {
-          useSocialStore
-            .getState()
-            .set({ self: current, connected: true, error: null });
-          return;
-        }
+        // A server account on this device always wins over a leftover guest
+        // session: `connect` swaps the stored guest for the account.
         try {
-          const user = unwrap(await api.socialServerAccount());
+          const user = unwrap(await api.socialConnect(account));
           if (!alive) return;
-          if (!user) {
-            await api.socialDisconnect();
-            useSocialStore
-              .getState()
-              .set({ self: null, connected: false, error: null });
-            return;
-          }
           useSocialStore
             .getState()
             .set({ self: user, connected: true, error: null });
         } catch (error) {
           if (!alive) return;
+          // e.g. an account of a third-party server: say why, do not stay silent.
           useSocialStore.getState().set({ self: null, error });
         }
       });

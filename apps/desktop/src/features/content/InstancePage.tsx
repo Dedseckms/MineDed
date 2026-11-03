@@ -122,9 +122,9 @@ function InstanceContent({ instance }: { instance: Instance }) {
     const list = content.data ?? [];
     const marks = markList.data ?? [];
     if (marks.length === 0) return list;
-    const byFile = new Map(marks.map((m) => [m.fileName, m]));
+    const byFile = new Map(marks.map((m) => [`${m.kind}/${m.fileName}`, m]));
     return list.map((c) => {
-      const m = byFile.get(c.fileName);
+      const m = byFile.get(`${c.kind}/${c.fileName}`);
       if (!m) return c;
       return { ...c, slug: c.slug ?? m.slug, updateAvailable: c.updateAvailable || m.updateAvailable };
     });
