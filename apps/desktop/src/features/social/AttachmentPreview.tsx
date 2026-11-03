@@ -67,7 +67,7 @@ export function ImageThumb({
           type="button"
           aria-label={t("social.openFullscreen")}
           title={attachment.fileName}
-          className="block size-full cursor-zoom-in"
+          className="block size-full cursor-pointer"
           onClick={() => setViewer(true)}
         >
           <img

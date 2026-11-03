@@ -19,6 +19,14 @@ export const commands = {
 	instanceDelete: (id: InstanceId) => typedError<null, AppError>(__TAURI_INVOKE("instance_delete", { id })),
 	instanceRepair: (id: InstanceId, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_repair", { id, onEvent })),
 	instanceGameDir: (id: InstanceId) => typedError<string, AppError>(__TAURI_INVOKE("instance_game_dir", { id })),
+	/**
+	 *  Opens the instance folder of one content kind in the system file manager,
+	 *  creating it first (`kind` null = the game folder itself).
+	 * 
+	 *  Done in Rust on purpose: the WebView has no file-system permissions, and
+	 *  `opener:allow-open-path` cannot create a folder that does not exist yet.
+	 */
+	instanceOpenDir: (id: InstanceId, kind: "mod" | "resourcePack" | "shader" | "dataPack" | "modpack" | null) => typedError<null, AppError>(__TAURI_INVOKE("instance_open_dir", { id, kind })),
 	/**  Returns once the JVM is running; state/logs arrive via `instance://*` events. */
 	instanceLaunch: (id: InstanceId, opts: LaunchOpts, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("instance_launch", { id, opts, onEvent })),
 	instanceKill: (id: InstanceId) => typedError<null, AppError>(__TAURI_INVOKE("instance_kill", { id })),

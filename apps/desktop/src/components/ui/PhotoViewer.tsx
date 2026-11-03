@@ -206,13 +206,21 @@ function Zoomable({
     setZoom(z);
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = box.current?.getBoundingClientRect();
-    const ox = rect ? (e.clientX - rect.left) / rect.width : 0.5;
-    const oy = rect ? (e.clientY - rect.top) / rect.height : 0.5;
-    zoomAt(e.deltaY < 0 ? zoom * ZOOM_STEP : zoom / ZOOM_STEP, ox, oy);
-  };
+  // A native non-passive listener: React's `onWheel` cannot preventDefault.
+  useEffect(() => {
+    const node = box.current;
+    if (!node) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = node.getBoundingClientRect();
+      const ox = rect.width ? (e.clientX - rect.left) / rect.width : 0.5;
+      const oy = rect.height ? (e.clientY - rect.top) / rect.height : 0.5;
+      const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      zoomAt(zoomRef.current * factor, ox, oy);
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  });
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "+" || e.key === "=") zoomAt(zoom * ZOOM_STEP);
@@ -249,25 +257,36 @@ function Zoomable({
       role="group"
       aria-label={alt}
       tabIndex={0}
-      onWheel={onWheel}
       onKeyDown={onKey}
       onDoubleClick={() => zoomAt(zoom > MIN_ZOOM ? MIN_ZOOM : 2.5)}
       onPointerDown={startDrag}
       onPointerMove={moveDrag}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
-      className={`flex size-full items-center justify-center outline-none ${zoom > MIN_ZOOM ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in"}`}
+      className={`flex size-full items-center justify-center outline-none ${zoom > MIN_ZOOM ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
     >
-      <motion.img
-        src={src}
-        alt={alt}
-        draggable={false}
-        className="max-h-full max-w-full object-contain select-none"
-        style={{ transform: `scale(${zoom}) translate(${offset.x / zoom}px, ${offset.y / zoom}px)` }}
-        transition={{ type: "tween", duration: 0.12 }}
+      {/* The entrance animation lives on the wrapper: motion writes `transform`,
+          so the zoom transform must not share the animated element. */}
+      <motion.div
+        className="size-full"
         {...motionProps}
         onMouseDown={(e) => e.stopPropagation()}
-      />
+      >
+        <div className="grid size-full place-items-center">
+          <img
+            src={src}
+            alt={alt}
+            draggable={false}
+            className="max-h-full max-w-full select-none object-contain"
+            style={{
+              transform: `scale(${zoom}) translate(${offset.x / zoom}px, ${offset.y / zoom}px)`,
+              transition: "transform 90ms linear",
+              willChange: "transform",
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          />
+        </div>
+      </motion.div>
     </div>
   );
 }

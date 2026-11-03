@@ -28,6 +28,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             instances::instance_delete,
             instances::instance_repair,
             instances::instance_game_dir,
+            instances::instance_open_dir,
             instances::instance_launch,
             instances::instance_kill,
             instances::instance_state,

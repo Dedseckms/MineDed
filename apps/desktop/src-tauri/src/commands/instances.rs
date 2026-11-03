@@ -1,8 +1,9 @@
 //! Owner: core.
 
+use lc_types::content::ContentKind;
 use lc_types::instance::{Instance, InstancePatch, InstanceSpec, LaunchOpts, RunState};
 use lc_types::task::{TaskEvent, TaskKind};
-use lc_types::{AppResult, InstanceId, TaskId};
+use lc_types::{AppError, AppResult, ErrorCode, InstanceId, TaskId};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
@@ -99,6 +100,43 @@ pub async fn instance_repair(
 #[specta::specta]
 pub async fn instance_game_dir(state: State<'_, AppState>, id: InstanceId) -> AppResult<String> {
     Ok(state.instances.game_dir(id).to_string_lossy().into_owned())
+}
+
+/// Opens the instance folder of one content kind in the system file manager,
+/// creating it first (`kind` null = the game folder itself).
+///
+/// Done in Rust on purpose: the WebView has no file-system permissions, and
+/// `opener:allow-open-path` cannot create a folder that does not exist yet.
+#[tauri::command]
+#[specta::specta]
+pub async fn instance_open_dir(
+    state: State<'_, AppState>,
+    id: InstanceId,
+    kind: Option<ContentKind>,
+) -> AppResult<()> {
+    state.instances.get(id).await?;
+    let mut dir = state.instances.game_dir(id);
+    if let Some(kind) = kind {
+        let sub = match kind {
+            ContentKind::Mod => "mods",
+            ContentKind::ResourcePack => "resourcepacks",
+            ContentKind::Shader => "shaderpacks",
+            ContentKind::DataPack => "datapacks",
+            ContentKind::Modpack => {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "modpacks are imported as instances",
+                ))
+            }
+        };
+        dir = dir.join(sub);
+    }
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| AppError::new(ErrorCode::Io, "cannot create the folder").detail("path", dir.display().to_string()).detail("error", e.to_string()))?;
+    tauri_plugin_opener::open_path(dir.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|_| AppError::new(ErrorCode::Io, "cannot open the folder"))?;
+    Ok(())
 }
 
 /// Returns once the JVM is running; state/logs arrive via `instance://*` events.

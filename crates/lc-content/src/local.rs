@@ -159,10 +159,12 @@ impl Inner {
         if paths.is_empty() {
             return Err(AppError::new(ErrorCode::InvalidInput, "no files given"));
         }
+        eprintln!("content: add_local start ({kind:?}, {} file(s))", paths.len());
         let dest_dir = self.instances.game_dir(id).join(dir);
         let inst_dir = self.instance_dir(id);
 
         // Validate everything before copying anything; later duplicates win.
+        eprintln!("content: add_local validating {} path(s)", paths.len());
         let entries = join(
             tokio::task::spawn_blocking(move || -> AppResult<Vec<(String, IndexEntry)>> {
                 let mut items: Vec<Item> = Vec::new();
@@ -224,6 +226,7 @@ impl Inner {
             });
         }
         idx.save(&inst_dir).await?;
+        eprintln!("content: add_local done ({} file(s))", added.len());
         Ok(added)
     }
 }

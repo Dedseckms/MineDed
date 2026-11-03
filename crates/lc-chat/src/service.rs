@@ -826,6 +826,7 @@ async fn socket(
 ) {
     let mut attempt = 0u32;
     while !session.cancel.is_cancelled() {
+        let started = tokio::time::Instant::now();
         let run = socket_once(
             &session,
             accounts.as_ref(),
@@ -841,7 +842,12 @@ async fn socket(
             session.cancel.cancel();
         }
         observer.on_event(SocialEvent::Connection { connected: false });
-        attempt = attempt.saturating_add(1);
+        // A connection that lived for a while was healthy: reconnect fast again.
+        attempt = if started.elapsed() > Duration::from_secs(30) {
+            0
+        } else {
+            attempt.saturating_add(1)
+        };
         let delay = Duration::from_secs(1u64 << attempt.min(5));
         tokio::select! { _ = session.cancel.cancelled() => break, _ = tokio::time::sleep(delay) => {} }
     }

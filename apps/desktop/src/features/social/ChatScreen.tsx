@@ -425,32 +425,32 @@ export function ChatScreen() {
                   icon={<Icon name="back" />}
                 />
               )}
-              <ChatAvatar
-                user={peer}
-                icon={directChat ? "user" : "users"}
-                size="sm"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">{title}</p>
-                <p className="truncate text-[11px] text-muted">
-                  {directChat
-                    ? t(`social.status.${peer?.status ?? "hidden"}`)
-                    : t("social.publicChannel")}
-                </p>
-              </div>
+              {/* In a direct chat the avatar and the name open the profile. */}
+              <button
+                type="button"
+                className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left ${peer ? "cursor-pointer hover:bg-surface-2" : ""}`}
+                disabled={!peer}
+                aria-label={peer ? t("social.openProfile", { name: title }) : undefined}
+                title={peer ? t("social.profile.title") : undefined}
+                onClick={() => {
+                  if (peer) openProfile(peer);
+                }}
+              >
+                <ChatAvatar
+                  user={peer}
+                  icon={directChat ? "user" : "users"}
+                  size="sm"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold">{title}</span>
+                  <span className="block truncate text-[11px] text-muted">
+                    {directChat
+                      ? t(`social.status.${peer?.status ?? "hidden"}`)
+                      : t("social.publicChannel")}
+                  </span>
+                </span>
+              </button>
               <div className="flex shrink-0 items-center gap-1">
-                {directChat ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label={t("social.profile.title")}
-                    title={t("social.profile.title")}
-                    onClick={() => {
-                      if (peer) openProfile(peer);
-                    }}
-                    icon={<Icon name="user" />}
-                  />
-                ) : null}
                 {directChat ? (
                   <Button
                     size="sm"
