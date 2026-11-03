@@ -16,6 +16,7 @@ use crate::contract::SkinService;
 use crate::fsutil::{io_err, read_optional, write_atomic};
 use crate::remote::{self, RemoteEndpoints};
 use crate::service::AccountsService;
+use crate::skins_head::{self, HeadCache};
 use crate::yggdrasil::{self as ygg, TextureKind};
 
 mod capes;
@@ -78,6 +79,9 @@ pub struct SkinsService {
     dir: PathBuf,
     /// Downloaded previews of `fetch_remote` (`<cache>/skins-remote`).
     remote_cache: PathBuf,
+    /// Rendered 64x64 heads (`<cache>/skins-heads`).
+    heads_cache: PathBuf,
+    heads: HeadCache,
     pub(crate) remote: RemoteEndpoints,
     accounts: Arc<AccountsService>,
     lock: Mutex<()>,
@@ -96,6 +100,8 @@ impl SkinsService {
         Self {
             dir: paths.root().join("skins"),
             remote_cache: paths.cache().join("skins-remote"),
+            heads_cache: paths.cache().join("skins-heads"),
+            heads: HeadCache::default(),
             remote: RemoteEndpoints::default(),
             accounts,
             lock: Mutex::new(()),
@@ -287,6 +293,19 @@ impl SkinService for SkinsService {
 
     async fn set_cape(&self, account: AccountId, cape_id: Option<String>) -> AppResult<()> {
         self.select_cape(account, cape_id).await
+    }
+
+    /// Downloads the skin through the shared downloader, then renders the 8x8
+    /// face and hat overlay into a 64x64 data URL. Cached in memory and as
+    /// `<cache>/skins-heads/<sha256(url)>.png`.
+    async fn head(&self, skin_url: &str) -> AppResult<String> {
+        skins_head::head(
+            self.accounts.downloader(),
+            &self.heads_cache,
+            &self.heads,
+            skin_url,
+        )
+        .await
     }
 }
 

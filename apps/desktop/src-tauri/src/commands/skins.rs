@@ -70,3 +70,10 @@ pub async fn cape_set(
 ) -> AppResult<()> {
     state.skins.set_cape(account, cape_id).await
 }
+
+/// PNG data URL of the skin's head (avatar fallback for players without a picture).
+#[tauri::command]
+#[specta::specta]
+pub async fn skin_head(state: State<'_, AppState>, skin_url: String) -> AppResult<String> {
+    state.skins.head(&skin_url).await
+}
