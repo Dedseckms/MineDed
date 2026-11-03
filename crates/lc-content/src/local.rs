@@ -159,7 +159,10 @@ impl Inner {
         if paths.is_empty() {
             return Err(AppError::new(ErrorCode::InvalidInput, "no files given"));
         }
-        eprintln!("content: add_local start ({kind:?}, {} file(s))", paths.len());
+        eprintln!(
+            "content: add_local start ({kind:?}, {} file(s))",
+            paths.len()
+        );
         let dest_dir = self.instances.game_dir(id).join(dir);
         let inst_dir = self.instance_dir(id);
 

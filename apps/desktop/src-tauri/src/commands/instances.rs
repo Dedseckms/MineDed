@@ -131,9 +131,11 @@ pub async fn instance_open_dir(
         };
         dir = dir.join(sub);
     }
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| AppError::new(ErrorCode::Io, "cannot create the folder").detail("path", dir.display().to_string()).detail("error", e.to_string()))?;
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| {
+        AppError::new(ErrorCode::Io, "cannot create the folder")
+            .detail("path", dir.display().to_string())
+            .detail("error", e.to_string())
+    })?;
     tauri_plugin_opener::open_path(dir.to_string_lossy().into_owned(), None::<String>)
         .map_err(|_| AppError::new(ErrorCode::Io, "cannot open the folder"))?;
     Ok(())

@@ -57,6 +57,9 @@ struct Project {
     categories: Vec<Category>,
     logo: Option<Logo>,
     allow_mod_distribution: Option<bool>,
+    /// Newest files of every release type; filled by the `/mods` batch endpoint.
+    #[serde(default)]
+    latest_files: Vec<File>,
 }
 #[derive(Deserialize)]
 struct Author {
@@ -100,6 +103,34 @@ struct Hash {
 struct Dep {
     mod_id: u32,
     relation_type: u32,
+}
+
+/// Whether a file of a mod's newest set fits the instance (game version and,
+/// for mods, loader). CurseForge lists the loader as a game-version string.
+fn file_matches(file: &File, target: &Target, kind: ContentKind) -> bool {
+    if !file.game_versions.iter().any(|v| v == &target.mc) {
+        return false;
+    }
+    if !matches!(kind, ContentKind::Mod | ContentKind::Modpack)
+        || target.loader == LoaderKind::Vanilla
+    {
+        return true;
+    }
+    let name = loader_name(target.loader);
+    file.game_versions
+        .iter()
+        .any(|v| v.eq_ignore_ascii_case(name))
+}
+
+/// CurseForge spelling of a loader inside `gameVersions`.
+fn loader_name(loader: LoaderKind) -> &'static str {
+    match loader {
+        LoaderKind::Fabric => "Fabric",
+        LoaderKind::Quilt => "Quilt",
+        LoaderKind::Forge => "Forge",
+        LoaderKind::NeoForge => "NeoForge",
+        LoaderKind::Vanilla => "Vanilla",
+    }
 }
 
 fn bad(message: &str) -> AppError {
@@ -602,6 +633,9 @@ impl Catalog for CurseForgeSource {
         remote_file(&f, &p)
     }
 
+    /// Update check in batches of fifty: the `/mods` endpoint already returns
+    /// each project's newest files, so a pack with three hundred mods costs a
+    /// handful of requests instead of one per mod (the hub rate-limits floods).
     async fn updates(
         &self,
         items: &[UpdateItem],
@@ -609,19 +643,63 @@ impl Catalog for CurseForgeSource {
         fresh: bool,
     ) -> AppResult<HashMap<String, ContentVersion>> {
         let mut out = HashMap::new();
-        for item in items {
-            let list = self
-                .ranked(&item.project_id, &target.filter(item.kind), fresh)
+        let ttl = if fresh { Duration::ZERO } else { TTL_VERSIONS };
+        let wanted: Vec<&UpdateItem> = items
+            .iter()
+            .filter(|item| id(&item.project_id).is_ok())
+            .collect();
+        for chunk in wanted.chunks(50) {
+            let mut ids = Vec::with_capacity(chunk.len());
+            for item in chunk {
+                if let Ok(n) = id(&item.project_id) {
+                    ids.push(n);
+                }
+            }
+            if ids.is_empty() {
+                continue;
+            }
+            let r: Envelope<Vec<Project>> = self
+                .api
+                .post(
+                    &format!("{}/mods", self.base),
+                    &[],
+                    &serde_json::json!({"modIds": ids}),
+                    ttl,
+                )
                 .await?;
-            if let Some((v, _)) = list
-                .iter()
-                .find(|(_, release)| *release)
-                .or_else(|| list.first())
-            {
-                if v.version_id.parse::<u32>().unwrap_or(0)
-                    > item.version_id.parse::<u32>().unwrap_or(0)
-                {
-                    out.insert(item.project_id.clone(), v.clone());
+            let by_id: HashMap<u32, Project> = r.data.into_iter().map(|p| (p.id, p)).collect();
+            for item in chunk {
+                let Ok(n) = id(&item.project_id) else {
+                    continue;
+                };
+                let Some(project) = by_id.get(&n) else {
+                    continue;
+                };
+                let current: u32 = item.version_id.parse().unwrap_or(0);
+                if project.latest_files.is_empty() {
+                    // The response carried no file list: one targeted request.
+                    if let Some((v, _)) = self
+                        .ranked(&item.project_id, &target.filter(item.kind), fresh)
+                        .await?
+                        .into_iter()
+                        .next()
+                    {
+                        if v.version_id.parse::<u32>().unwrap_or(0) > current {
+                            out.insert(item.project_id.clone(), v);
+                        }
+                    }
+                    continue;
+                }
+                let newest = project
+                    .latest_files
+                    .iter()
+                    .filter(|f| f.is_available && file_matches(f, target, item.kind))
+                    .max_by_key(|f| f.id);
+                let Some(newest) = newest else { continue };
+                if newest.id > current {
+                    if let Ok(v) = newest.version(project) {
+                        out.insert(item.project_id.clone(), v);
+                    }
                 }
             }
         }
