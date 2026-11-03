@@ -230,17 +230,9 @@ export function ChatScreen() {
     });
     setTaskId(unwrap(await start(ch)));
   };
-  // A server account always wins: a guest login opens the real chat identity.
-  const onGuestLogin = (user: SocialUser) => {
+  // The backend already returns the account identity when one is signed in.
+  const onGuestLogin = (user: SocialUser) =>
     session.set({ self: user, connected: true, error: null });
-    void api
-      .socialServerAccount()
-      .then((result) => {
-        const server = unwrap(result);
-        if (server) session.set({ self: server, connected: true, error: null });
-      })
-      .catch(() => {});
-  };
   const send = (content: SocialContent) =>
     run(async () => {
       const message = unwrap(await api.socialSend(session.selected, content));

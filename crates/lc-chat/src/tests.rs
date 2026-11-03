@@ -680,15 +680,19 @@ async fn guest_session_is_restored_from_the_keyring_without_the_hub() {
 }
 
 #[tokio::test]
-async fn guest_login_is_refused_while_a_server_account_is_signed_in() {
+async fn guest_login_connects_the_server_account_when_one_is_signed_in() {
     let f = fixture().await;
-    let err = f.client.guest_login("guest_1").await.unwrap_err();
-    assert_eq!(err.code, ErrorCode::InvalidInput);
-    assert_eq!(
-        err.details.as_ref().map(|d| d.get("reason").cloned()),
-        Some(Some("serverAccountActive".into()))
-    );
-    assert!(f.server.calls.lock().unwrap().is_empty());
+    // No hub call for a guest token: the account session is returned instead.
+    let user = f.client.guest_login("guest_1").await.unwrap();
+    assert!(!user.guest);
+    assert_eq!(user.uuid, "abcd");
+    assert!(f
+        .server
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|c| !c.contains("/chat/guest")));
 }
 
 #[tokio::test]
