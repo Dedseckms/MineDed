@@ -25,7 +25,7 @@ hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
 http-body-util.workspace = true
 # peerToken MAC (hub.yaml joinRoom).
-hmac = "0.12.1"
+hmac = "0.13.0"
 sha2 = "0.10.9"
 base64 = "0.23.1"
 # s-ui panel API takes form-encoded bodies (vpn.rs).
