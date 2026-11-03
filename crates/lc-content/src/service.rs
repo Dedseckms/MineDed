@@ -652,10 +652,7 @@ impl ContentService for ContentServices {
             .filter(|f| !f.base().ends_with(".part"))
             // A disabled twin of an enabled file (left by a toggle) is not a
             // separate entry.
-            .filter(|f| {
-                f.enabled
-                    || !enabled_keys.contains(&format!("{}/{}", f.dir, f.base()))
-            })
+            .filter(|f| f.enabled || !enabled_keys.contains(&format!("{}/{}", f.dir, f.base())))
             .map(|f| {
                 // Local entries only carry hashes; they have no catalogue ids.
                 let e = idx
