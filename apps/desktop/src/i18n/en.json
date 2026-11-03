@@ -1168,10 +1168,7 @@
     "moderateUser": "Moderate player",
     "mute": "Mute for {{hours}} h",
     "unmute": "Unmute",
-    "ban": {
-      "title": "The chat is closed for you",
-      "hint": "An admin closed your access to the chat. If you think it is a mistake, file an appeal."
-    },
+    "ban": "Ban in chat",
     "unban": "Unban",
     "server": "Server health",
     "disk": "Disk: {{used}} / {{total}} GiB",
@@ -1304,7 +1301,11 @@
       "sent": "Appeal sent",
       "tooShort": "Write at least a few words"
     },
-    "chatClosed": "Chat closed"
+    "chatClosed": "Chat closed",
+    "chatBan": {
+      "title": "The chat is closed for you",
+      "hint": "An admin closed your access to the chat. If you think it is a mistake, file an appeal."
+    }
   },
   "chat": {
     "upload": "Uploading file",

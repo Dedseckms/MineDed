@@ -389,8 +389,8 @@ export function ChatScreen() {
       </div>
       {banned ? (
         <div className="rounded-xl border border-danger/40 bg-danger/5 p-3 text-sm">
-          <p className="font-medium">{t("social.ban.title")}</p>
-          <p className="text-muted">{t("social.ban.hint")}</p>
+          <p className="font-medium">{t("social.chatBan.title")}</p>
+          <p className="text-muted">{t("social.chatBan.hint")}</p>
           <div className="mt-2">
             <Button variant="primary" onClick={() => setAppealOpen(true)}>
               {t("social.appeal.open")}

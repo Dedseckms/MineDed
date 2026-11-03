@@ -988,6 +988,33 @@ impl ChatClient {
         *self.me.write().await = Some(user.clone());
         Ok(user)
     }
+
+    /// Session built from the stored credential, without the live socket: a
+    /// banned player has none, yet must still be able to send the appeal.
+    async fn standalone_session(&self) -> AppResult<Arc<Session>> {
+        let base = hub_base(self.settings.as_ref()).await?;
+        if let Some((token, user)) = self.load_guest(&base).await {
+            return self
+                .start_session(Credential::Guest(token), &format!("guest:{}", user.uuid))
+                .await;
+        }
+        let own: Vec<AccountId> = self
+            .accounts
+            .list()
+            .await?
+            .into_iter()
+            .filter(|a| a.kind == AccountKind::Yggdrasil && a.valid)
+            .map(|a| a.id)
+            .collect();
+        for id in own {
+            if own_account(self.accounts.as_ref(), id).await.unwrap_or(false) {
+                return self
+                    .start_session(Credential::Account(id), &id.to_string())
+                    .await;
+            }
+        }
+        Err(expired())
+    }
 }
 
 #[async_trait]
@@ -1496,8 +1523,20 @@ impl ChatService for ChatClient {
         self.api(Method::GET, &["admin", "requests"], None).await
     }
     async fn appeal(&self, text: &str) -> AppResult<()> {
-        self.empty(Method::POST, &["appeal"], Some(json!({ "text": text })))
-            .await
+        // A ban closes the session (its socket is refused), so the appeal goes
+        // through the stored credential instead of the live session.
+        let session = match self.current_session().await {
+            Ok(session) => session,
+            Err(_) => self.standalone_session().await?,
+        };
+        self.request(
+            &session,
+            Method::POST,
+            &["appeal"],
+            Some(json!({ "text": text })),
+        )
+        .await?;
+        Ok(())
     }
     async fn appeals(&self) -> AppResult<Vec<lc_types::social::SocialAppeal>> {
         self.api(Method::GET, &["admin", "appeals"], None).await
