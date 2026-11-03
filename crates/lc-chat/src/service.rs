@@ -1327,6 +1327,11 @@ impl ChatService for ChatClient {
             return Err(invalid("guestName"));
         }
         let _guard = self.lifecycle.lock().await;
+        // A signed-in account of the own server is the chat identity; a guest
+        // token would only hide it, so the request is refused instead.
+        if self.stored_guest_id().await?.is_some() {
+            return Err(invalid("serverAccountActive"));
+        }
         self.shutdown_current().await;
         *self.me.write().await = None;
         let base = hub_base(self.settings.as_ref()).await?;

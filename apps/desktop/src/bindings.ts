@@ -491,6 +491,8 @@ export type InstalledContent = {
  */
 export type InstalledMark = {
 	fileName: string,
+	/**  Folder the file lives in, so identical names in different folders stay apart. */
+	kind: ContentKind,
 	/**  Provider page slug when the index lacks it. */
 	slug?: string | null,
 	updateAvailable: boolean,
@@ -778,8 +780,8 @@ export type ResetChoices = {
 	/**  Download cache and logs. */
 	cache: boolean,
 	/**
-	 *  The whole game folder (versions, libraries, assets, instances); the
-	 *  launcher must be restarted afterwards.
+	 *  Instances, libraries, assets, versions, Java, cache, logs, skins: every
+	 *  folder the launcher owns inside its data root, never anything outside it.
 	 */
 	removeGameDir: boolean,
 };

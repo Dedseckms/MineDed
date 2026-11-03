@@ -65,12 +65,23 @@ impl Paths {
         self.root.join("sidecars").join("mihomo")
     }
 
-    /// Game folder one level up: it holds `--data-dir` and the game files.
-    pub fn game_dir(&self) -> PathBuf {
-        self.root
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map_or_else(|| self.root.clone(), Path::to_path_buf)
+    /// Folders a launcher owns inside [`Paths::root`]; "delete all data" wipes
+    /// exactly these (never the root itself and never anything above it).
+    pub fn game_dirs(&self) -> Vec<PathBuf> {
+        [
+            "instances",
+            "libraries",
+            "assets",
+            "versions",
+            "java",
+            "cache",
+            "logs",
+            "sidecars",
+            "skins",
+        ]
+        .iter()
+        .map(|name| self.root.join(name))
+        .collect()
     }
 }
 

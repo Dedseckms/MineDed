@@ -242,6 +242,75 @@ mod tests {
     }
 }
 
+/// What `app_reset_data` removes; every flag is opt-in.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetChoices {
+    /// Accounts and their tokens, plus the chat guest session.
+    pub accounts: bool,
+    pub instances: bool,
+    /// Download cache and logs.
+    pub cache: bool,
+    /// Instances, libraries, assets, versions, Java, cache, logs, skins: every
+    /// folder the launcher owns inside its data root, never anything outside it.
+    pub remove_game_dir: bool,
+}
+
+/// Deletes selected launcher data. Unknown guest-token keys are dropped
+/// through the agent's own token-store clear.
+#[tauri::command]
+#[specta::specta]
+pub async fn app_reset_data(state: State<'_, AppState>, choices: ResetChoices) -> AppResult<()> {
+    if choices.accounts {
+        state.accounts.remove_all().await?;
+        state.tokens.clear().await?;
+        let _ = state.social.disconnect().await;
+    }
+    if let Some(key) = guest_key(state.settings.as_ref()).await {
+        let _ = state.tokens.delete(&key).await;
+    }
+    if choices.instances {
+        state.instances.delete_all().await?;
+    }
+    let paths = &state.paths;
+    if choices.cache {
+        remove_optional(&paths.cache()).await?;
+    }
+    if choices.remove_game_dir {
+        // Only the launcher's own folders under the data root: the root itself
+        // (or its parent, e.g. %APPDATA%) may be shared with other programs.
+        let root = paths.root();
+        for dir in paths.game_dirs() {
+            if dir.starts_with(root) && dir != root {
+                remove_optional(&dir).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Keyring key of the chat guest token for the configured hub.
+async fn guest_key(settings: &dyn lc_runtime::SettingsStore) -> Option<String> {
+    let settings = settings.get().await.ok()?;
+    let raw = if settings.hub_url.trim().is_empty() {
+        lc_types::settings::DEFAULT_HUB_URL
+    } else {
+        settings.hub_url.trim()
+    };
+    Some(lc_chat::guest_key(&url::Url::parse(raw).ok()?))
+}
+
+/// Removes a directory, ignoring "already gone".
+async fn remove_optional(dir: &std::path::Path) -> AppResult<()> {
+    match tokio::fs::remove_dir_all(dir).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(AppError::new(ErrorCode::Io, "remove failed")
+            .detail("path", dir.display().to_string())
+            .detail("error", e.to_string())),
+    }
+}
+
 /// Mirrors the `close_to_tray` preference into the tray state.
 pub fn apply_close_to_tray(app: &AppHandle, enabled: bool) {
     tray::set_close_to_tray(app, enabled);

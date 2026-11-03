@@ -180,6 +180,8 @@ pub struct InstalledContent {
 #[serde(rename_all = "camelCase")]
 pub struct InstalledMark {
     pub file_name: String,
+    /// Folder the file lives in, so identical names in different folders stay apart.
+    pub kind: ContentKind,
     /// Provider page slug when the index lacks it.
     #[serde(default)]
     pub slug: Option<String>,

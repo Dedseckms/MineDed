@@ -699,6 +699,7 @@ impl ContentService for ContentServices {
             .map(|(key, e)| InstalledMark {
                 // Index keys are `<dir>/<file name without .disabled>`.
                 file_name: key.rsplit('/').next().unwrap_or(key).to_owned(),
+                kind: e.kind,
                 slug: e.slug.clone().or_else(|| {
                     slugs
                         .get(&(e.source, e.project_id.clone()))
