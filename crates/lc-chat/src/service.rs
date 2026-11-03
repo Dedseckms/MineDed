@@ -286,12 +286,6 @@ fn start_heartbeat(
     }
 }
 
-fn stop_heartbeat() {
-    if let Ok(mut slot) = heartbeat_slot().lock() {
-        *slot = None;
-    }
-}
-
 async fn heartbeat_loop(
     accounts: Arc<dyn AccountService>,
     settings: Arc<dyn SettingsStore>,
@@ -300,10 +294,6 @@ async fn heartbeat_loop(
 ) {
     let client_id = uuid::Uuid::new_v4().to_string();
     loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            _ = tokio::time::sleep(BEAT_INTERVAL) => {}
-        }
         // Best effort: a missing counter must never disturb the chat.
         let _ = beat(
             accounts.as_ref(),
@@ -313,6 +303,10 @@ async fn heartbeat_loop(
             &cancel,
         )
         .await;
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = tokio::time::sleep(BEAT_INTERVAL) => {}
+        }
     }
 }
 
@@ -371,6 +365,11 @@ pub struct ChatClient {
     tokens: OnceLock<Arc<dyn TokenStore>>,
     lifecycle: Mutex<()>,
 }
+/// Keyring key of the persisted guest token for a hub (`chat-guest:<hash>`).
+pub fn guest_key(base: &Url) -> String {
+    format!("chat-guest:{:x}", Sha256::digest(base.as_str().as_bytes()))
+}
+
 impl ChatClient {
     /// Creates a disconnected client; credentials are refreshed for each request.
     pub fn new(
@@ -527,7 +526,7 @@ impl ChatClient {
 
     // ------------------------------------------------ session and originals
     fn guest_key(base: &Url) -> String {
-        format!("chat-guest:{:x}", Sha256::digest(base.as_str().as_bytes()))
+        guest_key(base)
     }
     async fn load_guest(&self, base: &Url) -> Option<(Secret, SocialUser)> {
         let key = Self::guest_key(base);
@@ -936,15 +935,33 @@ async fn socket_once(
         }
     }
 }
-
-#[async_trait]
-impl ChatService for ChatClient {
-    async fn connect(&self, account: AccountId) -> AppResult<SocialUser> {
-        let _guard = self.lifecycle.lock().await;
-        self.shutdown_current().await;
-        if !own_account(self.accounts.as_ref(), account).await? {
-            return Err(invalid("needsOwnServerAccount"));
+impl ChatClient {
+    /// A server account on this device replaces any leftover guest session:
+    /// the game account is the identity the player expects in chat.
+    async fn stored_guest_id(&self) -> AppResult<Option<AccountId>> {
+        let own: Vec<AccountId> = self
+            .accounts
+            .list()
+            .await?
+            .into_iter()
+            .filter(|a| a.kind == AccountKind::Yggdrasil && a.valid)
+            .map(|a| a.id)
+            .collect();
+        for id in own {
+            if own_account(self.accounts.as_ref(), id)
+                .await
+                .unwrap_or(false)
+            {
+                return Ok(Some(id));
+            }
         }
+        Ok(None)
+    }
+
+    /// [`ChatService::connect`] without taking the lifecycle lock.
+    async fn connect_locked(&self, account: AccountId) -> AppResult<SocialUser> {
+        self.shutdown_current().await;
+        *self.me.write().await = None;
         let session = self
             .start_session(Credential::Account(account), &account.to_string())
             .await?;
@@ -954,13 +971,37 @@ impl ChatService for ChatClient {
         *self.me.write().await = Some(user.clone());
         Ok(user)
     }
+}
+
+#[async_trait]
+impl ChatService for ChatClient {
+    async fn connect(&self, account: AccountId) -> AppResult<SocialUser> {
+        let _guard = self.lifecycle.lock().await;
+        self.shutdown_current().await;
+        if !own_account(self.accounts.as_ref(), account).await? {
+            return Err(invalid("needsOwnServerAccount"));
+        }
+        self.connect_locked(account).await
+    }
     async fn disconnect(&self) -> AppResult<()> {
         let _guard = self.lifecycle.lock().await;
         self.shutdown_current().await;
-        stop_heartbeat();
+        // The online counter tracks launchers, not chat sessions: it keeps
+        // running while the app is open.
         self.observer
             .on_event(SocialEvent::Connection { connected: false });
         Ok(())
+    }
+    async fn server_account(&self) -> AppResult<Option<SocialUser>> {
+        let _guard = self.lifecycle.lock().await;
+        let Some(id) = self.stored_guest_id().await? else {
+            return Ok(None);
+        };
+        let current = self.me.read().await.clone();
+        if let Some(user) = current.filter(|u| !u.guest) {
+            return Ok(Some(user));
+        }
+        self.connect_locked(id).await.map(Some)
     }
     async fn set_presence(&self, status: SocialStatus) -> AppResult<()> {
         let s = self.current_session().await?;
@@ -1286,7 +1327,13 @@ impl ChatService for ChatClient {
             return Err(invalid("guestName"));
         }
         let _guard = self.lifecycle.lock().await;
+        // A signed-in account of the own server is the chat identity; a guest
+        // token would only hide it, so the request is refused instead.
+        if self.stored_guest_id().await?.is_some() {
+            return Err(invalid("serverAccountActive"));
+        }
         self.shutdown_current().await;
+        *self.me.write().await = None;
         let base = hub_base(self.settings.as_ref()).await?;
         let cancel = CancelToken::new();
         let request = self

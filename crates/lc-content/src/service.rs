@@ -11,7 +11,8 @@ use lc_http::{DownloadReq, Downloader, ResourceKind};
 use lc_runtime::{Paths, ProgressSink};
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, InstalledMark, LocalDepIssue, ManualDownload, ResolvePlan, SearchPage,
+    SearchQuery,
 };
 use lc_types::instance::Instance;
 use lc_types::version::LoaderKind;
@@ -62,6 +63,8 @@ pub(crate) struct DiskFile {
     pub enabled: bool,
     /// Unpacked pack folder (not a mod).
     pub is_dir: bool,
+    /// Size on disk; `0` for a file the downloader created but never filled.
+    pub size: u64,
 }
 
 impl DiskFile {
@@ -220,6 +223,7 @@ impl Inner {
                     enabled: !name.ends_with(".disabled"),
                     name,
                     is_dir,
+                    size: if is_dir { 0 } else { meta.len() },
                 });
             }
         }
@@ -408,6 +412,36 @@ impl Inner {
             }
         }
         Ok(out)
+    }
+
+    /// Page slugs of index entries that have none, keyed by source and project.
+    /// Batched per provider (fifty ids per request); failures are skipped.
+    pub async fn slugs(
+        &self,
+        idx: &ContentIndex,
+    ) -> HashMap<(ContentSourceKind, String), Option<String>> {
+        let mut out: HashMap<(ContentSourceKind, String), Option<String>> = HashMap::new();
+        for source in [ContentSourceKind::Modrinth, ContentSourceKind::CurseForge] {
+            let mut ids: Vec<String> = Vec::new();
+            for e in idx.files.values() {
+                if e.source != source || e.slug.is_some() {
+                    continue;
+                }
+                if !ids.contains(&e.project_id) {
+                    ids.push(e.project_id.clone());
+                }
+            }
+            if ids.is_empty() {
+                continue;
+            }
+            let Ok(cat) = self.catalog(source) else {
+                continue;
+            };
+            for (id, slug) in cat.slugs(&ids).await {
+                out.insert((source, id), Some(slug));
+            }
+        }
+        out
     }
 
     pub async fn resolve_for(
@@ -607,22 +641,24 @@ impl ContentService for ContentServices {
             .await
     }
 
+    /// Served from disk and the local index only: no catalogue calls, so the
+    /// list paints at once even for packs with hundreds of files.
     async fn list(&self, instance: InstanceId) -> AppResult<Vec<InstalledContent>> {
-        let inst = self.inner.instances.get(instance).await?;
         let game = self.inner.instances.game_dir(instance);
         let idx = ContentIndex::load(&self.inner.instance_dir(instance)).await?;
         let files = self.inner.scan(&game).await?;
-        // Update check is best effort: a CurseForge/Modrinth outage only drops
-        // the update badges and never empties the installed list.
-        let updates = match self.inner.updates(&inst, &idx, false).await {
-            Ok(updates) => updates,
-            Err(e) => {
-                eprintln!("content update check failed: {e}");
-                HashMap::new()
-            }
-        };
+        let enabled_keys: std::collections::HashSet<String> = files
+            .iter()
+            .filter(|f| f.enabled)
+            .map(DiskFile::key)
+            .collect();
         Ok(files
             .into_iter()
+            // In-progress downloads are not content.
+            .filter(|f| !f.base().ends_with(".part"))
+            // A disabled twin of an enabled file (left by a toggle) is not a
+            // separate entry.
+            .filter(|f| f.enabled || !enabled_keys.contains(&format!("{}/{}", f.dir, f.base())))
             .map(|f| {
                 // Local entries only carry hashes; they have no catalogue ids.
                 let e = idx
@@ -639,10 +675,38 @@ impl ContentService for ContentServices {
                     slug: e.and_then(|e| e.slug.clone()),
                     title: e.and_then(|e| e.title.clone()),
                     version_number: e.and_then(|e| e.version_number.clone()),
-                    update_available: e
-                        .map(|e| updates.contains_key(&(e.source, e.project_id.clone())))
-                        .unwrap_or(false),
+                    update_available: false,
+                    broken: !f.is_dir && f.size == 0,
                 }
+            })
+            .collect())
+    }
+
+    async fn marks(&self, instance: InstanceId) -> AppResult<Vec<InstalledMark>> {
+        let inst = self.inner.instances.get(instance).await?;
+        let idx = ContentIndex::load(&self.inner.instance_dir(instance)).await?;
+        // Both lookups are best effort: an outage only drops the badges.
+        let updates = self
+            .inner
+            .updates(&inst, &idx, false)
+            .await
+            .unwrap_or_default();
+        let slugs = self.inner.slugs(&idx).await;
+        Ok(idx
+            .files
+            .iter()
+            .filter(|(_, e)| e.source != ContentSourceKind::Local)
+            .map(|(key, e)| InstalledMark {
+                // Index keys are `<dir>/<file name without .disabled>`.
+                file_name: key.rsplit('/').next().unwrap_or(key).to_owned(),
+                kind: e.kind,
+                slug: e.slug.clone().or_else(|| {
+                    slugs
+                        .get(&(e.source, e.project_id.clone()))
+                        .cloned()
+                        .flatten()
+                }),
+                update_available: updates.contains_key(&(e.source, e.project_id.clone())),
             })
             .collect())
     }

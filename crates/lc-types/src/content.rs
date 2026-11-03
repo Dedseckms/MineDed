@@ -169,6 +169,23 @@ pub struct InstalledContent {
     pub title: Option<String>,
     pub version_number: Option<String>,
     pub update_available: bool,
+    /// An empty file or a leftover `.part`: installed but unusable, offers repair.
+    #[serde(default)]
+    pub broken: bool,
+}
+
+/// Late badges for an installed file (`ContentService::marks`): the list itself
+/// is served from disk, catalogue lookups arrive afterwards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledMark {
+    pub file_name: String,
+    /// Folder the file lives in, so identical names in different folders stay apart.
+    pub kind: ContentKind,
+    /// Provider page slug when the index lacks it.
+    #[serde(default)]
+    pub slug: Option<String>,
+    pub update_available: bool,
 }
 
 /// What is wrong with a dependency declared inside a local mod jar.

@@ -31,6 +31,11 @@ export const commands = {
 	contentResolve: (instance: InstanceId, picks: ContentVersionRef[]) => typedError<ResolvePlan, AppError>(__TAURI_INVOKE("content_resolve", { instance, picks })),
 	contentInstall: (instance: InstanceId, plan: ResolvePlan, onEvent: Channel<TaskEvent>) => typedError<TaskId, AppError>(__TAURI_INVOKE("content_install", { instance, plan, onEvent })),
 	contentList: (instance: InstanceId) => typedError<InstalledContent[], AppError>(__TAURI_INVOKE("content_list", { instance })),
+	/**
+	 *  Update badges and page slugs of the installed files (network bound; the
+	 *  list itself comes at once from `content_list`).
+	 */
+	contentMarks: (instance: InstanceId) => typedError<InstalledMark[], AppError>(__TAURI_INVOKE("content_marks", { instance })),
 	contentSetEnabled: (instance: InstanceId, fileName: string, enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("content_set_enabled", { instance, fileName, enabled })),
 	contentRemove: (instance: InstanceId, fileName: string) => typedError<null, AppError>(__TAURI_INVOKE("content_remove", { instance, fileName })),
 	/**  Copies local files/folders into the instance (`kind` picks the folder; wrong type → `invalidInput`). */
@@ -141,6 +146,34 @@ export const commands = {
 	voiceSetSelfMuted: (muted: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_set_self_muted", { muted })),
 	voiceMicTest: (enabled: boolean) => typedError<null, AppError>(__TAURI_INVOKE("voice_mic_test", { enabled })),
 	socialConnect: (account: AccountId) => typedError<SocialUser, AppError>(__TAURI_INVOKE("social_connect", { account })),
+	/**  Chat identity for the active server account; ignores a stored guest session. */
+	socialServerAccount: () => typedError<{
+	/**  Undashed profile UUID. */
+	uuid: string,
+	name: string,
+	skinUrl: string | null,
+	/**  `None` when hidden by the player's privacy settings. */
+	status: SocialStatus | null,
+	role: SocialRole,
+	isFriend: boolean,
+	/**  Whether the caller has blocked this player; never reveals reverse blocks. */
+	isBlocked?: boolean,
+	/**  The caller may open a direct chat with this player. */
+	canMessage: boolean,
+	canInvite: boolean,
+	/**  Guest identity of an offline account (hub-issued token, unverified name). */
+	guest?: boolean,
+	/**  Chosen display name; `None` falls back to `name`. */
+	displayName?: string | null,
+	/**  Short self-description (≤ 120 characters). */
+	bio?: string | null,
+	/**  Accent id from the fixed palette, used for the name and profile header. */
+	accent?: string | null,
+	/**  Avatar id (content hash); bytes come from `ChatService::avatar_preview`. */
+	avatar?: string | null,
+	/**  A server account was created from this guest's request. */
+	accountCreated?: boolean,
+} | null, AppError>(__TAURI_INVOKE("social_server_account")),
 	socialDisconnect: () => typedError<null, AppError>(__TAURI_INVOKE("social_disconnect")),
 	socialSetPresence: (status: SocialStatus) => typedError<null, AppError>(__TAURI_INVOKE("social_set_presence", { status })),
 	socialChannels: () => typedError<SocialChannel[], AppError>(__TAURI_INVOKE("social_channels")),
@@ -218,6 +251,11 @@ export const commands = {
 	appVersion: () => __TAURI_INVOKE<string>("app_version"),
 	/**  Quits the app: stops the VPN, rooms and voice first, then exits. */
 	appQuit: () => __TAURI_INVOKE<void>("app_quit"),
+	/**
+	 *  Deletes selected launcher data. Unknown guest-token keys are dropped
+	 *  through the agent's own token-store clear.
+	 */
+	appResetData: (choices: ResetChoices) => typedError<null, AppError>(__TAURI_INVOKE("app_reset_data", { choices })),
 	updateCheck: () => typedError<{
 	version: string,
 	currentVersion: string,
@@ -442,6 +480,21 @@ export type InstalledContent = {
 	slug?: string | null,
 	title: string | null,
 	versionNumber: string | null,
+	updateAvailable: boolean,
+	/**  An empty file or a leftover `.part`: installed but unusable, offers repair. */
+	broken?: boolean,
+};
+
+/**
+ *  Late badges for an installed file (`ContentService::marks`): the list itself
+ *  is served from disk, catalogue lookups arrive afterwards.
+ */
+export type InstalledMark = {
+	fileName: string,
+	/**  Folder the file lives in, so identical names in different folders stay apart. */
+	kind: ContentKind,
+	/**  Provider page slug when the index lacks it. */
+	slug?: string | null,
 	updateAvailable: boolean,
 };
 
@@ -717,6 +770,20 @@ export type RemoteSkin = {
 	model: SkinModel,
 	/**  Nickname or file name, for the library entry. */
 	suggestedName: string,
+};
+
+/**  What `app_reset_data` removes; every flag is opt-in. */
+export type ResetChoices = {
+	/**  Accounts and their tokens, plus the chat guest session. */
+	accounts: boolean,
+	instances: boolean,
+	/**  Download cache and logs. */
+	cache: boolean,
+	/**
+	 *  Instances, libraries, assets, versions, Java, cache, logs, skins: every
+	 *  folder the launcher owns inside its data root, never anything outside it.
+	 */
+	removeGameDir: boolean,
 };
 
 /**  Result of dependency resolution; confirmed by the user, then installed. */

@@ -371,6 +371,8 @@ describe("guest access", () => {
   });
 
   it("logs in with a validated nickname from the account screen", async () => {
+    // No server account: the guest login must stick (with one it is replaced).
+    h.api = createMockCommands({}, { bus: createMockBus(), tickMs: 5, noAccounts: true });
     mount();
     fireEvent.click(
       screen.getByRole("button", { name: i18n.t("social.guestLogin") }),

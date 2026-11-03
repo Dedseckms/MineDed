@@ -71,6 +71,8 @@ export interface MockOptions {
   latencyMs?: number;
   /** Role of the mock chat account, for admin-panel work and tests. */
   socialRole?: SocialRole;
+  /** Start without game accounts (guest-only chat tests). */
+  noAccounts?: boolean;
 }
 
 const appError = (code: AppError["code"], message: string): AppError => ({
@@ -111,7 +113,7 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
   const latencyMs = opts.latencyMs ?? 0;
 
   let instances = seedInstances();
-  let accounts = seedAccounts();
+  let accounts = opts.noAccounts === true ? [] : seedAccounts();
   let settings = defaultSettings();
   const installed = seedInstalled();
   let skins = seedSkins();
@@ -504,6 +506,17 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       return ok((installed[instanceId] ?? []).map((c) => ({ ...c })));
     },
 
+    // Badges and slugs arrive separately in the real backend; the mock is instant.
+    contentMarks: async (instanceId) => {
+      await wait();
+      if (!findInstance(instanceId)) return notFound(`instance ${instanceId}`);
+      return ok(
+        (installed[instanceId] ?? [])
+          .filter((c) => c.source !== "local")
+          .map((c) => ({ fileName: c.fileName, kind: c.kind, slug: c.slug ?? null, updateAvailable: c.updateAvailable })),
+      );
+    },
+
     contentSetEnabled: async (instanceId, fileName, enabled) => {
       await wait();
       const list = installed[instanceId];
@@ -874,12 +887,18 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
         installed[inst.id] = [];
       },
       findAccount: (id) => accounts.find((a) => a.id === id),
+      accounts: () => accounts,
       runTask,
       selfName: () => (accounts.find((a) => a.isDefault) ?? accounts[0])?.name ?? "Player",
     }),
 
     ...createSocialMocks(
-      { bus, findAccount: (id) => accounts.find((a) => a.id === id), runTask },
+      {
+        bus,
+        findAccount: (id) => accounts.find((a) => a.id === id),
+        accounts: () => accounts,
+        runTask,
+      },
       opts.socialRole,
     ),
     // ---- self-update ----

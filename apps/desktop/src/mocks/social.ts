@@ -62,7 +62,7 @@ export const SOCIAL_PEER: SocialUser = {
 
 /** Stateful social service. `role` is injectable for authorization tests only. */
 export function createSocialMocks(
-  ctx: Pick<NetMockContext, "bus" | "findAccount" | "runTask">,
+  ctx: Pick<NetMockContext, "bus" | "findAccount" | "accounts" | "runTask">,
   role: SocialRole = "user",
 ): Partial<Commands> {
   let self: SocialUser | null = null;
@@ -266,6 +266,31 @@ export function createSocialMocks(
     socialConnect: async (account) => {
       const value = ctx.findAccount(account);
       if (!value || value.valid === false) return denied();
+      self = {
+        uuid: value.uuid.replaceAll("-", ""),
+        name: value.name,
+        skinUrl: value.skinUrl,
+        status: "online",
+        role,
+        isBlocked: false,
+        isFriend: false,
+        canMessage: true,
+        canInvite: true,
+        displayName: null,
+        bio: null,
+        accent: null,
+      };
+      ctx.bus.emit("socialEvent", { type: "connection", connected: true });
+      return ok({ ...self });
+    },
+    // Same as the real backend: a guest session yields to the server account.
+    socialServerAccount: async () => {
+      if (self && !self.guest) return ok({ ...self });
+      // Mirrors `own_account`: only a valid Yggdrasil account of the own server.
+      const value = ctx
+        .accounts()
+        .find((a) => a.kind === "yggdrasil" && a.valid !== false);
+      if (!value) return ok(null);
       self = {
         uuid: value.uuid.replaceAll("-", ""),
         name: value.name,

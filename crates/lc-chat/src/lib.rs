@@ -8,4 +8,4 @@ pub use contract::{default_privacy, ChatService, SocialObserver};
 pub use stub::StubChat;
 
 mod service;
-pub use service::ChatClient;
+pub use service::{guest_key, ChatClient};

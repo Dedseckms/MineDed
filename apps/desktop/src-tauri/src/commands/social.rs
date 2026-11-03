@@ -82,6 +82,13 @@ pub async fn social_connect(
     state.social.connect(account).await
 }
 
+/// Chat identity for the active server account; ignores a stored guest session.
+#[tauri::command]
+#[specta::specta]
+pub async fn social_server_account(state: State<'_, AppState>) -> AppResult<Option<SocialUser>> {
+    state.social.server_account().await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn social_disconnect(state: State<'_, AppState>) -> AppResult<()> {

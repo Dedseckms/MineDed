@@ -36,6 +36,8 @@ export interface NetMockContext {
   findInstance: (id: InstanceId) => Instance | undefined;
   addInstance: (inst: Instance) => void;
   findAccount: (id: AccountId) => Account | undefined;
+  /** Every known account (the chat picks the default server account). */
+  accounts: () => Account[];
   /** Name of the default account (sender of own chat messages). */
   selfName: () => string;
   runTask: (

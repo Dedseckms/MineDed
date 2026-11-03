@@ -75,6 +75,11 @@ impl TokenStore for MemoryTokenStore {
         self.lock()?.remove(key);
         Ok(())
     }
+
+    async fn clear(&self) -> AppResult<()> {
+        self.lock()?.clear();
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +224,16 @@ impl EncryptedFileTokenStore {
         }
         Ok(())
     }
+
+    /// Removes the whole encrypted file (no key needed).
+    fn clear_sync(&self) -> AppResult<()> {
+        let _g = self.guard()?;
+        match std::fs::remove_file(&self.file) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(AppError::new(ErrorCode::Io, "token store clear failed")),
+        }
+    }
 }
 
 type XChaCha20Poly1305Opt = Option<XChaCha20Poly1305>;
@@ -235,6 +250,10 @@ impl TokenStore for EncryptedFileTokenStore {
 
     async fn delete(&self, key: &str) -> AppResult<()> {
         self.delete_sync(key)
+    }
+
+    async fn clear(&self) -> AppResult<()> {
+        self.clear_sync()
     }
 }
 
@@ -384,6 +403,15 @@ impl TokenStore for KeyringTokenStore {
                 blocking(move || keyring_delete(&key)).await
             }
             Backend::File(f) => f.delete(key).await,
+        }
+    }
+
+    async fn clear(&self) -> AppResult<()> {
+        match &self.backend {
+            // Enumeration is not portable across platforms: offenders are the
+            // account keys and the guest keys of known hubs, cleared in `app_reset_data`.
+            Backend::Keyring => Ok(()),
+            Backend::File(f) => f.clear().await,
         }
     }
 }

@@ -75,6 +75,10 @@ impl InstanceService for StubCore {
         Err(AppError::not_implemented("InstanceService::delete"))
     }
 
+    async fn delete_all(&self) -> AppResult<()> {
+        Err(AppError::not_implemented("InstanceService::delete_all"))
+    }
+
     async fn repair(&self, _id: InstanceId, _sink: &dyn ProgressSink) -> AppResult<()> {
         Err(AppError::not_implemented("InstanceService::repair"))
     }

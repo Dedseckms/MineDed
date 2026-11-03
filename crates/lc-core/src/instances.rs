@@ -153,6 +153,17 @@ impl InstanceStore {
         Ok(out)
     }
 
+    /// Deletes every instance directory in one go (uninstall cleanup).
+    pub async fn delete_all(&self) -> AppResult<()> {
+        let _g = self.write.lock().await;
+        let root = self.paths.instances();
+        match tokio::fs::remove_dir_all(&root).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io_err(&root, e)),
+        }
+    }
+
     pub async fn delete(&self, id: InstanceId) -> AppResult<()> {
         let _g = self.write.lock().await;
         let dir = self.dir(id);

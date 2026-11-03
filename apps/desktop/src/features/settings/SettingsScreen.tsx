@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { Language, MemoryCfg, Settings } from "../../bindings";
-import { useSaveSettings, useSettings, useSystemInfo } from "../../api/queries";
+import { api, unwrap } from "../../api/client";
+import { useAccounts, useInstances, useSaveSettings, useSettings, useSystemInfo } from "../../api/queries";
 import { Button } from "../../components/ui/Button";
 import { Icon } from "../../components/ui/Icon";
 import { Section } from "../../components/ui/Card";
+import { ConfirmDialog } from "../../components/ui/Modal";
 import { Field, Segmented, Switch, TextInput } from "../../components/ui/form";
 import { ErrorMessage, ListSkeleton } from "../../components/ui/feedback";
 import {
@@ -429,6 +432,85 @@ function GameSection({ settings }: { settings: Settings }) {
   );
 }
 
+/** What "Delete my data" removes; mirrors `ResetChoices` in Rust. */
+type ResetDraft = { accounts: boolean; instances: boolean; cache: boolean; removeGameDir: boolean };
+
+const RESET_FIELDS: { key: keyof ResetDraft; label: string }[] = [
+  { key: "accounts", label: "settings.data.accounts" },
+  { key: "instances", label: "settings.data.instances" },
+  { key: "cache", label: "settings.data.cache" },
+  { key: "removeGameDir", label: "settings.data.gameDir" },
+];
+
+const RESET_DEFAULT: ResetDraft = { accounts: true, instances: true, cache: true, removeGameDir: false };
+
+/**
+ * Uninstall cleanup: accounts and their tokens, instances, cache and the whole
+ * game folder. Nothing happens until the flags are picked and confirmed.
+ */
+function DataSection() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const accounts = useAccounts();
+  const instances = useInstances();
+  const [reset, setReset] = useState<ResetDraft>(RESET_DEFAULT);
+  const [confirm, setConfirm] = useState(false);
+  const remove = useMutation({
+    mutationFn: async (choices: ResetDraft) => unwrap(await api.appResetData(choices)),
+    onSuccess: () => {
+      void qc.invalidateQueries();
+    },
+  });
+  const nothing = !RESET_FIELDS.some(({ key }) => reset[key]);
+  const counts = { accounts: accounts.data?.length ?? 0, instances: instances.data?.length ?? 0 };
+  return (
+    <Section title={t("settings.data.title")}>
+      <p className="text-sm text-muted">{t("settings.data.hint")}</p>
+      <p className="text-xs text-muted">{t("settings.data.summary", counts)}</p>
+      <div className="mt-3 flex flex-col gap-2">
+        {RESET_FIELDS.map(({ key, label }) => (
+          <Switch
+            key={key}
+            checked={reset[key]}
+            onChange={(v) => setReset({ ...reset, [key]: v })}
+            label={t(label)}
+          />
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          className="text-danger"
+          icon={<Icon name="trash" />}
+          disabled={nothing}
+          loading={remove.isPending}
+          onClick={() => setConfirm(true)}
+        >
+          {t("settings.data.open")}
+        </Button>
+        {remove.isSuccess ? (
+          <p role="status" className="text-sm text-accent">
+            {t("settings.data.done")}
+          </p>
+        ) : null}
+      </div>
+      <ErrorMessage error={remove.error} className="mt-2" />
+      <ConfirmDialog
+        open={confirm}
+        title={t("settings.data.confirmTitle")}
+        message={t("settings.data.confirmHint")}
+        confirmLabel={t("settings.data.confirm")}
+        danger
+        onConfirm={() => {
+          setConfirm(false);
+          remove.mutate(reset);
+        }}
+        onCancel={() => setConfirm(false)}
+      />
+    </Section>
+  );
+}
+
 export function SettingsScreen() {
   const settings = useSettings();
   if (settings.isPending) return <ListSkeleton rows={3} rowClassName="h-48" className="flex flex-col gap-6" />;
@@ -437,6 +519,7 @@ export function SettingsScreen() {
     <div className="flex flex-col gap-6">
       <AppearanceSection settings={settings.data} />
       <VoiceSettingsSection />
+      <DataSection />
       {/* Before the game section: its sticky save bar must stay the last element. */}
       <AboutSection settings={settings.data} />
       <GameSection settings={settings.data} />

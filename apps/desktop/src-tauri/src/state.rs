@@ -30,6 +30,8 @@ use crate::tasks::TaskRegistry;
 
 pub struct AppState {
     pub social: Arc<dyn ChatService>,
+    /// Launcher data root (instances, cache, logs).
+    pub paths: Paths,
     pub tasks: Arc<TaskRegistry>,
     pub settings: Arc<dyn SettingsStore>,
     pub downloader: Arc<dyn Downloader>,
@@ -46,6 +48,8 @@ pub struct AppState {
     pub presets: Arc<dyn PresetService>,
     // accounts
     pub accounts: Arc<dyn AccountService>,
+    /// OS credential store: tokens of game accounts and the chat guest.
+    pub tokens: Arc<dyn TokenStore>,
     pub auth: Arc<dyn AuthProvider>,
     pub skins: Arc<dyn SkinService>,
     // net
@@ -75,7 +79,7 @@ impl AppState {
         )?);
         let tokens: Arc<dyn TokenStore> = Arc::new(KeyringTokenStore::new(&paths));
         let accounts = Arc::new(
-            AccountsService::new(&paths, downloader.clone(), tokens)
+            AccountsService::new(&paths, downloader.clone(), tokens.clone())
                 .with_settings(settings.clone()),
         );
         let skins = Arc::new(SkinsService::new(&paths, accounts.clone()));
@@ -112,6 +116,7 @@ impl AppState {
         );
         room_env.attach_packs(content.clone(), paths.cache());
         let rooms = Arc::new(p2p);
+        let root = paths.root().to_path_buf();
         let social = Arc::new(ChatClient::new(
             paths,
             downloader.clone(),
@@ -123,6 +128,7 @@ impl AppState {
 
         Ok(Self {
             social,
+            paths: Paths::new(root),
             tasks: Arc::new(TaskRegistry::default()),
             settings,
             downloader,
@@ -137,6 +143,7 @@ impl AppState {
             presets: content,
             accounts: accounts.clone(),
             auth: accounts,
+            tokens,
             skins,
             vpn: mihomo.clone(),
             mihomo: Some(mihomo),
@@ -165,6 +172,7 @@ impl AppState {
 
         Self {
             social: Arc::new(StubChat),
+            paths: Paths::new(std::env::temp_dir()),
             tasks: Arc::new(TaskRegistry::default()),
             settings: Arc::new(MemorySettingsStore::default()),
             downloader: Arc::new(StubDownloader),
@@ -179,6 +187,7 @@ impl AppState {
             presets: content,
             accounts: accounts.clone(),
             auth: accounts,
+            tokens: Arc::new(lc_accounts::MemoryTokenStore::new()),
             skins: Arc::new(StubSkins),
             vpn: Arc::new(StubVpn),
             mihomo: None,

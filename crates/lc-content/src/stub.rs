@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use lc_runtime::ProgressSink;
 use lc_types::content::{
     ContentFilter, ContentKind, ContentSourceKind, ContentVersion, ContentVersionRef,
-    InstalledContent, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
+    InstalledContent, InstalledMark, LocalDepIssue, ResolvePlan, SearchPage, SearchQuery,
 };
 use lc_types::instance::{Instance, PackFormat, PerfPreset};
 use lc_types::{AppError, AppResult, InstanceId};
@@ -46,6 +46,10 @@ impl ContentService for StubContent {
     }
 
     async fn list(&self, _instance: InstanceId) -> AppResult<Vec<InstalledContent>> {
+        Ok(Vec::new())
+    }
+
+    async fn marks(&self, _instance: InstanceId) -> AppResult<Vec<InstalledMark>> {
         Ok(Vec::new())
     }
 

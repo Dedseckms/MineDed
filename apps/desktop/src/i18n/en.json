@@ -203,6 +203,20 @@
       "hint": "API root of your skin/account server (authlib-injector). Empty = MineDed default.",
       "placeholder": "https://auth.example.com/api/yggdrasil"
     },
+    "data": {
+      "title": "My data",
+      "hint": "Removes launcher data from this computer, e.g. before selling it or reinstalling. Cannot be undone.",
+      "summary": "Now: {{accounts}} accounts, {{instances}} instances.",
+      "accounts": "Accounts and chat sign-in",
+      "instances": "Instances and their worlds",
+      "cache": "Download cache",
+      "gameDir": "The whole game folder (libraries, versions, everything)",
+      "open": "Delete data",
+      "done": "Done",
+      "confirmTitle": "Delete data?",
+      "confirmHint": "The selected items will be removed permanently.",
+      "confirm": "Delete"
+    },
     "accent": "Accent color",
     "accentDefault": "Theme default",
     "accentCustom": "Custom color",
@@ -600,7 +614,9 @@
     "manual": {
       "title": "Files to download by hand: {{count}}",
       "open": "Open the file page"
-    }
+    },
+    "broken": "Broken",
+    "brokenHint": "Empty file — remove and install again"
   },
   "skins": {
     "library": "Skin library",

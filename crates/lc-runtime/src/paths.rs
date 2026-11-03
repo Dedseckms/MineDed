@@ -64,6 +64,25 @@ impl Paths {
     pub fn mihomo(&self) -> PathBuf {
         self.root.join("sidecars").join("mihomo")
     }
+
+    /// Folders a launcher owns inside [`Paths::root`]; "delete all data" wipes
+    /// exactly these (never the root itself and never anything above it).
+    pub fn game_dirs(&self) -> Vec<PathBuf> {
+        [
+            "instances",
+            "libraries",
+            "assets",
+            "versions",
+            "java",
+            "cache",
+            "logs",
+            "sidecars",
+            "skins",
+        ]
+        .iter()
+        .map(|name| self.root.join(name))
+        .collect()
+    }
 }
 
 #[cfg(test)]

@@ -444,6 +444,31 @@ impl Catalog for ModrinthSource {
         })
     }
 
+    async fn slugs(&self, ids: &[String]) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for chunk in ids.chunks(50) {
+            let mut u = match url::Url::parse(&format!("{}/projects", self.base)) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+            u.query_pairs_mut().append_pair(
+                "ids",
+                &serde_json::to_string(chunk).unwrap_or_else(|_| "[]".into()),
+            );
+            let Ok(list) = self
+                .api
+                .get::<Vec<Project>>(u.as_str(), &[], TTL_META)
+                .await
+            else {
+                continue;
+            };
+            for p in list {
+                out.insert(p.id, p.slug);
+            }
+        }
+        out
+    }
+
     async fn versions_ranked(
         &self,
         project_id: &str,

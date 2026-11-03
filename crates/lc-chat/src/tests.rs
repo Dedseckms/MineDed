@@ -56,6 +56,10 @@ impl AccountService for Accounts {
     async fn set_default(&self, _: AccountId) -> AppResult<()> {
         Ok(())
     }
+    async fn remove_all(&self) -> AppResult<()> {
+        self.valid.store(false, Ordering::SeqCst);
+        Ok(())
+    }
 }
 #[async_trait]
 impl AuthProvider for Accounts {
@@ -449,6 +453,8 @@ fn reason(error: &AppError) -> &str {
 #[tokio::test]
 async fn guests_are_read_only_and_use_the_guest_token() {
     let f = fixture().await;
+    // No account of the own server: this fixture is guest-only.
+    f.accounts.official.store(false, Ordering::SeqCst);
     let err = f.client.guest_login("ab").await.unwrap_err();
     assert_eq!(err.code, ErrorCode::InvalidInput);
     assert!(f.server.calls.lock().unwrap().is_empty());
@@ -652,6 +658,8 @@ async fn heartbeat_is_started_only_once_per_process() {
 #[tokio::test]
 async fn guest_session_is_restored_from_the_keyring_without_the_hub() {
     let f = fixture().await;
+    // No account of the own server: this fixture is guest-only.
+    f.accounts.official.store(false, Ordering::SeqCst);
     let guest = f.client.guest_login("guest_1").await.unwrap();
     assert_eq!(f.client.session().await.unwrap(), Some(guest.clone()));
 
@@ -669,6 +677,18 @@ async fn guest_session_is_restored_from_the_keyring_without_the_hub() {
     assert_eq!(fresh.session().await.unwrap(), Some(guest));
     assert_eq!(f.server.calls.lock().unwrap().len(), calls);
     assert!(fresh.current_session().await.unwrap().is_guest());
+}
+
+#[tokio::test]
+async fn guest_login_is_refused_while_a_server_account_is_signed_in() {
+    let f = fixture().await;
+    let err = f.client.guest_login("guest_1").await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert_eq!(
+        err.details.as_ref().map(|d| d.get("reason").cloned()),
+        Some(Some("serverAccountActive".into()))
+    );
+    assert!(f.server.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

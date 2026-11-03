@@ -14,7 +14,12 @@ const account: Account = {
 };
 function mock(role: SocialRole = "user") {
   return createSocialMocks(
-    { bus: createMockBus(), findAccount: () => account, runTask: () => "task" },
+    {
+      bus: createMockBus(),
+      findAccount: () => account,
+      accounts: () => [account],
+      runTask: () => "task",
+    },
     role,
   );
 }

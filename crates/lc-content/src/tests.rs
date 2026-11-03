@@ -162,6 +162,10 @@ impl InstanceService for Instances {
         self.map.lock().unwrap().remove(&id);
         Ok(())
     }
+    async fn delete_all(&self) -> AppResult<()> {
+        self.map.lock().unwrap().clear();
+        Ok(())
+    }
     async fn repair(&self, _id: InstanceId, _s: &dyn ProgressSink) -> AppResult<()> {
         Ok(())
     }
@@ -334,10 +338,13 @@ async fn shader_pulls_iris_and_full_lifecycle() {
         &format!("POST {MR}/version_files/update"),
         serde_json::Value::Object(upd).to_string(),
     );
+    // The list is local; update badges come from the separate `marks` call.
     let list = e.svc.list(id).await.unwrap();
-    assert!(list
+    assert!(list.iter().all(|c| !c.update_available));
+    let marks = e.svc.marks(id).await.unwrap();
+    assert!(marks
         .iter()
-        .any(|c| c.file_name == "sodium-1.jar" && c.update_available && !c.enabled));
+        .any(|m| m.file_name == "sodium-1.jar" && m.update_available));
     e.svc.update_all(id, &sink).await.unwrap();
     assert!(!game.join("mods/sodium-1.jar.disabled").exists());
     assert!(game.join("mods/sodium-2.jar.disabled").exists());

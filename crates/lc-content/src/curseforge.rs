@@ -548,6 +548,37 @@ impl ContentSource for CurseForgeSource {
 }
 #[async_trait]
 impl Catalog for CurseForgeSource {
+    async fn slugs(&self, ids: &[String]) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for chunk in ids.chunks(50) {
+            let mut numbers = Vec::with_capacity(chunk.len());
+            for v in chunk {
+                let Ok(n) = id(v) else { continue };
+                numbers.push(n);
+            }
+            if numbers.is_empty() {
+                continue;
+            }
+            let Ok(r) = self
+                .api
+                .post_uncached::<Envelope<Vec<Project>>>(
+                    &format!("{}/mods", self.base),
+                    &serde_json::json!({"modIds": numbers}),
+                    &lc_runtime::NullSink::default(),
+                )
+                .await
+            else {
+                continue;
+            };
+            for p in r.data {
+                if p.game_id == 432 {
+                    out.insert(p.id.to_string(), p.slug);
+                }
+            }
+        }
+        out
+    }
+
     async fn project(&self, value: &str) -> AppResult<ProjectInfo> {
         let p = self.raw_project(value).await?;
         Ok(ProjectInfo {

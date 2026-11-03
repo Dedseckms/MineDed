@@ -142,6 +142,9 @@ pub trait ChatService: Send + Sync {
     /// chat. The hub issues and stores the token; direct chats and friendships
     /// need a full account.
     async fn guest_login(&self, name: &str) -> AppResult<SocialUser>;
+    /// The server account chats as, ignoring a stored guest token; `None` when
+    /// no valid account of the own server is signed in.
+    async fn server_account(&self) -> AppResult<Option<SocialUser>>;
     /// Own-profile edit; server accounts only. `""` clears a field.
     async fn update_profile(&self, patch: ProfileUpdate) -> AppResult<SocialUser>;
     /// Uploads the own avatar (image ≤ 256 KB, re-encoded by the hub).

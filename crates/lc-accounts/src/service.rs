@@ -448,6 +448,19 @@ impl AccountService for AccountsService {
         Ok(())
     }
 
+    async fn remove_all(&self) -> AppResult<()> {
+        let _g = self.lock.lock().await;
+        let data = self.load()?;
+        // Secrets go first: a failure never leaves orphaned tokens behind.
+        for id in data.accounts.iter().map(|a| a.id) {
+            self.tokens.delete(&token_key(id)).await?;
+        }
+        self.save(&AccountsFile {
+            version: version(),
+            ..Default::default()
+        })
+    }
+
     async fn set_default(&self, id: AccountId) -> AppResult<()> {
         let _g = self.lock.lock().await;
         let mut data = self.load()?;
