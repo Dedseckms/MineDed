@@ -169,6 +169,9 @@ pub struct InstalledContent {
     pub title: Option<String>,
     pub version_number: Option<String>,
     pub update_available: bool,
+    /// An empty file or a leftover `.part`: installed but unusable, offers repair.
+    #[serde(default)]
+    pub broken: bool,
 }
 
 /// What is wrong with a dependency declared inside a local mod jar.

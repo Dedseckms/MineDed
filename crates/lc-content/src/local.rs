@@ -220,6 +220,7 @@ impl Inner {
                 title: None,
                 version_number: None,
                 update_available: false,
+                broken: false,
             });
         }
         idx.save(&inst_dir).await?;
