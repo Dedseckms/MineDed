@@ -334,7 +334,10 @@ export function VpnScreen() {
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted">{t("vpn.intro")}</p>
       <div className="grid items-start gap-6 lg:grid-cols-2">
-        <MinededCard state={state.data} />
+        <div className="flex flex-col gap-6">
+          <MinededCard state={state.data} />
+          {state.data?.source === "mineded" ? <NodesSection running={state.data.running} /> : null}
+        </div>
         <div className="flex flex-col gap-6">
           <SubscriptionSection state={state.data} />
           {state.data?.source === "mineded" ? null : <NodesSection running={state.data?.running ?? false} />}

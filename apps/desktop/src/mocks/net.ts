@@ -76,8 +76,11 @@ export function mockLatency(name: string, round: number): number | null {
   return 30 + (h % 470);
 }
 
-/** Node of the personal MineDed subscription. */
-export const MINEDED_NODE: Pick<VpnNode, "name" | "protocol"> = { name: "MineDed NL", protocol: "vless" };
+/** Profiles of the personal MineDed subscription. */
+export const MINEDED_NODES: Pick<VpnNode, "name" | "protocol">[] = [
+  { name: "MineDed Hysteria2", protocol: "hysteria2" },
+  { name: "MineDed Reality", protocol: "vless" },
+];
 
 export const MINEDED_QUOTA = 256 * 1024 ** 3;
 /** Traffic "used" between two usage polls. */
@@ -336,7 +339,7 @@ export function createNetMocks(ctx: NetMockContext): Partial<Commands> {
       if (!access) {
         const full = /full/i.test(acc.name);
         access = { quotaBytes: MINEDED_QUOTA, usedBytes: full ? MINEDED_QUOTA : 0, resetAt: nextReset(), enabled: !full };
-        activate("mineded", [{ ...MINEDED_NODE, latencyMs: null, selected: true }]);
+        activate("mineded", MINEDED_NODES.map((n, i) => ({ ...n, latencyMs: null, selected: i === 0 })));
         hasMineded = true;
         vpn = { ...vpn, subscriptionUpdated: new Date().toISOString(), error: null };
         syncRunningNode();
