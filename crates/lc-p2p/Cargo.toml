@@ -22,7 +22,7 @@ reqwest.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "macros", "fs"] }
 tokio-util.workspace = true
 iroh = "=1.4.1"
-hmac = "0.12.1"
+hmac = "0.13.0"
 sha2 = "0.10.9"
 hex = "0.4.3"
 base64 = "0.23"
