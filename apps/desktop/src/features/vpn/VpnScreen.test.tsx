@@ -82,7 +82,8 @@ describe("VPN screen (mocks)", () => {
     setMockFilePicker(null);
   });
 
-  it("MineDed VPN: connect with an own-server account, usage, turn off", async () => {
+  it("MineDed VPN: both built-in profiles stay visible and selectable across source switches", async () => {
+    unwrap(await api.vpnImportSubscriptionFile("C:\\own.yaml"));
     await act(async () => useNavStore.getState().go("vpn"));
     renderApp();
     expect(await screen.findByText("MineDedPlayer")).toBeTruthy();
@@ -91,7 +92,18 @@ describe("VPN screen (mocks)", () => {
     expect(screen.getByText(/^256 GB left until /)).toBeTruthy();
     expect(screen.getByRole("progressbar", { name: "Traffic used" })).toBeTruthy();
     expect(unwrap(await api.vpnState()).mode).toBe("launcherAndGame");
-    expect(unwrap(await api.vpnNodes()).map((n) => n.name)).toEqual(["MineDed NL"]);
+    const nodes = screen.getByRole("radiogroup", { name: "VPN nodes" });
+    expect(screen.getAllByRole("radiogroup", { name: "VPN nodes" })).toHaveLength(1);
+    expect(nodes.closest("section")?.parentElement).toBe(screen.getByTestId("vpn-source-mineded").closest("section")?.parentElement);
+    expect(within(nodes).getByRole("radio", { name: /MineDed Hysteria2/ })).toBeTruthy();
+    const reality = within(nodes).getByRole("radio", { name: /MineDed Reality/ });
+    expect(within(reality).getByText("vless")).toBeTruthy();
+    fireEvent.click(reality);
+    await waitFor(() => expect(within(nodes).getByRole("radio", { name: /MineDed Reality/ }).getAttribute("aria-checked")).toBe("true"));
+    await screen.findByText((_, el) => el?.tagName === "DD" && /MineDed Reality/.test(el.textContent ?? ""));
+    fireEvent.click(screen.getByRole("button", { name: "Ping all" }));
+    await waitFor(() => expect(within(nodes).getAllByText(/^\d+ ms$/)).toHaveLength(2));
+    expect(unwrap(await api.vpnNodes()).map((n) => n.name)).toEqual(["MineDed Hysteria2", "MineDed Reality"]);
     fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
     expect(await screen.findByRole("button", { name: "Connect to MineDed VPN" })).toBeTruthy();
 
@@ -101,6 +113,19 @@ describe("VPN screen (mocks)", () => {
     expect(await within(screen.getByTestId("vpn-source-own")).findByText("In use")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Use MineDed VPN" })).toBeTruthy();
     expect(unwrap(await api.vpnState()).source).toBe("own");
+    const ownNodes = screen.getByRole("radiogroup", { name: "VPN nodes" });
+    expect(ownNodes.closest("section")?.parentElement).toBe(screen.getByTestId("vpn-source-own").closest("section")?.parentElement);
+    expect(within(ownNodes).queryByRole("radio", { name: /MineDed Reality/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Use MineDed VPN" }));
+    await within(screen.getByTestId("vpn-source-mineded")).findByText("In use");
+    const builtInNodes = screen.getByRole("radiogroup", { name: "VPN nodes" });
+    expect(screen.getAllByRole("radiogroup", { name: "VPN nodes" })).toHaveLength(1);
+    expect(within(builtInNodes).getByRole("radio", { name: /MineDed Reality/ }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(within(builtInNodes).getByRole("radio", { name: /MineDed Hysteria2/ }));
+    await waitFor(() => expect(within(builtInNodes).getByRole("radio", { name: /MineDed Hysteria2/ }).getAttribute("aria-checked")).toBe("true"));
+    expect(screen.getByRole("button", { name: "Ping all" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Use own subscriptions" }));
+    await within(screen.getByTestId("vpn-source-own")).findByText("In use");
   }, 10_000);
 
   it("apps editor: presets, running programs, file, remove, save", async () => {
