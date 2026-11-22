@@ -26,6 +26,8 @@ import {
   SKIN_EXTS,
   validateFilePath,
   validateNick,
+  validateRegister,
+  hasErrors,
   validateSkinName,
   validateSkinSource,
 } from "../lib/validation";
@@ -475,9 +477,21 @@ export function createMockBackend(opts: MockOptions = {}): Partial<Commands> {
       return ok(null);
     },
 
-    accountYggdrasilRegister: async () => {
+    accountYggdrasilRegister: async (apiRoot, invite, username, password) => {
       await wait();
-      return fail(appError("notImplemented", "mock: yggdrasil register"));
+      if (!apiRoot || hasErrors(validateRegister({ invite, username, password, confirm: password })))
+        return fail(appError("invalidInput", "mock: bad registration"));
+      if (accounts.some((a) => a.kind === "yggdrasil" && a.server === apiRoot && a.name.toLowerCase() === username.toLowerCase()))
+        return fail(appError("conflict", "mock: duplicate username"));
+      seq += 1;
+      const account: Account = {
+        id: `acc-${seq}`, kind: "yggdrasil", name: username,
+        uuid: crypto.randomUUID(), server: apiRoot, skinUrl: null,
+        isDefault: accounts.length === 0, valid: true,
+      };
+      accounts = [...accounts, account];
+      notifyAccounts();
+      return ok({ ...account });
     },
 
     // ---- loaders & content ----

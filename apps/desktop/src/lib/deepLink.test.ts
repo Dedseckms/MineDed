@@ -35,7 +35,7 @@ describe("extractInviteCode", () => {
   });
 
   it("registration validation uses the extracted code", () => {
-    const d = { invite: "https://s/web/registration?invite=abcd1234", username: "Steve", password: "password1", confirm: "password1" };
+    const d = { invite: "https://s/web/registration?invite=abcd1234", username: "Steve", password: "password10", confirm: "password10" };
     expect(validateRegister(d).invite).toBeUndefined();
     expect(validateRegister({ ...d, invite: "https://s/web/registration" }).invite).toBe("validation.invite");
   });

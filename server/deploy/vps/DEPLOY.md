@@ -1,5 +1,29 @@
 # VPS (Germany, 31.59.192.133) — deploy log
 
+## 2026-11-22 07:28 UTC — open password registration
+
+- Owner approved configuration backup, one registration flag change and restart of only Drasl.
+- Backup: /opt/skinserver/backups/config-open-registration-20261122T072844Z.toml (cp -p).
+- Changed only RegistrationUsernamePassword.CreateNewPlayer.RequireInvite: true -> false
+  in /opt/skinserver/config/config.toml. Parsed before/after equality checked against this sole change.
+- Restarted only: docker compose -p mineup-skin restart --no-deps drasl.
+- Drasl healthy, metadata 4.0.1; unchanged image mineup/drasl:4.0.1-hc-theme2,
+  config bind and mineup-skin_drasl_state volume.
+- Existing password length, rate limits, account/player policy and data preserved.
+- Public metadata and /web/registration: HTTP 200. Form requires playerName/password;
+  inviteCode remains optional (no required attribute). No test account created.
+- Signing public key SHA-256 unchanged:
+  f9d570264fb4084abbfe84018fae596930fdc9a2e3f839f8602c13755ace5af5.
+- Public relay /api/v1/health: HTTP 200, status ok, version 1.6.0.
+- docker compose -p mineup-skin config --quiet passed after change.
+- German relay configuration/deployment and old home deployment were not changed.
+- Rollback from /opt/skinserver:
+  cp -p backups/config-open-registration-20261122T072844Z.toml config/config.toml
+  docker compose -p mineup-skin config --quiet
+  docker compose -p mineup-skin restart --no-deps drasl
+  Then repeat health, metadata/key and registration checks. Accounts created while
+  registration is open remain present after rollback.
+
 No secrets here. SSH key lives only on the operator machine (outside the repo).
 
 ## Host

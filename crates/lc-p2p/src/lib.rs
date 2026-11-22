@@ -2,6 +2,7 @@
 
 pub mod code;
 pub mod contract;
+mod control;
 mod env;
 mod hub;
 pub mod lan;
