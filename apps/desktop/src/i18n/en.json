@@ -150,8 +150,8 @@
       "login": "Sign in",
       "mode": "Sign in or register",
       "register": "Register",
-      "invite": "Invite code",
-      "inviteHint": "Invite code or link from the server owner",
+      "invite": "Invite code (optional)",
+      "inviteHint": "Registration does not require an invite. If you have a code or link, you can use it here.",
       "confirm": "Repeat password",
       "noServer": "Server is not configured — set its address in Settings",
       "paste": "Paste",
@@ -360,7 +360,7 @@
     "skinSource": "Enter a link (https://…) or a nickname: up to 16 latin letters, digits or _",
     "invite": "Invalid invite code",
     "password": {
-      "short": "At least 8 characters",
+      "short": "At least 10 characters",
       "range": "6 to 64 characters",
       "mismatch": "Passwords don't match"
     },

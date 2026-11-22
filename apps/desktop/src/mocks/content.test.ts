@@ -177,9 +177,15 @@ describe("mock skins", () => {
     expect(unwrap(await api.skinLibrary()).some((s) => s.id === added.id)).toBe(false);
   });
 
-  it("yggdrasil registration is not implemented yet", async () => {
-    const api = createMockCommands();
-    const res = await api.accountYggdrasilRegister("https://x", "INVITE", "u", "p");
-    expect(res.status === "error" && res.error.code).toBe("notImplemented");
+  it("registers without an invitation and rejects invalid or duplicate accounts", async () => {
+    const api = createMockCommands({}, { noAccounts: true });
+    const account = unwrap(await api.accountYggdrasilRegister("https://x", "", "New_Player", "secret1234"));
+    expect(account).toMatchObject({ kind: "yggdrasil", server: "https://x", name: "New_Player", valid: true, isDefault: true });
+    expect(unwrap(await api.accountList())).toContainEqual(account);
+    const duplicate = await api.accountYggdrasilRegister("https://x", "", "new_player", "secret1234");
+    expect(duplicate.status === "error" && duplicate.error.code).toBe("conflict");
+    const invalid = await api.accountYggdrasilRegister("https://x", "", "Other_Player", "123456789");
+    expect(invalid.status === "error" && invalid.error.code).toBe("invalidInput");
+    expect(unwrap(await api.accountList())).toHaveLength(1);
   });
 });

@@ -56,7 +56,8 @@ pub trait AccountService: Send + Sync {
         username: &str,
         password: &str,
     ) -> AppResult<Account>;
-    /// Registers on an invite-only server, then logs in.
+    /// Registers on the selected server, then logs in. An empty invite is valid
+    /// for open registration; the server decides whether a code is required.
     async fn yggdrasil_register(
         &self,
         api_root: &Url,

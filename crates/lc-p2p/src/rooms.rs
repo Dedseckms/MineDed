@@ -32,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::code::{join_link, parse_code};
 use crate::contract::{DatagramTransport, RoomObserver, RoomService};
+use crate::control;
 use crate::env::{Identity, RoomEnv};
 use crate::hub::{CreateRoomReq, HubClient};
 use crate::lan::{self, LanSeen};
@@ -57,7 +58,7 @@ const WORLD_POLL: Duration = Duration::from_secs(3);
 /// Failed checks in a row before the world counts as closed.
 const WORLD_MISSES: u8 = 2;
 const DGRAM_QUEUE: usize = 256;
-/// Pending control lines per peer; a peer that falls this far behind is dropped.
+/// Maximum early control lines accepted before the initial Welcome.
 const CONTROL_QUEUE: usize = 256;
 /// Wrong passwords per endpoint before the host starts refusing it.
 const MAX_PASSWORD_FAILS: u32 = 5;
@@ -138,7 +139,7 @@ struct PeerEntry {
     /// `None` for peers we only know from the host's `Welcome` (guest side).
     conn: Option<Connection>,
     /// Control stream writer (bounded).
-    tx: Option<mpsc::Sender<String>>,
+    tx: Option<control::Sender>,
     /// Host side, yggdrasil rooms: normalised uuid from the verified peer token.
     ban_uuid: Option<String>,
 }
@@ -278,7 +279,8 @@ impl Session {
     }
 
     /// Queues `line` for the given peers (all when `only` is `None`), skipping
-    /// `except`. Peers whose queue is full are disconnected.
+    /// `except`. Snapshots coalesce separately from the reliable FIFO; peers
+    /// whose reliable message budget is exhausted are disconnected.
     fn send_lines(&self, line: &str, only: Option<&str>, except: Option<&str>) {
         let mut slow = Vec::new();
         for (id, e) in &self.peers().map {
@@ -286,7 +288,7 @@ impl Session {
                 continue;
             }
             if let Some(tx) = &e.tx {
-                if let Err(mpsc::error::TrySendError::Full(_)) = tx.try_send(line.to_owned()) {
+                if tx.try_send(line.to_owned()).is_err() {
                     if let Some(c) = &e.conn {
                         slow.push(c.clone());
                     }
@@ -1044,8 +1046,8 @@ impl P2pRooms {
         send.write_all(host_hello.as_bytes())
             .await
             .map_err(|e| net_err("control stream", e))?;
-        let (tx, rx) = mpsc::channel(CONTROL_QUEUE);
-        spawn_writer(send, rx);
+        let (tx, rx) = control::channel();
+        spawn_writer(conn.clone(), send, rx);
         let peer = Peer {
             peer_id: remote.clone(),
             name: clean_name(&name),
@@ -1347,8 +1349,8 @@ impl P2pRooms {
         };
 
         let host_key = host_id.to_string();
-        let (tx, rx) = mpsc::channel(CONTROL_QUEUE);
-        spawn_writer(send, rx);
+        let (tx, rx) = control::channel();
+        spawn_writer(conn.clone(), send, rx);
         let (dgram_tx, dgram_rx) = mpsc::channel(DGRAM_QUEUE);
         let mut peers = Peers::default();
         peers.map.insert(
@@ -2399,10 +2401,11 @@ fn apply_welcome(
     p.order = order;
 }
 
-fn spawn_writer(mut send: SendStream, mut rx: mpsc::Receiver<String>) {
+fn spawn_writer(conn: Connection, mut send: SendStream, mut rx: control::Receiver) {
     tokio::spawn(async move {
         while let Some(line) = rx.recv().await {
             if send.write_all(line.as_bytes()).await.is_err() {
+                conn.close(0u32.into(), b"control writer closed");
                 return;
             }
         }
@@ -2629,6 +2632,10 @@ fn net_err(what: &str, e: impl fmt::Display) -> AppError {
 fn timeout_err(stage: &str) -> AppError {
     AppError::new(ErrorCode::Network, format!("p2p {stage} timed out")).detail("reason", "timeout")
 }
+
+#[cfg(test)]
+#[path = "room_isolation_tests.rs"]
+mod isolation_tests;
 
 #[cfg(test)]
 mod tests {

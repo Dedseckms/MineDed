@@ -35,10 +35,10 @@ Enable = true
 RequestsPerSecond = 2.0
 Burst = 20
 
-# Invite-only registration: username (= player name) + password.
+# Open registration: username (= player name) + password.
 [RegistrationUsernamePassword.CreateNewPlayer]
 Allow = true
-RequireInvite = true
+RequireInvite = false
 AllowChoosingUUID = false
 
 # Registered users cannot create extra players.

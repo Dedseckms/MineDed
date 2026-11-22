@@ -125,6 +125,7 @@ describe("deep links and invites", () => {
     await act(async () => useNavStore.getState().go("accounts"));
     renderApp();
     fireEvent.click(await screen.findByRole("radio", { name: i18n.t("accounts.yggdrasil.register") }));
+    fireEvent.click(screen.getByText(i18n.t("accounts.yggdrasil.invite"), { selector: "summary" }));
     fireEvent.click(await screen.findByRole("button", { name: i18n.t("accounts.yggdrasil.paste") }));
     const invite = (await screen.findByTestId("invite-input")) as HTMLInputElement;
     await waitFor(() => expect(invite.value).toBe("Clip_1234"));

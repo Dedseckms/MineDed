@@ -116,7 +116,7 @@ export function skinNameFromPath(path: string): string {
 
 // ---- Account server registration -------------------------------------------
 
-export const PASSWORD_MIN = 8;
+export const PASSWORD_MIN = 10;
 
 export interface RegisterDraft {
   invite: string;
@@ -130,8 +130,7 @@ export type RegisterErrors = Partial<Record<keyof RegisterDraft, ValidationKey>>
 export function validateRegister(d: RegisterDraft): RegisterErrors {
   const errors: RegisterErrors = {};
   const invite = extractInviteCode(d.invite);
-  if (invite.length === 0) errors.invite = "validation.required";
-  else if (!/^[A-Za-z0-9_-]{4,128}$/.test(invite)) errors.invite = "validation.invite";
+  if (invite.length > 0 && !/^[A-Za-z0-9_-]{4,128}$/.test(invite)) errors.invite = "validation.invite";
   const nick = validateNick(d.username);
   if (nick) errors.username = nick;
   if (d.password.length === 0) errors.password = "validation.required";

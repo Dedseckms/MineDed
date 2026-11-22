@@ -47,13 +47,14 @@ describe("skins", () => {
 });
 
 describe("registration", () => {
-  const ok = { invite: "ABCD-1234", username: "New_Player", password: "secret123", confirm: "secret123" };
+  const ok = { invite: "ABCD-1234", username: "New_Player", password: "secret1234", confirm: "secret1234" };
   it("accepts a valid draft", () => {
     expect(validateRegister(ok)).toEqual({});
+    expect(validateRegister({ ...ok, invite: "" })).toEqual({});
+    expect(validateRegister({ ...ok, invite: "   " })).toEqual({});
   });
   it("reports every field", () => {
     expect(validateRegister({ invite: "", username: "a b", password: "short", confirm: "x" })).toEqual({
-      invite: "validation.required",
       username: "validation.nick.chars",
       password: "validation.password.short",
       confirm: "validation.password.mismatch",

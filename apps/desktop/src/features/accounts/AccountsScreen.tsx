@@ -160,7 +160,7 @@ function RegisterForm() {
       onSubmit={(e) => {
         e.preventDefault();
         setTouched(true);
-        if (hasErrors(errors) || !server) return;
+        if (hasErrors(errors) || !server || unavailable || register.isPending) return;
         register.mutate(
           { apiRoot: server.apiRoot, invite: extractInviteCode(draft.invite), username: draft.username, password: draft.password },
           {
@@ -174,35 +174,38 @@ function RegisterForm() {
       }}
     >
       {unavailable ? <SoonNotice /> : null}
-      <Field
-        label={t("accounts.yggdrasil.invite")}
-        error={err("invite") ?? (pasteFailed ? "accounts.yggdrasil.pasteFailed" : null)}
-        hint={t("accounts.yggdrasil.inviteHint")}
-      >
-        {(id, d, inv) => (
-          <div className="flex gap-2">
-            <TextInput
-              id={id}
-              aria-describedby={d}
-              invalid={inv}
-              className="flex-1"
-              data-testid="invite-input"
-              value={draft.invite}
-              onChange={(e) => set({ invite: e.target.value })}
-            />
-            <Button type="button" icon={<Icon name="copy" />} onClick={() => void paste()}>
-              {t("accounts.yggdrasil.paste")}
-            </Button>
-          </div>
-        )}
-      </Field>
+      <details open={draft.invite !== "" || pasteFailed || !!err("invite")} className="text-sm">
+        <summary className="cursor-pointer text-muted">{t("accounts.yggdrasil.invite")}</summary>
+        <Field
+          label={t("accounts.yggdrasil.invite")}
+          error={err("invite") ?? (pasteFailed ? "accounts.yggdrasil.pasteFailed" : null)}
+          hint={t("accounts.yggdrasil.inviteHint")}
+        >
+          {(id, d, inv) => (
+            <div className="flex gap-2">
+              <TextInput
+                id={id}
+                aria-describedby={d}
+                invalid={inv}
+                className="flex-1"
+                data-testid="invite-input"
+                value={draft.invite}
+                onChange={(e) => set({ invite: e.target.value })}
+              />
+              <Button type="button" icon={<Icon name="copy" />} onClick={() => void paste()}>
+                {t("accounts.yggdrasil.paste")}
+              </Button>
+            </div>
+          )}
+        </Field>
+      </details>
       <Field label={t("accounts.nick")} error={err("username")} hint={t("accounts.nickHint")}>
         {(id, d, inv) => (
           <TextInput id={id} aria-describedby={d} invalid={inv} value={draft.username} autoComplete="username" onChange={(e) => set({ username: e.target.value })} />
         )}
       </Field>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label={t("accounts.yggdrasil.password")} error={err("password")}>
+        <Field label={t("accounts.yggdrasil.password")} error={err("password")} hint={t("validation.password.short")}>
           {(id, d, inv) => (
             <TextInput id={id} type="password" aria-describedby={d} invalid={inv} autoComplete="new-password" value={draft.password} onChange={(e) => set({ password: e.target.value })} />
           )}
@@ -220,6 +223,7 @@ function RegisterForm() {
         </Button>
       </div>
       {!isNotImplemented(register.error) ? <ErrorMessage error={register.error} /> : null}
+      {servers.error && !isNotImplemented(servers.error) ? <ErrorMessage error={servers.error} /> : null}
     </form>
   );
 }
