@@ -1,7 +1,7 @@
 # Open password registration — prepared 2026-11-22
 
-Status: prepared; not applied to the server. Owner approval is required before
-editing live configuration and restarting Drasl.
+Status: applied with owner approval on 2026-11-22 at 07:28 UTC. See the actual
+backup, verification results and rollback in [DEPLOY.md](DEPLOY.md).
 
 ## Read-only baseline
 
