@@ -21,7 +21,7 @@ uuid.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "macros", "fs"] }
 tokio-util.workspace = true
-iroh = "=1.4.1"
+iroh = "=1.5.0"
 hmac = "0.12.1"
 sha2 = "0.10.9"
 hex = "0.4.3"
@@ -32,7 +32,7 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["net", "io-util", "time", "macros", "rt-multi-thread"] }
-iroh = { version = "=1.4.1", features = ["test-utils"] }
+iroh = { version = "=1.5.0", features = ["test-utils"] }
 axum.workspace = true
 
 [lints]
